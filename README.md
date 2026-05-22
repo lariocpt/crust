@@ -5,7 +5,7 @@ A Bun-powered shell with first-class pipelines and devops primitives. Globs, HTT
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/bantubyte/crust/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/lariocpt/crust/main/install.sh | bash
 ```
 
 ## What it looks like

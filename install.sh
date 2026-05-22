@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# crust installer — curl -fsSL https://raw.githubusercontent.com/bantubyte/crust/main/install.sh | bash
+# crust installer — curl -fsSL https://raw.githubusercontent.com/lariocpt/crust/main/install.sh | bash
 
 set -euo pipefail
 
 CRUST_DIR="${CRUST_DIR:-$HOME/.crust}"
-REPO="${CRUST_REPO:-https://github.com/bantubyte/crust.git}"
+REPO="${CRUST_REPO:-https://github.com/lariocpt/crust.git}"
 BRANCH="${CRUST_BRANCH:-main}"
 
 say() { printf '\033[36m==>\033[0m %s\n' "$1"; }
@@ -56,7 +56,7 @@ cat <<EOF
   COSMIC Terminal: Settings → Profiles → Command: $CRUST_BIN
   Set as login:    chsh -s $CRUST_BIN
   Config:          ~/.config/crust/init.ts
-  Update:          curl -fsSL https://raw.githubusercontent.com/bantubyte/crust/main/install.sh | bash
+  Update:          curl -fsSL https://raw.githubusercontent.com/lariocpt/crust/main/install.sh | bash
   Uninstall:       rm -rf ~/.crust ~/.config/crust
 
 EOF

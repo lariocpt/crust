@@ -8,7 +8,7 @@ Decisions locked from conversation:
 
 - Base distro: **Fedora COSMIC spin**
 - Delivery: **`curl | bash` installer**, not an RPM, not an ISO
-- Repo: **`~/Projects/crust`**, new git repo, hosted at `github.com/bantubyte/crust`
+- Repo: **`~/Projects/crust`**, new git repo, hosted at `github.com/lariocpt/crust`
 - Install target on end-user machines: **`~/.crust/`** (oh-my-zsh style)
 - Bun is **the terminal-app shell**, not the system login shell — avoids breaking PAM / `/etc/profile` / `.desktop` assumptions
 - Scope: **"boss" v0.1** — real interactive shell with line editing, history, completion, builtins. Job control deferred to v0.2.
@@ -307,7 +307,7 @@ exec bun "$SCRIPT_DIR/../src/index.ts" "$@"
 set -euo pipefail
 
 CRUST_DIR="${CRUST_DIR:-$HOME/.crust}"
-REPO="https://github.com/bantubyte/crust.git"
+REPO="https://github.com/lariocpt/crust.git"
 BRANCH="${CRUST_BRANCH:-main}"
 
 # 1. Bun
@@ -344,7 +344,7 @@ cat <<EOF
   Set in COSMIC Terminal:   Settings → Profiles → Command: $CRUST_BIN
   Login shell (optional):   chsh -s $CRUST_BIN
   Config:                   ~/.config/crust/init.ts
-  Update:                   curl -fsSL https://raw.githubusercontent.com/bantubyte/crust/main/install.sh | bash
+  Update:                   curl -fsSL https://raw.githubusercontent.com/lariocpt/crust/main/install.sh | bash
   Uninstall:                rm -rf ~/.crust ~/.config/crust
 
 EOF
@@ -353,7 +353,7 @@ EOF
 End-user one-liner once pushed to GitHub:
 
 ```
-curl -fsSL https://raw.githubusercontent.com/bantubyte/crust/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/lariocpt/crust/main/install.sh | bash
 ```
 
 (Later: register `crust.sh` domain → redirect `/install` to that raw URL.)
