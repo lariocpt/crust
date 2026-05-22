@@ -1,4 +1,4 @@
-import { Pipeline, pipelineStage, type PipelineStage } from "./pipeline";
+import { Pipeline, type PipelineStage, pipelineStage } from "./pipeline";
 
 async function httpRequest(
   url: string,
@@ -44,10 +44,7 @@ export const PUT = makeHttp("PUT");
 export const PATCH = makeHttp("PATCH");
 export const DELETE = makeHttp("DELETE");
 
-export type ExpectMatcher<T> =
-  | number
-  | "2xx" | "3xx" | "4xx" | "5xx"
-  | ((item: T) => boolean);
+export type ExpectMatcher<T> = number | "2xx" | "3xx" | "4xx" | "5xx" | ((item: T) => boolean);
 
 export class ExpectError<T> extends Error {
   constructor(
@@ -88,10 +85,30 @@ export function expect<T>(matcher: ExpectMatcher<T>): PipelineStage<T, T> {
   );
 }
 
-export function parallel<T, U>(
-  n: number,
-  fn: (x: T) => U | Promise<U>,
-): PipelineStage<T, U> {
+export function time<T>(
+  label: string,
+  out: { write(s: string): unknown } = process.stderr,
+): PipelineStage<T, T> {
+  return pipelineStage<T, T>((input) =>
+    Pipeline.of(
+      (async function* () {
+        const start = performance.now();
+        let count = 0;
+        try {
+          for await (const item of input.lines()) {
+            count++;
+            yield item;
+          }
+        } finally {
+          const ms = (performance.now() - start).toFixed(1);
+          out.write(`[time] ${label}: ${ms}ms (${count} item${count === 1 ? "" : "s"})\n`);
+        }
+      })(),
+    ),
+  );
+}
+
+export function parallel<T, U>(n: number, fn: (x: T) => U | Promise<U>): PipelineStage<T, U> {
   return pipelineStage<T, U>((input) =>
     Pipeline.of(
       (async function* () {

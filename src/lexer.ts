@@ -1,4 +1,4 @@
-import type { Token, StageKind } from "./types";
+import type { StageKind, Token } from "./types";
 
 export function tokenize(line: string): Token[] {
   const stages: string[] = [];
@@ -51,6 +51,11 @@ export function classify(text: string): StageKind {
 
   if (t.startsWith('"') || t.startsWith("'")) {
     return { kind: "shell", text: t };
+  }
+
+  const timeMatch = t.match(/^time\s+(?:"([^"]*)"|'([^']*)')\s*$/);
+  if (timeMatch) {
+    return { kind: "time", label: (timeMatch[1] ?? timeMatch[2])! };
   }
 
   const httpMatch = t.match(/^(GET|POST|PUT|PATCH|DELETE)\s+(.+)$/);

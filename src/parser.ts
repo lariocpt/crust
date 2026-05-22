@@ -4,7 +4,7 @@
 // terminal session — same trust boundary as bash sourcing a script the
 // user typed. Not a code-injection risk; it's the design.
 
-import { tokenize, classify } from "./lexer";
+import { classify, tokenize } from "./lexer";
 import { Pipeline } from "./pipeline";
 import * as sources from "./sources";
 import * as transforms from "./transforms";
@@ -13,12 +13,32 @@ import type { Context, StageKind } from "./types";
 export function parse(line: string): (ctx?: Context) => Pipeline<unknown> {
   const tokens = tokenize(line);
   return (ctx) => {
+    // `time "label"` is a prefix-only decorator: it doesn't participate in
+    // the data flow, it just wraps the resulting pipeline with a timing
+    // transform that fires when the iterator drains (success or error).
+    let startIdx = 0;
+    let timeLabel: string | null = null;
+    const head = resolveKind(tokens[0]!.text, ctx);
+    if (head.kind === "time") {
+      if (tokens.length < 2) {
+        throw new Error('time: must be followed by a pipeline (e.g. `time "x" | range(0, 10)`)');
+      }
+      timeLabel = head.label;
+      startIdx = 1;
+    }
+
     let pipeline: Pipeline<unknown> | null = null;
-    for (let i = 0; i < tokens.length; i++) {
+    for (let i = startIdx; i < tokens.length; i++) {
       const kind = resolveKind(tokens[i]!.text, ctx);
-      pipeline = i === 0 ? buildSource(kind, ctx) : applyStage(pipeline!, kind, ctx);
+      if (kind.kind === "time") {
+        throw new Error("time: only allowed as the first stage of a pipeline");
+      }
+      pipeline = i === startIdx ? buildSource(kind, ctx) : applyStage(pipeline!, kind, ctx);
     }
     if (!pipeline) throw new Error("parser: empty pipeline");
+    if (timeLabel !== null) {
+      pipeline = pipeline.pipe(transforms.time(timeLabel) as never) as Pipeline<unknown>;
+    }
     return pipeline;
   };
 }
@@ -51,6 +71,8 @@ function buildSource(kind: StageKind, ctx?: Context): Pipeline<unknown> {
       return shellSource(kind.text);
     case "lambda":
       throw new Error("lambda cannot be a source — needs upstream items");
+    case "time":
+      throw new Error("time: only allowed as the first stage of a pipeline");
     case "function": {
       const fn = ctx?.functions.get(kind.name);
       if (!fn) throw new Error(`function "${kind.name}" not registered`);
@@ -72,11 +94,7 @@ function buildSource(kind: StageKind, ctx?: Context): Pipeline<unknown> {
   }
 }
 
-function applyStage(
-  input: Pipeline<unknown>,
-  kind: StageKind,
-  ctx?: Context,
-): Pipeline<unknown> {
+function applyStage(input: Pipeline<unknown>, kind: StageKind, ctx?: Context): Pipeline<unknown> {
   switch (kind.kind) {
     case "lambda":
       return input.pipe(evalLambda(kind.source));
@@ -91,6 +109,8 @@ function applyStage(
     case "range":
     case "glob":
       throw new Error(`${kind.kind} cannot appear as a non-first stage`);
+    case "time":
+      throw new Error("time: only allowed as the first stage of a pipeline");
     case "function": {
       const fn = ctx?.functions.get(kind.name);
       if (!fn) throw new Error(`function "${kind.name}" not registered`);

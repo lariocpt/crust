@@ -137,6 +137,17 @@ HTTP transforms auto-set `content-type: application/json` for object items. Stri
 
 `expect`, `parallel`, and `stats` are not yet shell-line keywords — they're TS-API only. To use them from a shell line, call into a TS script you `source`, or write the line as a `.ts` file and run it with `bun`. Native shell-line support is a v0.1.5 stretch.
 
+### Timing a pipeline (`time "label"`)
+
+`time` is a prefix-only decorator — bash-style. Put it before the source and it wraps the whole pipeline, printing elapsed wall time + item count to **stderr** when the iterator drains:
+
+```bash
+time "warmup" | range(0, 1000) | GET :3000/health
+# stderr → [time] warmup: 412.3ms (1001 items)
+```
+
+Quotes (`"` or `'`) are required around the label; data flowing through the pipeline is untouched. The timer fires even if a downstream stage throws (e.g. `expect 500` failure), so you still see how long you got before the break. Only allowed as the first stage — `... | time "x"` is rejected. The matching TS API is `time(label, out?)`.
+
 ### Builtins
 
 ```bash
