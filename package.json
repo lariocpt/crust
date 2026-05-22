@@ -1,0 +1,18 @@
+{
+  "name": "crust",
+  "version": "0.1.0-dev",
+  "description": "A Bun-powered shell with first-class pipelines and devops primitives",
+  "type": "module",
+  "bin": {
+    "crust": "./bin/crust"
+  },
+  "scripts": {
+    "test": "bun test",
+    "test:watch": "bun test --watch",
+    "dev": "bun src/index.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.6.0"
+  }
+}
