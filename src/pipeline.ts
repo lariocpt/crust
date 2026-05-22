@@ -123,4 +123,8 @@ export class Pipeline<T> {
   async json<U = unknown>(): Promise<U> {
     return JSON.parse(await this.text()) as U;
   }
+
+  to<R>(sink: (input: Pipeline<T>) => R | Promise<R>): Promise<R> {
+    return Promise.resolve(sink(this));
+  }
 }
