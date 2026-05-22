@@ -6,3 +6,4 @@ dist/
 .crust_history
 .env
 .env.local
+.claude
