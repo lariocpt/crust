@@ -29,6 +29,23 @@ fi
 say "Installing dependencies"
 ( cd "$CRUST_DIR" && bun install )
 
+# 3a. Compile bytecode binaries for this host
+say "Compiling crust binaries (bytecode, host arch)"
+mkdir -p "$CRUST_DIR/bin"
+OS=$(uname -s | tr A-Z a-z)
+RAW_ARCH=$(uname -m)
+case "$RAW_ARCH" in
+  x86_64|amd64) ARCH=x64 ;;
+  aarch64|arm64) ARCH=arm64 ;;
+  *) ARCH=$RAW_ARCH ;;
+esac
+TARGET="bun-${OS}-${ARCH}"
+( cd "$CRUST_DIR" && \
+  bun build --compile --minify --bytecode --target="$TARGET" \
+    --outfile bin/crust-bin src/index.ts && \
+  bun build --compile --minify --bytecode --target="$TARGET" \
+    --outfile bin/crust-test-fixture src/testFixture/cli.ts )
+
 # 4. Default config
 mkdir -p "$HOME/.config/crust"
 if [[ ! -f "$HOME/.config/crust/init.ts" ]]; then

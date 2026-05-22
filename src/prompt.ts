@@ -1,11 +1,15 @@
+import type { Context } from "./types";
+
 const HOME = process.env.HOME ?? "/";
 
-export function defaultPrompt(): string {
+export function defaultPrompt(ctx?: Context): string {
   const cwd = displayCwd();
   const branch = gitBranch();
   const symbol = process.getuid && process.getuid() === 0 ? "#" : "$";
   const branchPart = branch ? ` \x1b[32m(${branch})\x1b[0m` : "";
-  return `\x1b[36m${cwd}\x1b[0m${branchPart} ${symbol} `;
+  const envCount = ctx?.dotenv.history.length ?? 0;
+  const envPart = envCount ? ` \x1b[33m[env: ${envCount}]\x1b[0m` : "";
+  return `\x1b[36m${cwd}\x1b[0m${branchPart}${envPart} ${symbol} `;
 }
 
 export function displayCwd(): string {

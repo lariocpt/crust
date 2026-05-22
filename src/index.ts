@@ -8,7 +8,7 @@ import pkg from "../package.json" with { type: "json" };
 import type { Context } from "./types";
 
 interface UserCrustGlobals {
-  prompt?: (cwd: string, git: string | null) => string;
+  prompt?: (cwd: string, git: string | null, ctx?: Context) => string;
 }
 
 const USAGE = `crust ${pkg.version}
@@ -42,6 +42,7 @@ async function main(): Promise<void> {
         functions: new Map(),
         history: [],
         exit: (code) => process.exit(code ?? 0),
+        dotenv: { history: [], snapshot: null },
       };
       await loadConfig(ctx, process.env.CRUST_CONFIG);
       const source = argv[1]!;
@@ -61,6 +62,7 @@ async function main(): Promise<void> {
     functions: new Map(),
     history: await loadHistory(),
     exit: (code) => process.exit(code ?? 0),
+    dotenv: { history: [], snapshot: null },
   };
 
   await loadConfig(ctx, process.env.CRUST_CONFIG);
@@ -68,8 +70,8 @@ async function main(): Promise<void> {
   while (true) {
     const userCrust = (globalThis as { crust?: UserCrustGlobals }).crust;
     const prompt = userCrust?.prompt
-      ? userCrust.prompt(process.cwd(), null)
-      : defaultPrompt();
+      ? userCrust.prompt(process.cwd(), null, ctx)
+      : defaultPrompt(ctx);
 
     let line: string | null;
     try {

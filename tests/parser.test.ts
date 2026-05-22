@@ -51,6 +51,7 @@ describe("parser — registered functions (crust.fn)", () => {
       ]),
       history: [],
       exit: () => {},
+      dotenv: { history: [], snapshot: null },
     };
     const out = await parse("echo hello | upper")(ctx).collect();
     expect(out).toContain("HELLO");
@@ -65,6 +66,7 @@ describe("parser — registered functions (crust.fn)", () => {
       ]),
       history: [],
       exit: () => {},
+      dotenv: { history: [], snapshot: null },
     };
     const out = await parse('echo hi | wrap [ ]')(ctx).collect();
     expect(out).toContain("[hi]");
@@ -78,6 +80,7 @@ describe("parser — registered functions (crust.fn)", () => {
       ]),
       history: [],
       exit: () => {},
+      dotenv: { history: [], snapshot: null },
     };
     const out = await parse("range(0, 1) | echo")(ctx).collect();
     expect(out).toEqual(["[fn] 0", "[fn] 1"]);

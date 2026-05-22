@@ -10,6 +10,7 @@ function mkCtx(): Context {
     functions: new Map(),
     history: [],
     exit: () => {},
+    dotenv: { history: [], snapshot: null },
   };
 }
 

@@ -1,3 +1,7 @@
 #!/usr/bin/env bash
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-exec bun "$SCRIPT_DIR/../src/index.ts" "$@"
+if [[ -x "$SCRIPT_DIR/crust-bin" ]]; then
+  exec "$SCRIPT_DIR/crust-bin" "$@"
+else
+  exec bun "$SCRIPT_DIR/../src/index.ts" "$@"
+fi

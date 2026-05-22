@@ -9,7 +9,10 @@
   "scripts": {
     "test": "bun test",
     "test:watch": "bun test --watch",
-    "dev": "bun src/index.ts"
+    "dev": "bun src/index.ts",
+    "build:shell": "bun build --compile --minify --bytecode --outfile bin/crust-bin src/index.ts",
+    "build:fixture": "bun build --compile --minify --bytecode --outfile bin/crust-test-fixture src/testFixture/cli.ts",
+    "build": "bun run build:shell && bun run build:fixture"
   },
   "devDependencies": {
     "@types/bun": "latest",

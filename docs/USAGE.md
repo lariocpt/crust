@@ -244,8 +244,63 @@ The TS-test ecosystem owns the name `expect`. Crust exports the API name as `exp
 | `unalias name` | Removes an alias. |
 | `source file` | `.sh` files run via `sh`; `.ts`/`.js` dynamically imported. |
 | `history` | Numbered list of this session's lines. Persistent at `~/.local/share/crust/history`. |
+| `dotenv [--config p] [--append]` | Loads `.env` files into the session. Tracks history, supports `dotenv status` and `dotenv clear`. See [dotenv](#dotenv). |
+| `test-fixture --target g [--out p] [--threads N]` | Runs `.crust.ts` HTTP fixtures. See [test-fixture](#test-fixture). |
 | `exit [code]` | Exits crust with optional code (default 0). |
 | `help` | Lists builtins. |
+
+### dotenv
+
+Loads a `.env` file into the live shell session (mutates `process.env`, which is what `Bun.env` reflects). Mode `overwrite` (default) replaces existing values; `--append` keeps any value that's already set.
+
+```bash
+dotenv                           # load ./.env, overwrite mode
+dotenv --config .env.local       # load a custom file
+dotenv --config .env.local --append
+dotenv status                    # show load history + which keys came from where
+dotenv clear                     # restore process.env to the pre-first-load snapshot
+```
+
+The prompt shows `[env: N]` after `N` successful loads. Cleared when you run `dotenv clear`. Snapshot is taken lazily on the first ever load; subsequent loads do not re-snapshot, so `clear` always restores back to pristine state.
+
+Supported `.env` syntax: `KEY=value`, `KEY="quoted value"`, `KEY='single quoted'`, leading `export` prefix, `#` comments (whole-line and trailing on unquoted values). Multi-line quoted values and `$FOO` interpolation are not supported in v0.1.
+
+### test-fixture
+
+Runs `.crust.ts` fixture files against an HTTP service. Each file is a normal TypeScript module that default-exports a fixture (or array of fixtures) with `input` and `output` objects. Fields can be values *or* zero-argument functions (resolved + awaited at run time). In `output`, a function with at least one parameter is treated as a predicate matcher over the actual value.
+
+```bash
+test-fixture --target fixtures/*.crust.ts
+test-fixture --target fixtures/users.crust.ts --out report.md
+test-fixture --target 'fixtures/**/*.crust.ts' --threads 8 --out report.json
+```
+
+Module resolution inside a fixture file uses Bun's normal walk: imports resolve from the fixture's own directory upward, so the nearest `node_modules` wins — same as running `bun` from that directory.
+
+Example fixture:
+
+```ts
+// fixtures/users.crust.ts
+export default {
+  name: "GET /users/42 returns Lario",
+  input: {
+    method: "GET",
+    url: "http://localhost:3000/users/42",
+    headers: async () => ({
+      Authorization: `Bearer ${await Bun.jwt.sign({ sub: "42" }, "k")}`,
+    }),
+  },
+  output: {
+    status: 200,
+    data: { id: 42, name: "Lario" },
+    headers: { "content-type": (v: string) => v.startsWith("application/json") },
+  },
+};
+```
+
+Report formats are picked from `--out`'s extension: `.json`, `.md`, anything else is plain text. With no `--out`, prints a colored, folder-grouped summary to stdout. Exit codes: `0` all pass, `1` any failure/error, `2` no files matched or bad args.
+
+When installed via `install.sh`, the runner is AOT-compiled to a host-arch bytecode binary at `~/.crust/bin/crust-test-fixture` for fast cold-start. The shell builtin execs that binary if present and falls back to in-process dynamic import otherwise (dev mode).
 
 ---
 
