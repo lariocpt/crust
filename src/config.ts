@@ -1,6 +1,7 @@
 import { Pipeline } from "./pipeline";
 import { range, glob, read, GET } from "./sources";
 import { POST, PUT, PATCH, DELETE, expect, parallel } from "./transforms";
+import { discoverGlobals } from "./discover";
 import type { Context } from "./types";
 
 interface CrustGlobal {
@@ -38,6 +39,11 @@ export async function loadConfig(ctx: Context, configPath?: string): Promise<voi
   g.expectStage = expect;
   g.parallel = parallel;
   g.$ = Bun.$;
+
+  // Discover globally-installed npm packages and register them as pipeline
+  // stages. Runs before init.ts so explicit crust.fn() calls in init.ts
+  // overwrite (and therefore win over) auto-discovered entries.
+  await discoverGlobals(ctx);
 
   try {
     await import(path);

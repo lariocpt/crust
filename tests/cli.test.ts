@@ -6,7 +6,11 @@ async function runCli(args: string[]): Promise<{ code: number; stdout: string; s
   const proc = Bun.spawn(["bun", ENTRY, ...args], {
     stdout: "pipe",
     stderr: "pipe",
-    env: { ...process.env, CRUST_CONFIG: "/dev/null" },
+    env: {
+      ...process.env,
+      CRUST_CONFIG: "/dev/null",
+      CRUST_GLOBAL_PREFIX: "/tmp/crust-cli-test-no-globals",
+    },
   });
   const [stdout, stderr] = await Promise.all([
     new Response(proc.stdout).text(),

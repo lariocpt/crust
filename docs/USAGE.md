@@ -287,18 +287,45 @@ declare const crust: {
 crust.alias("ll", "ls -la");
 crust.alias("g", "git");
 
-// Any globally-installed npm package can be imported and exposed as a stage.
-//   bun add --global chalk
-// then:
-//   import chalk from "chalk";
-//   crust.fn("red", (text: string) => chalk.red(text));
-// Then in the shell:  echo "warning" | red
+// Custom transforms via crust.fn — see "Custom functions" below.
+// crust.fn("wrap", (item, l, r) => `${l}${item}${r}`);
 
 // Custom prompt (overrides defaultPrompt):
 // crust.prompt = (cwd, git) => `${cwd}${git ? ` (${git})` : ""} > `;
 ```
 
-`crust.fn(name, handler)` is the way to make custom functions callable. Registered functions auto-dispatch from the shell line: `echo hi | wrap [ ]` calls `wrap("hi", "[", "]")` if `crust.fn("wrap", (item, l, r) => `${l}${item}${r}`)` was registered. The function signature is `(item, ...staticArgs)`; static args come from the shell-line tokens after the function name.
+### Custom functions
+
+Two ways to add new pipeline stages:
+
+**1. Globally-installed npm packages auto-dispatch.** Any package in `~/.bun/install/global` whose default export is a function becomes a stage automatically — no `init.ts` edits needed.
+
+```bash
+bun add -g slugify
+crust -c 'echo "Hello World" | slugify'         # → hello-world
+```
+
+The conventions:
+
+- The shell-line head matches the package name. Scoped packages drop the scope (`@example/cool-pkg` → `cool-pkg`).
+- The package's default export (or single named function) is called as `fn(item, ...args)`. Source-position calls (`pkg | …` as the first stage) pass `undefined` as the first arg.
+- Packages with a `bin` field are skipped — they continue to behave as shell commands (`prettier foo.ts` still runs the binary). To opt a binary package into stage dispatch anyway, add a `"crust": {}` field to its `package.json`.
+- To select a non-default export, add `"crust": { "stage": "exportName" }` to the package's `package.json`.
+
+Cached at `~/.cache/crust/globals.json`; invalidated automatically when the global `package.json` changes.
+
+**2. `crust.fn(name, handler)` in `init.ts`** — for packages whose API doesn't fit the calling convention (anything with method-dispatch like chalk, anything that needs setup), and for ad-hoc helpers:
+
+```ts
+import chalk from "chalk";
+crust.fn("red", (text: string) => chalk.red(text));
+// Then in the shell:  echo "warning" | red
+
+crust.fn("wrap", (item, l, r) => `${l}${item}${r}`);
+// Then in the shell:  echo hi | wrap [ ]
+```
+
+The signature is `(item, ...staticArgs)` — static args come from the shell-line tokens after the function name. Explicit `crust.fn` registrations always beat auto-dispatch.
 
 ---
 
