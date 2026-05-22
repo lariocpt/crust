@@ -8,6 +8,7 @@ A Bun-powered shell with first-class pipelines. Shell commands, TypeScript lambd
 
 - [Install](#install)
 - [Hello world](#hello-world)
+- [One-liner mode](#one-liner-mode)
 - [The Pipeline model](#the-pipeline-model)
 - [Shell-line syntax](#shell-line-syntax)
 - [TypeScript API](#typescript-api)
@@ -40,6 +41,25 @@ To make it your login shell:
 ```bash
 chsh -s ~/.crust/bin/crust
 ```
+
+## One-liner mode
+
+Crust is designed to be useful even if you don't make it your daily shell. Call it from bash/zsh/fish for the one-liners where its pipeline syntax wins:
+
+```bash
+crust -c 'range(0,99) | parallel 20 | GET :3000/health | expect 200 | stats'
+crust -c 'ls *.json | (s => JSON.parse(await Bun.file(s).text())) | (j => j.id)'
+crust -c 'src/**/*.ts | wc -l'
+```
+
+`-c` runs the line through the full pipeline parser and exits with the line's status. Your `~/.config/crust/init.ts` is still loaded, so any `crust.fn(...)` registrations are available.
+
+| Flag | Effect |
+|---|---|
+| `crust` | Interactive REPL (default). |
+| `crust -c <line>` | Run one line and exit. Multi-line strings split on `\n`; exit code is the last line's. |
+| `crust -h`, `--help` | Show usage. |
+| `crust -V`, `--version` | Show version. |
 
 ## Hello world
 

@@ -3,16 +3,59 @@ import { readLine } from "./editor";
 import { defaultPrompt } from "./prompt";
 import { loadHistory, appendHistory } from "./history";
 import { loadConfig } from "./config";
-import { builtins, isBuiltin } from "./builtins";
-import { parse } from "./parser";
-import { tokenize, classify } from "./lexer";
+import { runLine } from "./runLine";
+import pkg from "../package.json" with { type: "json" };
 import type { Context } from "./types";
 
 interface UserCrustGlobals {
   prompt?: (cwd: string, git: string | null) => string;
 }
 
+const USAGE = `crust ${pkg.version}
+usage:
+  crust                    start interactive REPL
+  crust -c <line>          run one line and exit
+  crust -h | --help        show this help
+  crust -V | --version     show version
+`;
+
 async function main(): Promise<void> {
+  const argv = process.argv.slice(2);
+
+  if (argv.length > 0) {
+    const flag = argv[0]!;
+    if (flag === "-h" || flag === "--help") {
+      process.stdout.write(USAGE);
+      process.exit(0);
+    }
+    if (flag === "-V" || flag === "--version") {
+      process.stdout.write(`${pkg.version}\n`);
+      process.exit(0);
+    }
+    if (flag === "-c") {
+      if (argv.length < 2) {
+        process.stderr.write("crust: -c requires an argument\n");
+        process.exit(2);
+      }
+      const ctx: Context = {
+        aliases: new Map(),
+        functions: new Map(),
+        history: [],
+        exit: (code) => process.exit(code ?? 0),
+      };
+      await loadConfig(ctx, process.env.CRUST_CONFIG);
+      const source = argv[1]!;
+      const lines = source.split("\n");
+      let last = 0;
+      for (const l of lines) {
+        if (l.trim()) last = await runLine(l, ctx);
+      }
+      process.exit(last);
+    }
+    process.stderr.write(`crust: unsupported argument: ${flag}\n`);
+    process.exit(2);
+  }
+
   const ctx: Context = {
     aliases: new Map(),
     functions: new Map(),
@@ -41,71 +84,9 @@ async function main(): Promise<void> {
       process.exit(0);
     }
 
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-
+    if (!line.trim()) continue;
     await appendHistory(line, ctx.history);
-
-    // Alias expand (first word only — v0.1 limit)
-    const firstSpace = trimmed.indexOf(" ");
-    const head = firstSpace === -1 ? trimmed : trimmed.slice(0, firstSpace);
-    const aliasExp = ctx.aliases.get(head);
-    const expanded = aliasExp
-      ? aliasExp + (firstSpace === -1 ? "" : trimmed.slice(firstSpace))
-      : trimmed;
-
-    // Builtin?
-    const exFirstSpace = expanded.indexOf(" ");
-    const exHead = exFirstSpace === -1 ? expanded : expanded.slice(0, exFirstSpace);
-    if (isBuiltin(exHead) && !/[|&;<>]/.test(expanded)) {
-      const args = exFirstSpace === -1 ? "" : expanded.slice(exFirstSpace + 1);
-      try {
-        await builtins[exHead]!(args, ctx);
-      } catch (err) {
-        process.stderr.write(`crust: ${(err as Error).message}\n`);
-      }
-      continue;
-    }
-
-    // Pure-shell pipeline → spawn with inherited stdio (preserves colors, prompts, etc.)
-    // Mixed pipeline (incl. any stage that resolves to a registered crust.fn) →
-    // run through the parser and stream lines to stdout
-    try {
-      const tokens = tokenize(expanded);
-      const isPureShell = tokens.every((t) => {
-        const kind = classify(t.text);
-        if (kind.kind !== "shell") return false;
-        const head = t.text.trim().split(/\s+/)[0]!;
-        return !ctx.functions.has(head);
-      });
-
-      if (isPureShell) {
-        const proc = Bun.spawn(["sh", "-c", expanded], {
-          stdio: ["inherit", "inherit", "inherit"],
-        });
-        await proc.exited;
-      } else {
-        const pipeline = parse(expanded)(ctx);
-        for await (const item of pipeline.lines()) {
-          process.stdout.write(formatItem(item) + "\n");
-        }
-      }
-    } catch (err) {
-      process.stderr.write(`crust: ${(err as Error).message}\n`);
-    }
-  }
-}
-
-function formatItem(x: unknown): string {
-  if (x instanceof Response) {
-    return `${x.status} ${x.statusText} ${x.url}`;
-  }
-  if (typeof x === "string") return x;
-  if (typeof x === "number" || typeof x === "boolean") return String(x);
-  try {
-    return JSON.stringify(x);
-  } catch {
-    return String(x);
+    await runLine(line, ctx);
   }
 }
 
