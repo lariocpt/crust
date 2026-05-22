@@ -24,6 +24,12 @@ range(0, 10000) | parallel 100 | GET :3000/health | expect 200 | stats
 range(0, 100).parallel(() => fetch(url)) | expect 200
 ```
 
+## Docs
+
+- [docs/USAGE.md](docs/USAGE.md) — user-facing reference: sources, transforms, sinks, builtins, editor keybindings, `init.ts` configuration, examples, limits.
+- [docs/spec/v0.1-contract.md](docs/spec/v0.1-contract.md) — the green-light test contract.
+- [docs/PLAN.md](docs/PLAN.md) — design notes.
+
 ## Dev
 
 ```bash
@@ -31,5 +37,3 @@ bun install
 bun test          # red/green TDD harness
 bun src/index.ts  # try the shell
 ```
-
-See `docs/spec/v0.1-contract.md` for the feature contract being implemented.

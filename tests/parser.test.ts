@@ -42,6 +42,48 @@ describe("parser — transforms", () => {
   });
 });
 
+describe("parser — registered functions (crust.fn)", () => {
+  test("dispatches a registered function as a per-item transform", async () => {
+    const ctx = {
+      aliases: new Map<string, string>(),
+      functions: new Map<string, (...args: unknown[]) => unknown>([
+        ["upper", (s: unknown) => String(s).toUpperCase()],
+      ]),
+      history: [],
+      exit: () => {},
+    };
+    const out = await parse("echo hello | upper")(ctx).collect();
+    expect(out).toContain("HELLO");
+  });
+
+  test("passes static args after the function name", async () => {
+    const ctx = {
+      aliases: new Map<string, string>(),
+      functions: new Map<string, (...args: unknown[]) => unknown>([
+        ["wrap", (item: unknown, prefix: unknown, suffix: unknown) =>
+          `${prefix}${item}${suffix}`],
+      ]),
+      history: [],
+      exit: () => {},
+    };
+    const out = await parse('echo hi | wrap [ ]')(ctx).collect();
+    expect(out).toContain("[hi]");
+  });
+
+  test("registered name takes precedence over shell command name", async () => {
+    const ctx = {
+      aliases: new Map<string, string>(),
+      functions: new Map<string, (...args: unknown[]) => unknown>([
+        ["echo", (s: unknown) => `[fn] ${s}`],
+      ]),
+      history: [],
+      exit: () => {},
+    };
+    const out = await parse("range(0, 1) | echo")(ctx).collect();
+    expect(out).toEqual(["[fn] 0", "[fn] 1"]);
+  });
+});
+
 describe("parser — HTTP", () => {
   let server: ReturnType<typeof Bun.serve>;
   let baseUrl: string;

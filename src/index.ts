@@ -20,7 +20,7 @@ async function main(): Promise<void> {
     exit: (code) => process.exit(code ?? 0),
   };
 
-  await loadConfig(ctx);
+  await loadConfig(ctx, process.env.CRUST_CONFIG);
 
   while (true) {
     const userCrust = (globalThis as { crust?: UserCrustGlobals }).crust;
@@ -68,11 +68,16 @@ async function main(): Promise<void> {
     }
 
     // Pure-shell pipeline → spawn with inherited stdio (preserves colors, prompts, etc.)
-    // Mixed pipeline → run through the parser and stream lines to stdout
+    // Mixed pipeline (incl. any stage that resolves to a registered crust.fn) →
+    // run through the parser and stream lines to stdout
     try {
       const tokens = tokenize(expanded);
-      const kinds = tokens.map((t) => classify(t.text));
-      const isPureShell = kinds.every((k) => k.kind === "shell");
+      const isPureShell = tokens.every((t) => {
+        const kind = classify(t.text);
+        if (kind.kind !== "shell") return false;
+        const head = t.text.trim().split(/\s+/)[0]!;
+        return !ctx.functions.has(head);
+      });
 
       if (isPureShell) {
         const proc = Bun.spawn(["sh", "-c", expanded], {
@@ -80,7 +85,7 @@ async function main(): Promise<void> {
         });
         await proc.exited;
       } else {
-        const pipeline = parse(expanded)();
+        const pipeline = parse(expanded)(ctx);
         for await (const item of pipeline.lines()) {
           process.stdout.write(formatItem(item) + "\n");
         }

@@ -8,22 +8,37 @@ import { tokenize, classify } from "./lexer";
 import { Pipeline } from "./pipeline";
 import * as sources from "./sources";
 import * as transforms from "./transforms";
-import type { StageKind } from "./types";
+import type { Context, StageKind } from "./types";
 
-export function parse(line: string): () => Pipeline<unknown> {
+export function parse(line: string): (ctx?: Context) => Pipeline<unknown> {
   const tokens = tokenize(line);
-  return () => {
+  return (ctx) => {
     let pipeline: Pipeline<unknown> | null = null;
     for (let i = 0; i < tokens.length; i++) {
-      const kind = classify(tokens[i]!.text);
-      pipeline = i === 0 ? buildSource(kind) : applyStage(pipeline!, kind);
+      const kind = resolveKind(tokens[i]!.text, ctx);
+      pipeline = i === 0 ? buildSource(kind, ctx) : applyStage(pipeline!, kind, ctx);
     }
     if (!pipeline) throw new Error("parser: empty pipeline");
     return pipeline;
   };
 }
 
-function buildSource(kind: StageKind): Pipeline<unknown> {
+// Demote a shell stage to a function stage when its first word is a
+// crust.fn()-registered name. The lexer is intentionally pure (no ctx),
+// so we resolve registered names here.
+function resolveKind(text: string, ctx?: Context): StageKind {
+  const kind = classify(text);
+  if (kind.kind === "shell" && ctx) {
+    const parts = text.trim().split(/\s+/);
+    const head = parts[0]!;
+    if (ctx.functions.has(head)) {
+      return { kind: "function", name: head, args: parts.slice(1) };
+    }
+  }
+  return kind;
+}
+
+function buildSource(kind: StageKind, ctx?: Context): Pipeline<unknown> {
   switch (kind.kind) {
     case "range":
       return sources.range(kind.start, kind.end) as Pipeline<unknown>;
@@ -36,12 +51,20 @@ function buildSource(kind: StageKind): Pipeline<unknown> {
       return shellSource(kind.text);
     case "lambda":
       throw new Error("lambda cannot be a source — needs upstream items");
-    case "function":
-      throw new Error(`function "${kind.name}" as source not yet supported (v0.1.5)`);
+    case "function": {
+      const fn = ctx?.functions.get(kind.name);
+      if (!fn) throw new Error(`function "${kind.name}" not registered`);
+      // Function-as-source: emit one item from fn(...staticArgs).
+      return Pipeline.of([fn(...kind.args)]);
+    }
   }
 }
 
-function applyStage(input: Pipeline<unknown>, kind: StageKind): Pipeline<unknown> {
+function applyStage(
+  input: Pipeline<unknown>,
+  kind: StageKind,
+  ctx?: Context,
+): Pipeline<unknown> {
   switch (kind.kind) {
     case "lambda":
       return input.pipe(evalLambda(kind.source));
@@ -56,14 +79,15 @@ function applyStage(input: Pipeline<unknown>, kind: StageKind): Pipeline<unknown
     case "range":
     case "glob":
       throw new Error(`${kind.kind} cannot appear as a non-first stage`);
-    case "function":
-      throw new Error(`function "${kind.name}" as transform not yet supported (v0.1.5)`);
+    case "function": {
+      const fn = ctx?.functions.get(kind.name);
+      if (!fn) throw new Error(`function "${kind.name}" not registered`);
+      return input.pipe((item: unknown) => fn(item, ...kind.args));
+    }
   }
 }
 
 function evalLambda(source: string): (x: unknown) => unknown {
-  // Compile the user's lambda once and reuse it per item.
-  // Trust boundary: this is the user's own shell session.
   const compiled = new Function("x", `return (${source})(x);`) as (x: unknown) => unknown;
   return compiled;
 }
