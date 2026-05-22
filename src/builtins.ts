@@ -272,6 +272,12 @@ const mockServerBuiltin: Builtin = async (rawArgs, _ctx) => {
   return await runCli(args);
 };
 
+const verifyWebLinksBuiltin: Builtin = async (rawArgs, _ctx) => {
+  const args = splitArgsRespectingQuotes(rawArgs);
+  const { runCli } = await import("./verifyWebLinks/cli");
+  return await runCli(args);
+};
+
 export const builtins: Record<string, Builtin> = {
   cd: cdBuiltin,
   export: exportBuiltin,
@@ -284,6 +290,7 @@ export const builtins: Record<string, Builtin> = {
   dotenv: dotenvBuiltin,
   "test-fixture": testFixtureBuiltin,
   "mock-server": mockServerBuiltin,
+  "verify-web-links": verifyWebLinksBuiltin,
 };
 
 export function isBuiltin(name: string): boolean {

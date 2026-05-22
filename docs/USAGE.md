@@ -14,6 +14,7 @@ A Bun-powered shell with first-class pipelines. Shell commands, TypeScript lambd
 - [TypeScript API](#typescript-api)
 - [Builtins](#builtins)
 - [mock-server](#mock-server)
+- [verify-web-links](#verify-web-links)
 - [Editor keybindings](#editor-keybindings)
 - [Configuration (`init.ts`)](#configuration-initts)
 - [Examples](#examples)
@@ -96,6 +97,7 @@ The shell parser classifies each `|`-separated stage by looking at its first tok
 |---|---|
 | Contains `*` / `?` / `[…]` | Glob source |
 | Matches `range(a, b)` | Range source |
+| Starts with `tail <path>` (with optional `-F` / `-n N`) | Native `tail` source |
 | Starts with `(` and contains `=>` | TypeScript lambda |
 | Starts with `GET` / `POST` / `PUT` / `PATCH` / `DELETE` | HTTP stage |
 | First token is a builtin name | Builtin (no piping; in-process dispatch) |
@@ -117,6 +119,9 @@ ls                                # any shell command — source if first stage
 range(0, 9)                       # 0..9 inclusive — Pipeline<number>
 **/*.ts                           # glob — Pipeline<string> of paths
 src/*.{ts,tsx}                    # globs support **/*, ?, [abc]
+tail app.log                      # last 10 lines, then done — Pipeline<string>
+tail -n 100 app.log               # custom line count
+tail -F app.log                   # follow mode: stream new lines forever
 GET https://api.example.com/  # → Pipeline<Response> (single item)
 GET :3000/health                  # localhost shorthand
 ```
@@ -148,6 +153,29 @@ time "warmup" | range(0, 1000) | GET :3000/health
 
 Quotes (`"` or `'`) are required around the label; data flowing through the pipeline is untouched. The timer fires even if a downstream stage throws (e.g. `expect 500` failure), so you still see how long you got before the break. Only allowed as the first stage — `... | time "x"` is rejected. The matching TS API is `time(label, out?)`.
 
+### Tailing files (`tail` source)
+
+Native `tail` is a first-class crust source — no shell-out to the system `tail` needed when all you want is "last N lines" or `tail -F`-style follow. Same flags as POSIX `tail`, mapped to a `Pipeline<string>`:
+
+```bash
+tail app.log                       # last 10 lines, then done
+tail -n 100 app.log                # last 100 lines, then done
+tail --lines=100 app.log           # same
+tail -F app.log                    # last 10 lines, then stream new ones forever
+tail -F -n 0 app.log               # follow only — skip the initial cut
+
+# Compose like any other source
+tail -F app.log | grep ERROR
+tail -F app.log | (l => JSON.parse(l))
+tail -F app.log | POST :3000/ingest
+```
+
+`-F` follows the file by inode + size. Rotate-and-recreate (logrotate-style) is detected via inode change and the source switches over to the new file automatically. A truncate that shrinks the file below the current offset is also detected and resets the stream. A truncate-and-immediate-overwrite to a size ≥ the prior offset is indistinguishable from an append via `stat` alone, and is treated as an append — matches GNU `tail -F` behavior.
+
+Unrecognized flags (`-c`, `--pid`, etc.) fall back to the system `tail` via shell, so `tail -c 200 app.log` and `tail --help` still work as expected. Bare `tail` with no path also falls through to shell.
+
+Polling interval is 200ms by default. From the TS API: `tail(path, { lines, follow, pollMs })` — see [TypeScript API](#typescript-api).
+
 ### Builtins
 
 ```bash
@@ -175,12 +203,27 @@ Pipeline             // class — the unified stream abstraction
 range(start, end)    // source
 glob(pattern)        // source
 read(path)           // source — Pipeline<string> of lines
+tail(path, opts?)    // source — last N lines, optionally follow forever
 GET(url, opts?)      // source
 POST(url, opts?)     // transform: Pipeline<T> → Pipeline<Response>
 PUT, PATCH, DELETE   // same shape as POST
 expectStage(matcher) // transform — fails the pipeline on mismatch
 parallel(n, fn)      // transform — N concurrent workers, order-preserving
 $                    // Bun's tagged-template shell (`Bun.$`)
+```
+
+`tail(path, opts?)` options: `lines` (default `10`, set `0` to skip the initial cut), `follow` (default `false`), `pollMs` (default `200`). With `follow: true`, the stream never ends until the consumer stops iterating — handle that explicitly with `break`, `.lines()`, or by tying the iteration to an `AbortController`.
+
+```ts
+// Last 50 lines of a log, ship to S3
+await tail("application.log", { lines: 50 })
+  .pipe(POST("https://logs.example.com/ingest"))
+  .collect();
+
+// Follow a log forever, alert on ERROR lines
+for await (const line of tail("application.log", { follow: true }).lines()) {
+  if (line.includes("ERROR")) await notifyPager(line);
+}
 ```
 
 And these sinks are imported directly (`from "crust/sinks"` once published; today: `from "../src/sinks"` if you're hacking on the repo):
@@ -258,7 +301,7 @@ The TS-test ecosystem owns the name `expect`. Crust exports the API name as `exp
 | `history` | Numbered list of this session's lines. Persistent at `~/.local/share/crust/history`. |
 | `dotenv [--config p] [--append]` | Loads `.env` files into the session. Tracks history, supports `dotenv status` and `dotenv clear`. See [dotenv](#dotenv). |
 | `test-fixture --target g [--out p] [--threads N]` | Runs `.crust.ts` HTTP fixtures. See [test-fixture](#test-fixture). |
-| `mock-server --swagger <url-or-path> [--port N] [--host addr]` | Boots a `Bun.serve` instance that mocks every operation in an OpenAPI 3.x spec. See [mock-server](#mock-server). |
+| `mock-server --swagger <url-or-path> [--port N] [--host addr] [--cluster N]` | Boots a `Bun.serve` instance that mocks every operation in an OpenAPI 3.x spec; `--cluster N` forks N workers sharing the port on Linux. See [mock-server](#mock-server). |
 | `exit [code]` | Exits crust with optional code (default 0). |
 | `help` | Lists builtins. |
 
@@ -324,9 +367,10 @@ Boots a `Bun.serve` instance that mocks every operation in an OpenAPI 3.x spec �
 mock-server --swagger ./openapi.yaml --port 4000
 mock-server --swagger https://petstore3.swagger.io/api/v3/openapi.json --port 4747
 mock-server --swagger ./spec.json --port 0 --host 127.0.0.1   # OS-assigned port
+mock-server --swagger ./openapi.yaml --port 4000 --cluster 4  # Linux only
 ```
 
-Flags: `--swagger <url-or-path>` (required; URL or local `.json`/`.yaml`/`.yml`), `--port N` (default `3000`, `0` = ephemeral), `--host addr` (default `0.0.0.0`).
+Flags: `--swagger <url-or-path>` (required; URL or local `.json`/`.yaml`/`.yml`), `--port N` (default `3000`, `0` = ephemeral), `--host addr` (default `0.0.0.0`), `--cluster N` (Linux only; fork N workers that share the port via `SO_REUSEPORT`, with each request log line prefixed `[wN]`).
 
 Response bodies are picked example-first, schema-fallback:
 
@@ -377,6 +421,50 @@ test-fixture --target stress.crust.ts --count 1000 --threads 32 --out report.jso
 ```
 
 Helpers: `random.int(min, max)`, `random.float(min, max)`, `random.bool(p?)`, `random.choice(arr)`, `random.from(iter)`, `random.weighted([[v, w], ...])`, `random.string(len, alphabet?)`, `random.uuid()`, `random.shuffle(arr)`.
+
+### verify-web-links
+
+Crawls a site from its sitemap, verifies every link is reachable, and optionally diffs Open Graph / meta tags against `.crust.ts` fixtures. The site-health counterpart to `test-fixture`. Uses Bun's built-in `HTMLRewriter` for link and social-meta extraction.
+
+```bash
+# Direct sitemap
+verify-web-links --site-map-url https://example.com/sitemap.xml
+
+# Auto-discover from robots.txt → /sitemap.xml
+verify-web-links --base-url https://example.com
+
+# Full SEO sweep: crawl + meta + OG image checks
+verify-web-links --base-url https://example.com --fixtures meta/*.crust.ts
+
+# Sitemap-only (no recursion into internal links)
+verify-web-links --site-map-url ./public/sitemap.xml --no-recurse
+```
+
+Flags: `--site-map-url <url-or-path>` or `--base-url <url>` (one required, mutually exclusive); `--fixtures <glob>` (optional `.crust.ts` meta fixtures); `--concurrency N` (default `4`); `--timeout ms` (default `10000`); `--user-agent <s>`; `--max-depth N` (default `5`); `--no-recurse` / `--no-anchors` / `--no-redirect-warnings` to opt out of those checks; `--include-external` to status-check off-origin links (never recursed); `--json` for a machine-readable report.
+
+By default, all four verification behaviors are on: 2xx status, recurse into internal pages, validate `#fragment` targets against element ids on the destination page, and flag any 3xx redirect chain (often a sign of stale internal links). Each `og:image` URL is fetched and its content-type asserted to start with `image/`.
+
+Meta fixtures use the same `.crust.ts` default-export pattern as `test-fixture`. Predicates (single-arg functions) work on any value:
+
+```ts
+// site/about.meta.crust.ts
+export default {
+  url: "https://example.com/about",
+  meta: {
+    title: "About Us",
+    description: (d: string) => d.length > 50 && d.length < 160,
+    "og:title": "About Us",
+    "og:image": (u: string) => u.endsWith(".png") || u.endsWith(".jpg"),
+    "twitter:card": "summary_large_image",
+  },
+};
+```
+
+```bash
+verify-web-links --base-url https://example.com --fixtures site/*.meta.crust.ts
+```
+
+Exit codes: `0` all clear, `1` verification failures (broken links, missing anchors, redirect chains, OG image issues, meta mismatches), `2` bad args / unreachable sitemap.
 
 ### Built-in functions
 
