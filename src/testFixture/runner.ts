@@ -6,12 +6,17 @@ import type {
   FixtureResult,
   RunOpts,
   RunReport,
+  StressBucket,
 } from "./types";
 
 export async function runFixtures(opts: RunOpts): Promise<RunReport> {
   const threads = Math.max(1, Math.floor(opts.threads || 1));
   if (opts.threads < 1) {
     process.stderr.write(`test-fixture: --threads ${opts.threads} clamped to 1\n`);
+  }
+  const count = Math.max(1, Math.floor(opts.count ?? 1));
+  if ((opts.count ?? 1) < 1) {
+    process.stderr.write(`test-fixture: --count ${opts.count} clamped to 1\n`);
   }
   const files = await expandTarget(opts.target);
   const tasks: Array<() => Promise<FixtureResult>> = [];
@@ -61,7 +66,12 @@ export async function runFixtures(opts: RunOpts): Promise<RunReport> {
       continue;
     }
     const fxs = Array.isArray(raw) ? (raw as Fixture[]) : [raw as Fixture];
-    fxs.forEach((fx, i) => tasks.push(() => runOne(file, fx, i)));
+    fxs.forEach((fx, i) => {
+      for (let iter = 1; iter <= count; iter++) {
+        const iterArg = count > 1 ? iter : undefined;
+        tasks.push(() => runOne(file, fx, i, iterArg));
+      }
+    });
   }
 
   const results: FixtureResult[] = new Array(tasks.length);
@@ -84,7 +94,57 @@ export async function runFixtures(opts: RunOpts): Promise<RunReport> {
     totals[r.status]++;
     totals.ms += r.durationMs;
   }
-  return { results, totals };
+  const report: RunReport = { results, totals };
+  if (count > 1) report.stress = buildStressBuckets(results);
+  return report;
+}
+
+function buildStressBuckets(results: FixtureResult[]): StressBucket[] {
+  const groups = new Map<string, FixtureResult[]>();
+  for (const r of results) {
+    const key = `${r.file}::${r.name.replace(/#\d+$/, "")}`;
+    const arr = groups.get(key) ?? [];
+    arr.push(r);
+    groups.set(key, arr);
+  }
+  const out: StressBucket[] = [];
+  for (const [key, runs] of groups) {
+    const durations = runs.map((r) => r.durationMs).sort((a, b) => a - b);
+    const statusCodes: Record<string, number> = {};
+    let pass = 0;
+    let fail = 0;
+    let errCount = 0;
+    let sum = 0;
+    for (const r of runs) {
+      sum += r.durationMs;
+      if (r.status === "pass") pass++;
+      else if (r.status === "fail") fail++;
+      else errCount++;
+      const code = r.responseStatus != null ? String(r.responseStatus) : "n/a";
+      statusCodes[code] = (statusCodes[code] ?? 0) + 1;
+    }
+    out.push({
+      fixture: key,
+      count: runs.length,
+      pass,
+      fail,
+      error: errCount,
+      p50: percentile(durations, 50),
+      p95: percentile(durations, 95),
+      p99: percentile(durations, 99),
+      minMs: durations[0] ?? 0,
+      maxMs: durations[durations.length - 1] ?? 0,
+      meanMs: sum / runs.length,
+      statusCodes,
+    });
+  }
+  return out;
+}
+
+function percentile(sorted: number[], p: number): number {
+  if (sorted.length === 0) return 0;
+  const idx = Math.min(sorted.length - 1, Math.floor((p / 100) * sorted.length));
+  return sorted[idx]!;
 }
 
 export async function expandTarget(target: string): Promise<string[]> {
@@ -114,27 +174,38 @@ export async function expandTarget(target: string): Promise<string[]> {
   return out;
 }
 
-async function runOne(file: string, fx: Fixture, idx: number): Promise<FixtureResult> {
-  const name = fx.name ?? `${file}#${idx}`;
+async function runOne(
+  file: string,
+  fx: Fixture,
+  idx: number,
+  iter?: number,
+): Promise<FixtureResult> {
+  const baseName = fx.name ?? `${file}#${idx}`;
+  const name = iter != null ? `${baseName} #${iter}` : baseName;
   const start = performance.now();
   let setupCtx: unknown;
   let teardownErr: Error | null = null;
+  let responseStatus: number | undefined;
   try {
     if (fx.setup) setupCtx = await fx.setup();
     const input = (await resolveDeep(fx.input)) as Record<string, unknown>;
     const expected = (await resolveDeep(fx.output)) as Record<string, unknown>;
     const actual = await performRequest(input);
+    responseStatus = actual.status;
     const failures = diff("output", expected, actual);
-    return {
+    const r: FixtureResult = {
       file,
       name,
       status: failures.length ? "fail" : "pass",
       durationMs: performance.now() - start,
       failures,
+      responseStatus,
     };
+    if (iter != null) r.iter = iter;
+    return r;
   } catch (err) {
     const e = err as Error;
-    return {
+    const r: FixtureResult = {
       file,
       name,
       status: "error",
@@ -142,6 +213,9 @@ async function runOne(file: string, fx: Fixture, idx: number): Promise<FixtureRe
       failures: [],
       error: { message: e.message, stack: e.stack },
     };
+    if (responseStatus != null) r.responseStatus = responseStatus;
+    if (iter != null) r.iter = iter;
+    return r;
   } finally {
     if (fx.teardown) {
       try {

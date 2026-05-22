@@ -34,18 +34,37 @@ export interface FixtureFailure {
 export interface FixtureResult {
   file: string;
   name: string;
+  iter?: number;
   status: "pass" | "fail" | "error";
   durationMs: number;
   failures: FixtureFailure[];
   error?: { message: string; stack?: string };
+  responseStatus?: number;
+}
+
+export interface StressBucket {
+  fixture: string;
+  count: number;
+  pass: number;
+  fail: number;
+  error: number;
+  p50: number;
+  p95: number;
+  p99: number;
+  minMs: number;
+  maxMs: number;
+  meanMs: number;
+  statusCodes: Record<string, number>;
 }
 
 export interface RunReport {
   results: FixtureResult[];
   totals: { pass: number; fail: number; error: number; ms: number };
+  stress?: StressBucket[];
 }
 
 export interface RunOpts {
   target: string;
   threads: number;
+  count?: number;
 }

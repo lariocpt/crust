@@ -54,8 +54,20 @@ function buildSource(kind: StageKind, ctx?: Context): Pipeline<unknown> {
     case "function": {
       const fn = ctx?.functions.get(kind.name);
       if (!fn) throw new Error(`function "${kind.name}" not registered`);
-      // Function-as-source: emit one item from fn(...staticArgs).
-      return Pipeline.of([fn(...kind.args)]);
+      // Function-as-source: invoke fn(...staticArgs). If it returns (or resolves
+      // to) an Array, stream each element as its own item — this is what makes
+      // `sql "..."` behave as a row-streaming source. Anything else is yielded
+      // as a single item.
+      return Pipeline.of(
+        (async function* () {
+          const result = await fn(...kind.args);
+          if (Array.isArray(result)) {
+            for (const r of result) yield r;
+          } else {
+            yield result;
+          }
+        })(),
+      );
     }
   }
 }

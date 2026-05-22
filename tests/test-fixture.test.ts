@@ -176,6 +176,55 @@ describe("test-fixture runner", () => {
     expect(report.totals.error).toBe(1);
     expect(report.results[0]!.error?.message).toContain("nope");
   });
+
+  test("--count repeats each fixture N times and surfaces a stress bucket", async () => {
+    mode = "ok";
+    const file = await writeFixture(
+      "stress/repeat.crust.ts",
+      `export default { input: { url: "${baseUrl}/users/42" }, output: { status: 200 } };\n`,
+    );
+    const report = await runFixtures({ target: file, threads: 4, count: 10 });
+    expect(report.results).toHaveLength(10);
+    expect(report.totals.pass).toBe(10);
+    expect(report.stress).toBeDefined();
+    expect(report.stress!.length).toBe(1);
+    const b = report.stress![0]!;
+    expect(b.count).toBe(10);
+    expect(b.pass).toBe(10);
+    expect(b.p50).toBeGreaterThanOrEqual(0);
+    expect(b.p95).toBeGreaterThanOrEqual(b.p50);
+    expect(b.statusCodes["200"]).toBe(10);
+  });
+
+  test("--count tags each result with its iter index", async () => {
+    mode = "ok";
+    const file = await writeFixture(
+      "stress/iter.crust.ts",
+      `export default { input: { url: "${baseUrl}/users/42" }, output: { status: 200 } };\n`,
+    );
+    const report = await runFixtures({ target: file, threads: 1, count: 3 });
+    const iters = report.results.map((r) => r.iter).sort();
+    expect(iters).toEqual([1, 2, 3]);
+  });
+
+  test("random helper varies inputs across iterations", async () => {
+    mode = "ok";
+    const randomPath = `${import.meta.dir}/../src/testFixture/random`;
+    const file = await writeFixture(
+      "stress/rand.crust.ts",
+      `import { random } from "${randomPath}";
+       const tokens = ["a", "b", "c", "d"];
+       export default {
+         input: {
+           url: "${baseUrl}/echo-header",
+           headers: () => ({ "x-token": random.choice(tokens) }),
+         },
+         output: { status: 200 },
+       };\n`,
+    );
+    const report = await runFixtures({ target: file, threads: 1, count: 8 });
+    expect(report.totals.pass).toBe(8);
+  });
 });
 
 describe("test-fixture cli", () => {

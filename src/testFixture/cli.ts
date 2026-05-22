@@ -3,18 +3,35 @@ import { extname } from "node:path";
 import { runFixtures } from "./runner";
 import { renderJson, renderMarkdown, renderText } from "./report";
 
-const USAGE = `test-fixture --target <file|glob> [--out <path>] [--threads N]
+const USAGE = `test-fixture --target <file|glob> [--out <path>] [--threads N] [--count N]
 
 Run .crust.ts fixture files. Each file exports a Fixture (or array) with
 { input, output } objects. Fields whose value is a 0-arg function are
 resolved at run time; functions in 'output' with one or more arguments
 are matcher predicates over the actual value.
+
+  --count N      run each fixture N times (stress mode). Combine with
+                 --threads to drive concurrency. Reports p50/p95/p99
+                 latency, mean/min/max, and status-code distribution
+                 when N > 1. Use the 'random' helper inside fixtures
+                 (import { random } from "crust/testFixture/random")
+                 to vary inputs across iterations.
 `;
 
 export async function runCli(args: string[]): Promise<number> {
   let target: string | undefined;
   let out: string | undefined;
   let threads = 1;
+  let count = 1;
+
+  function intFlag(value: string | undefined, name: string): number | null {
+    const n = parseInt(value ?? "", 10);
+    if (!Number.isFinite(n)) {
+      process.stderr.write(`test-fixture: ${name} requires an integer\n`);
+      return null;
+    }
+    return n;
+  }
 
   for (let i = 0; i < args.length; i++) {
     const a = args[i]!;
@@ -31,19 +48,21 @@ export async function runCli(args: string[]): Promise<number> {
     } else if (a.startsWith("--out=")) {
       out = a.slice("--out=".length);
     } else if (a === "--threads") {
-      const n = parseInt(args[++i] ?? "", 10);
-      if (!Number.isFinite(n)) {
-        process.stderr.write(`test-fixture: --threads requires an integer\n`);
-        return 2;
-      }
+      const n = intFlag(args[++i], "--threads");
+      if (n === null) return 2;
       threads = n;
     } else if (a.startsWith("--threads=")) {
-      const n = parseInt(a.slice("--threads=".length), 10);
-      if (!Number.isFinite(n)) {
-        process.stderr.write(`test-fixture: --threads requires an integer\n`);
-        return 2;
-      }
+      const n = intFlag(a.slice("--threads=".length), "--threads");
+      if (n === null) return 2;
       threads = n;
+    } else if (a === "--count") {
+      const n = intFlag(args[++i], "--count");
+      if (n === null) return 2;
+      count = n;
+    } else if (a.startsWith("--count=")) {
+      const n = intFlag(a.slice("--count=".length), "--count");
+      if (n === null) return 2;
+      count = n;
     } else {
       process.stderr.write(`test-fixture: unknown arg '${a}'\n`);
       return 2;
@@ -58,7 +77,7 @@ export async function runCli(args: string[]): Promise<number> {
 
   let report;
   try {
-    report = await runFixtures({ target, threads });
+    report = await runFixtures({ target, threads, count });
   } catch (err) {
     process.stderr.write(`test-fixture: ${(err as Error).message}\n`);
     return 2;

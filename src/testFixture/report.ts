@@ -35,10 +35,23 @@ export function renderText(report: RunReport, useColor: boolean): string {
   const t = report.totals;
   const fileCount = new Set(report.results.map((r) => r.file)).size;
   out.push(
-    `${fileCount} file(s), ${report.results.length} fixture(s): ` +
+    `${fileCount} file(s), ${report.results.length} run(s): ` +
       `${c.green(t.pass + " pass")}, ${c.red(t.fail + " fail")}, ${c.yellow(t.error + " error")}` +
       `  (${t.ms.toFixed(1)}ms)`,
   );
+  if (report.stress && report.stress.length > 0) {
+    out.push("");
+    out.push("stress (latency ms, status distribution):");
+    for (const b of report.stress) {
+      const dist = Object.entries(b.statusCodes)
+        .sort((a, z) => Number(a[0]) - Number(z[0]))
+        .map(([k, v]) => `${k}:${v}`)
+        .join(" ");
+      out.push(
+        `  ${b.fixture}  n=${b.count}  p50=${b.p50.toFixed(1)}  p95=${b.p95.toFixed(1)}  p99=${b.p99.toFixed(1)}  mean=${b.meanMs.toFixed(1)}  min=${b.minMs.toFixed(1)}  max=${b.maxMs.toFixed(1)}  [${dist}]`,
+      );
+    }
+  }
   return out.join("\n") + "\n";
 }
 

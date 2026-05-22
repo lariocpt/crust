@@ -273,6 +273,7 @@ Runs `.crust.ts` fixture files against an HTTP service. Each file is a normal Ty
 test-fixture --target fixtures/*.crust.ts
 test-fixture --target fixtures/users.crust.ts --out report.md
 test-fixture --target 'fixtures/**/*.crust.ts' --threads 8 --out report.json
+test-fixture --target fixtures/users.crust.ts --count 1000 --threads 32   # stress
 ```
 
 Module resolution inside a fixture file uses Bun's normal walk: imports resolve from the fixture's own directory upward, so the nearest `node_modules` wins — same as running `bun` from that directory.
@@ -301,6 +302,70 @@ export default {
 Report formats are picked from `--out`'s extension: `.json`, `.md`, anything else is plain text. With no `--out`, prints a colored, folder-grouped summary to stdout. Exit codes: `0` all pass, `1` any failure/error, `2` no files matched or bad args.
 
 When installed via `install.sh`, the runner is AOT-compiled to a host-arch bytecode binary at `~/.crust/bin/crust-test-fixture` for fast cold-start. The shell builtin execs that binary if present and falls back to in-process dynamic import otherwise (dev mode).
+
+#### Stress mode (`--count`) and randomized inputs
+
+`--count N` runs every matched fixture N times. Combined with `--threads`, you get concurrency + volume. When `N > 1` the report adds a stress block per fixture: `p50`, `p95`, `p99`, mean, min, max, plus the status-code distribution. Each result is tagged with its `iter` index so failures point at the offending iteration.
+
+To vary inputs across iterations, use thunks in `input` together with the `random` helper:
+
+```ts
+import { random } from "crust/testFixture/random";
+
+const userIds = [1, 2, 3, 4, 5, 6, 7, 8];
+
+export default {
+  input: {
+    url: () => `http://localhost:3000/users/${random.choice(userIds)}`,
+    method: "POST",
+    body: () => ({
+      name: random.string(8),
+      age: random.int(18, 99),
+      tier: random.weighted([["free", 7] as const, ["pro", 3] as const]),
+      id: random.uuid(),
+    }),
+  },
+  output: { status: (s) => s < 500 },
+};
+```
+
+```bash
+test-fixture --target stress.crust.ts --count 1000 --threads 32 --out report.json
+```
+
+Helpers: `random.int(min, max)`, `random.float(min, max)`, `random.bool(p?)`, `random.choice(arr)`, `random.from(iter)`, `random.weighted([[v, w], ...])`, `random.string(len, alphabet?)`, `random.uuid()`, `random.shuffle(arr)`.
+
+### Built-in functions
+
+Crust ships a small set of `crust.fn`-registered helpers. They work as both pipeline stages (`echo … | base64`) and one-shot sources (`base64 hello`). User-defined `crust.fn(...)` calls in `init.ts` override these by name.
+
+| Function | Usage |
+|---|---|
+| `base64 [-d \| decode]` | Encode (default) or decode. `echo hi \| base64` → `aGk=`; `echo aGk= \| base64 -d` → `hi`. |
+| `salt [bytes] [hex\|base64\|base64url]` | Cryptographically random bytes. Defaults: 16 bytes, hex. `salt 32 base64`. |
+| `jwt sign \| verify \| decode --secret <s>` | HS256 JWT. Reads `$JWT_SECRET` if `--secret` omitted. Item can be a JSON string (sign) or a token (verify/decode). |
+| `bundle <entry> [--outdir \| --outfile \| --minify \| --sourcemap \| --target=bun\|browser\|node]` | Wraps `Bun.build` for one-shot bundling. With `--outfile`, writes the first artifact and returns `{outfile, bytes}`. |
+| `sql "<query>" [params…]` | Runs a SQL query via Bun's SQL client using `$DATABASE_URL`. As a source, **streams one item per row** (the parser flattens Array results from function-as-source). |
+
+Examples:
+
+```bash
+echo hello | base64                                  # aGVsbG8=
+echo "QmVhcmVy" | base64 -d                          # Bearer
+salt 32 base64                                       # random 32-byte token
+
+# Sign + verify a JWT
+jwt sign '{"sub":"42"}' --secret k                   # eyJhbGciOiJIUzI1Ni…
+echo eyJhbGciOiJIUzI1Ni… | jwt verify --secret k     # { sub: "42" }
+
+# SQL as a streaming source — pipe rows downstream
+sql "select id, email from users limit 5" | (r => r.email)
+
+# Bundle in one shot
+bundle src/index.ts --outfile dist/app.js --minify
+```
+
+Note: function-as-source now **flattens Array return values** — `fn` returning `[a, b, c]` emits three items, not one array. This makes `sql "..."` and similar row-yielding sources compose naturally with downstream lambdas.
 
 ---
 
