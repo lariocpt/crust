@@ -1,5 +1,5 @@
-import { test, expect, describe, beforeEach, afterEach } from "bun:test";
-import { mkdtemp, rm, realpath } from "node:fs/promises";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { builtins, isBuiltin } from "../src/builtins";
@@ -10,8 +10,9 @@ function mkCtx(): Context {
     aliases: new Map(),
     functions: new Map(),
     history: [],
-    exit: () => {},
+    exit: (() => {}) as Context["exit"],
     dotenv: { history: [], snapshot: null },
+    signalHandlers: new Map(),
   };
 }
 
@@ -126,9 +127,9 @@ describe("exit", () => {
     let captured: number | undefined;
     const ctx: Context = {
       ...mkCtx(),
-      exit: (c) => {
+      exit: ((c: number | undefined) => {
         captured = c;
-      },
+      }) as Context["exit"],
     };
     await builtins.exit!("42", ctx);
     expect(captured).toBe(42);
@@ -138,9 +139,9 @@ describe("exit", () => {
     let captured: number | undefined;
     const ctx: Context = {
       ...mkCtx(),
-      exit: (c) => {
+      exit: ((c: number | undefined) => {
         captured = c;
-      },
+      }) as Context["exit"],
     };
     await builtins.exit!("", ctx);
     expect(captured).toBe(0);

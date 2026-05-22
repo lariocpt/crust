@@ -1,10 +1,10 @@
 #!/usr/bin/env bun
-import { readLine } from "./editor";
-import { defaultPrompt } from "./prompt";
-import { loadHistory, appendHistory } from "./history";
-import { loadConfig } from "./config";
-import { runLine } from "./runLine";
 import pkg from "../package.json" with { type: "json" };
+import { type CrustGlobal, loadConfig } from "./config";
+import { readLine } from "./editor";
+import { appendHistory, loadHistory } from "./history";
+import { defaultPrompt } from "./prompt";
+import { runLine } from "./runLine";
 import type { Context } from "./types";
 
 interface UserCrustGlobals {
@@ -18,6 +18,30 @@ usage:
   crust -h | --help        show this help
   crust -V | --version     show version
 `;
+
+async function shutdown(code: number): Promise<never> {
+  const userCrust = (globalThis as { crust?: CrustGlobal }).crust;
+  if (userCrust?.onExit) {
+    try {
+      await userCrust.onExit(code);
+    } catch (err) {
+      process.stderr.write(`crust: onExit error: ${(err as Error).message}\n`);
+    }
+  }
+  process.exit(code);
+}
+
+function newContext(history: string[]): Context {
+  const ctx: Context = {
+    aliases: new Map(),
+    functions: new Map(),
+    history,
+    exit: (code) => shutdown(code ?? 0),
+    dotenv: { history: [], snapshot: null },
+    signalHandlers: new Map(),
+  };
+  return ctx;
+}
 
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
@@ -37,41 +61,44 @@ async function main(): Promise<void> {
         process.stderr.write("crust: -c requires an argument\n");
         process.exit(2);
       }
-      const ctx: Context = {
-        aliases: new Map(),
-        functions: new Map(),
-        history: [],
-        exit: (code) => process.exit(code ?? 0),
-        dotenv: { history: [], snapshot: null },
-      };
+      const ctx = newContext([]);
       await loadConfig(ctx, process.env.CRUST_CONFIG);
+      const userCrust = (globalThis as { crust?: CrustGlobal }).crust;
+      if (userCrust?.onBeforeStart) {
+        try {
+          await userCrust.onBeforeStart();
+        } catch (err) {
+          process.stderr.write(`crust: onBeforeStart error: ${(err as Error).message}\n`);
+        }
+      }
       const source = argv[1]!;
       const lines = source.split("\n");
       let last = 0;
       for (const l of lines) {
         if (l.trim()) last = await runLine(l, ctx);
       }
-      process.exit(last);
+      await shutdown(last);
     }
     process.stderr.write(`crust: unsupported argument: ${flag}\n`);
     process.exit(2);
   }
 
-  const ctx: Context = {
-    aliases: new Map(),
-    functions: new Map(),
-    history: await loadHistory(),
-    exit: (code) => process.exit(code ?? 0),
-    dotenv: { history: [], snapshot: null },
-  };
+  const ctx = newContext(await loadHistory());
 
   await loadConfig(ctx, process.env.CRUST_CONFIG);
 
+  const userCrust = (globalThis as { crust?: CrustGlobal }).crust;
+  if (userCrust?.onBeforeStart) {
+    try {
+      await userCrust.onBeforeStart();
+    } catch (err) {
+      process.stderr.write(`crust: onBeforeStart error: ${(err as Error).message}\n`);
+    }
+  }
+
   while (true) {
-    const userCrust = (globalThis as { crust?: UserCrustGlobals }).crust;
-    const prompt = userCrust?.prompt
-      ? userCrust.prompt(process.cwd(), null, ctx)
-      : defaultPrompt(ctx);
+    const uc = (globalThis as { crust?: UserCrustGlobals }).crust;
+    const prompt = uc?.prompt ? uc.prompt(process.cwd(), null, ctx) : defaultPrompt(ctx);
 
     let line: string | null;
     try {
@@ -83,7 +110,8 @@ async function main(): Promise<void> {
 
     if (line === null) {
       // Ctrl-D on empty buffer
-      process.exit(0);
+      await shutdown(0);
+      return;
     }
 
     if (!line.trim()) continue;

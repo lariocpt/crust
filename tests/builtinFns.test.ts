@@ -1,7 +1,7 @@
-import { test, expect, describe } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { base64 } from "../src/builtinFns/base64";
-import { salt } from "../src/builtinFns/salt";
 import { jwt } from "../src/builtinFns/jwt";
+import { salt } from "../src/builtinFns/salt";
 import { random } from "../src/testFixture/random";
 
 describe("base64", () => {
@@ -126,9 +126,7 @@ describe("random helpers", () => {
   });
 
   test("uuid produces a v4-shaped id", () => {
-    expect(random.uuid()).toMatch(
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
-    );
+    expect(random.uuid()).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
   });
 
   test("weighted always returns a key", () => {
@@ -155,8 +153,9 @@ describe("parser flatten on function-as-source", () => {
         ["rows", () => [{ id: 1 }, { id: 2 }, { id: 3 }]],
       ]),
       history: [],
-      exit: () => {},
+      exit: (() => {}) as never,
       dotenv: { history: [], snapshot: null },
+      signalHandlers: new Map(),
     };
     const out = await parse("rows | (r => r.id)")(ctx).collect();
     expect(out).toEqual([1, 2, 3]);
@@ -166,12 +165,11 @@ describe("parser flatten on function-as-source", () => {
     const { parse } = await import("../src/parser");
     const ctx = {
       aliases: new Map<string, string>(),
-      functions: new Map<string, (...a: unknown[]) => unknown>([
-        ["greet", () => "hello"],
-      ]),
+      functions: new Map<string, (...a: unknown[]) => unknown>([["greet", () => "hello"]]),
       history: [],
-      exit: () => {},
+      exit: (() => {}) as never,
       dotenv: { history: [], snapshot: null },
+      signalHandlers: new Map(),
     };
     const out = await parse("greet")(ctx).collect();
     expect(out).toEqual(["hello"]);

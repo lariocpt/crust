@@ -108,9 +108,9 @@ const sourceBuiltin: Builtin = async (rawArgs, _ctx) => {
   }
 };
 
-const exitBuiltin: Builtin = (rawArgs, ctx) => {
+const exitBuiltin: Builtin = async (rawArgs, ctx) => {
   const parsed = parseInt(rawArgs.trim() || "0", 10);
-  ctx.exit(isNaN(parsed) ? 0 : parsed);
+  await ctx.exit(isNaN(parsed) ? 0 : parsed);
   return 0;
 };
 

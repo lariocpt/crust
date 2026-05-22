@@ -1,5 +1,5 @@
-import { test, expect, describe, beforeEach, afterEach } from "bun:test";
-import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Context } from "../src/types";
@@ -9,8 +9,9 @@ function mkCtx(): Context {
     aliases: new Map(),
     functions: new Map(),
     history: [],
-    exit: () => {},
+    exit: (() => {}) as Context["exit"],
     dotenv: { history: [], snapshot: null },
+    signalHandlers: new Map(),
   };
 }
 
@@ -25,10 +26,7 @@ async function makeGlobalDir(
   for (const [name, { pkg, main }] of Object.entries(packages)) {
     const pkgDir = `${prefix}/node_modules/${name}`;
     await mkdir(pkgDir, { recursive: true });
-    await writeFile(
-      `${pkgDir}/package.json`,
-      JSON.stringify({ name, main: "index.mjs", ...pkg }),
-    );
+    await writeFile(`${pkgDir}/package.json`, JSON.stringify({ name, main: "index.mjs", ...pkg }));
     if (main !== undefined) await writeFile(`${pkgDir}/index.mjs`, main);
   }
 }
@@ -104,7 +102,7 @@ describe("discoverGlobals", () => {
 
   test("crust field opts a binary package into stage dispatch", async () => {
     await makeGlobalDir(prefix, {
-      "binlib": {
+      binlib: {
         pkg: { bin: "cli.js", crust: {} },
         main: `export default function(x) { return "OK:" + x; }`,
       },

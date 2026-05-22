@@ -1,4 +1,4 @@
-import { test, expect, describe, beforeAll, afterAll } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { parse } from "../src/parser";
 
 describe("parser — sources", () => {
@@ -50,8 +50,9 @@ describe("parser — registered functions (crust.fn)", () => {
         ["upper", (s: unknown) => String(s).toUpperCase()],
       ]),
       history: [],
-      exit: () => {},
+      exit: (() => {}) as never,
       dotenv: { history: [], snapshot: null },
+      signalHandlers: new Map(),
     };
     const out = await parse("echo hello | upper")(ctx).collect();
     expect(out).toContain("HELLO");
@@ -61,14 +62,14 @@ describe("parser — registered functions (crust.fn)", () => {
     const ctx = {
       aliases: new Map<string, string>(),
       functions: new Map<string, (...args: unknown[]) => unknown>([
-        ["wrap", (item: unknown, prefix: unknown, suffix: unknown) =>
-          `${prefix}${item}${suffix}`],
+        ["wrap", (item: unknown, prefix: unknown, suffix: unknown) => `${prefix}${item}${suffix}`],
       ]),
       history: [],
-      exit: () => {},
+      exit: (() => {}) as never,
       dotenv: { history: [], snapshot: null },
+      signalHandlers: new Map(),
     };
-    const out = await parse('echo hi | wrap [ ]')(ctx).collect();
+    const out = await parse("echo hi | wrap [ ]")(ctx).collect();
     expect(out).toContain("[hi]");
   });
 
@@ -79,8 +80,9 @@ describe("parser — registered functions (crust.fn)", () => {
         ["echo", (s: unknown) => `[fn] ${s}`],
       ]),
       history: [],
-      exit: () => {},
+      exit: (() => {}) as never,
       dotenv: { history: [], snapshot: null },
+      signalHandlers: new Map(),
     };
     const out = await parse("range(0, 1) | echo")(ctx).collect();
     expect(out).toEqual(["[fn] 0", "[fn] 1"]);

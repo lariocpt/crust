@@ -434,6 +434,10 @@ declare const crust: {
   unalias(name: string): void;
   fn(name: string, handler: (...args: any[]) => any): void;
   prompt?: (cwd: string, gitBranch: string | null) => string;
+  onBeforeStart?: () => void | Promise<void>;
+  onExit?: (code: number) => void | Promise<void>;
+  onSignal(sig: "SIGINT" | "SIGTERM" | "SIGHUP" | "SIGUSR1" | "SIGUSR2",
+           handler: () => void | Promise<void>): void;
 };
 
 crust.alias("ll", "ls -la");
@@ -445,6 +449,39 @@ crust.alias("g", "git");
 // Custom prompt (overrides defaultPrompt):
 // crust.prompt = (cwd, git) => `${cwd}${git ? ` (${git})` : ""} > `;
 ```
+
+### Lifecycle hooks
+
+Three hooks let `init.ts` react to crust's process lifecycle:
+
+```ts
+// Runs after config loads, before the first command.
+// In -c mode: before the line. In REPL mode: before the first prompt.
+crust.onBeforeStart = async () => {
+  console.error(`[crust] session start ${new Date().toISOString()}`);
+};
+
+// Runs right before process.exit, with the resolved exit code. Async ok.
+// Errors are caught and logged — they do not block exit.
+crust.onExit = async (code) => {
+  await flushMetrics(code);
+};
+
+// Register handlers for OS signals. Multiple handlers per signal are allowed
+// and all fire in registration order. The process.on listener is only
+// installed on first registration for that signal, so signals you don't opt
+// into keep their default disposition (notably: Ctrl-C in the REPL still
+// goes through the editor as before).
+crust.onSignal("SIGUSR1", () => {
+  console.error("reloading config…");
+});
+crust.onSignal("SIGTERM", async () => {
+  await drainQueue();
+  process.exit(0);
+});
+```
+
+Handlers run from the centralized shutdown path, so they fire whether crust exits via `exit N`, Ctrl-D, end of `-c`, or a signal handler that calls `process.exit`.
 
 ### Custom functions
 

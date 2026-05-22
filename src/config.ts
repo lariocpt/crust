@@ -1,15 +1,18 @@
-import { Pipeline } from "./pipeline";
-import { range, glob, read, GET } from "./sources";
-import { POST, PUT, PATCH, DELETE, expect, parallel } from "./transforms";
-import { discoverGlobals } from "./discover";
 import { registerBuiltinFns } from "./builtinFns";
-import type { Context } from "./types";
+import { discoverGlobals } from "./discover";
+import { Pipeline } from "./pipeline";
+import { GET, glob, range, read } from "./sources";
+import { DELETE, expect, PATCH, POST, PUT, parallel } from "./transforms";
+import type { Context, SignalHandler, SignalName } from "./types";
 
-interface CrustGlobal {
+export interface CrustGlobal {
   alias(name: string, cmd: string): void;
   unalias(name: string): void;
   fn(name: string, handler: (...args: unknown[]) => unknown): void;
   prompt?: (cwd: string, git: string | null) => string;
+  onBeforeStart?: () => void | Promise<void>;
+  onExit?: (code: number) => void | Promise<void>;
+  onSignal(sig: SignalName, handler: SignalHandler): void;
 }
 
 declare global {
@@ -25,6 +28,26 @@ export async function loadConfig(ctx: Context, configPath?: string): Promise<voi
     unalias: (name) => ctx.aliases.delete(name),
     fn: (name, handler) => ctx.functions.set(name, handler),
     prompt: undefined,
+    onBeforeStart: undefined,
+    onExit: undefined,
+    onSignal: (sig, handler) => {
+      let list = ctx.signalHandlers.get(sig);
+      if (!list) {
+        list = [];
+        ctx.signalHandlers.set(sig, list);
+        process.on(sig, async () => {
+          const hs = ctx.signalHandlers.get(sig) ?? [];
+          for (const h of hs) {
+            try {
+              await h();
+            } catch (err) {
+              process.stderr.write(`crust: ${sig} handler error: ${(err as Error).message}\n`);
+            }
+          }
+        });
+      }
+      list.push(handler);
+    },
   };
 
   const g = globalThis as Record<string, unknown>;
