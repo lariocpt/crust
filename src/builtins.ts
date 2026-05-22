@@ -266,6 +266,12 @@ const testFixtureBuiltin: Builtin = async (rawArgs, _ctx) => {
   return await runCli(args);
 };
 
+const mockServerBuiltin: Builtin = async (rawArgs, _ctx) => {
+  const args = splitArgsRespectingQuotes(rawArgs);
+  const { runCli } = await import("./mockServer/cli");
+  return await runCli(args);
+};
+
 export const builtins: Record<string, Builtin> = {
   cd: cdBuiltin,
   export: exportBuiltin,
@@ -277,6 +283,7 @@ export const builtins: Record<string, Builtin> = {
   help: helpBuiltin,
   dotenv: dotenvBuiltin,
   "test-fixture": testFixtureBuiltin,
+  "mock-server": mockServerBuiltin,
 };
 
 export function isBuiltin(name: string): boolean {

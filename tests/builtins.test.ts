@@ -26,6 +26,7 @@ describe("isBuiltin", () => {
     expect(isBuiltin("help")).toBe(true);
     expect(isBuiltin("dotenv")).toBe(true);
     expect(isBuiltin("test-fixture")).toBe(true);
+    expect(isBuiltin("mock-server")).toBe(true);
   });
 
   test("rejects unknown names", () => {

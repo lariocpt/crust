@@ -13,6 +13,7 @@ A Bun-powered shell with first-class pipelines. Shell commands, TypeScript lambd
 - [Shell-line syntax](#shell-line-syntax)
 - [TypeScript API](#typescript-api)
 - [Builtins](#builtins)
+- [mock-server](#mock-server)
 - [Editor keybindings](#editor-keybindings)
 - [Configuration (`init.ts`)](#configuration-initts)
 - [Examples](#examples)
@@ -246,6 +247,7 @@ The TS-test ecosystem owns the name `expect`. Crust exports the API name as `exp
 | `history` | Numbered list of this session's lines. Persistent at `~/.local/share/crust/history`. |
 | `dotenv [--config p] [--append]` | Loads `.env` files into the session. Tracks history, supports `dotenv status` and `dotenv clear`. See [dotenv](#dotenv). |
 | `test-fixture --target g [--out p] [--threads N]` | Runs `.crust.ts` HTTP fixtures. See [test-fixture](#test-fixture). |
+| `mock-server --swagger <url-or-path> [--port N] [--host addr]` | Boots a `Bun.serve` instance that mocks every operation in an OpenAPI 3.x spec. See [mock-server](#mock-server). |
 | `exit [code]` | Exits crust with optional code (default 0). |
 | `help` | Lists builtins. |
 
@@ -302,6 +304,36 @@ export default {
 Report formats are picked from `--out`'s extension: `.json`, `.md`, anything else is plain text. With no `--out`, prints a colored, folder-grouped summary to stdout. Exit codes: `0` all pass, `1` any failure/error, `2` no files matched or bad args.
 
 When installed via `install.sh`, the runner is AOT-compiled to a host-arch bytecode binary at `~/.crust/bin/crust-test-fixture` for fast cold-start. The shell builtin execs that binary if present and falls back to in-process dynamic import otherwise (dev mode).
+
+### mock-server
+
+Boots a `Bun.serve` instance that mocks every operation in an OpenAPI 3.x spec — useful for frontend dev before the backend exists, demoing a pipeline, or seeding fixture tests against an upstream you don't want to spin up.
+
+```bash
+mock-server --swagger ./openapi.yaml --port 4000
+mock-server --swagger https://petstore3.swagger.io/api/v3/openapi.json --port 4747
+mock-server --swagger ./spec.json --port 0 --host 127.0.0.1   # OS-assigned port
+```
+
+Flags: `--swagger <url-or-path>` (required; URL or local `.json`/`.yaml`/`.yml`), `--port N` (default `3000`, `0` = ephemeral), `--host addr` (default `0.0.0.0`).
+
+Response bodies are picked example-first, schema-fallback:
+
+1. `content.<media>.example` wins outright.
+2. Otherwise the first entry in `content.<media>.examples`.
+3. Otherwise the schema is walked: `string` → `"string"` (or a format-aware default for `email`, `date-time`, `uuid`, `uri`), `integer`/`number` → `0`, `boolean` → `false`, `array` → `[item]`, `object` → every property generated, `enum` → first value, `allOf` merged, `oneOf`/`anyOf` → first branch. Local `$ref`s into `components.schemas.*` are resolved (cyclic refs return `null`).
+
+Status code selection within a matched operation: `200` → `201` → first `2xx` → `default` → first defined. `application/json` content is preferred; otherwise the first content type. Routes with literal segments take precedence over `{param}` siblings, so `GET /pets/mine` wins over `GET /pets/{id}`.
+
+Unmatched paths return `404`; matched paths with the wrong method return `405`. Per request, one line goes to stderr:
+
+```text
+GET    /pets        200  3ms
+POST   /pets        201  2ms
+DELETE /pets/99     404  0ms
+```
+
+Ctrl-C (or `SIGTERM`) shuts the server down cleanly. v0.1 limits: Swagger 2.0, remote `$ref` resolution, request validation, faker-style data, and hot-reload are not supported yet.
 
 #### Stress mode (`--count`) and randomized inputs
 
