@@ -15,6 +15,7 @@ export type StageKind =
     }
   | { kind: "function"; name: string; args: string[] }
   | { kind: "time"; label: string }
+  | { kind: "tail"; paths: string[]; lines: number; follow: boolean }
   | { kind: "shell"; text: string };
 
 export interface DotenvLoadRecord {

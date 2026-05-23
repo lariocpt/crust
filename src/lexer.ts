@@ -86,5 +86,47 @@ export function classify(text: string): StageKind {
     return { kind: "glob", pattern: firstToken };
   }
 
+  const tailKind = classifyTail(t);
+  if (tailKind) return tailKind;
+
   return { kind: "shell", text: t };
+}
+
+// Recognize the common shapes of `tail` — path, `-F`/`-f`, `-n N`,
+// `--lines N`, `--lines=N` — and route them to the native source. Any
+// other flag (`-c`, `--pid`, etc.) falls back to the system `tail` via
+// shell. Bare `tail` (no args) is also shell, so `tail --help` still
+// hits the system binary.
+function classifyTail(
+  t: string,
+): { kind: "tail"; paths: string[]; lines: number; follow: boolean } | null {
+  const m = t.match(/^tail(?:\s+(.+))?$/);
+  if (!m || !m[1]) return null;
+
+  const parts = m[1].trim().split(/\s+/);
+  let lines = 10;
+  let follow = false;
+  const paths: string[] = [];
+
+  for (let i = 0; i < parts.length; i++) {
+    const p = parts[i]!;
+    if (p === "-F" || p === "-f") {
+      follow = true;
+    } else if (p === "-n" || p === "--lines") {
+      const next = parts[++i];
+      if (!next || !/^\d+$/.test(next)) return null;
+      lines = parseInt(next, 10);
+    } else if (p.startsWith("--lines=")) {
+      const v = p.slice("--lines=".length);
+      if (!/^\d+$/.test(v)) return null;
+      lines = parseInt(v, 10);
+    } else if (p.startsWith("-")) {
+      return null;
+    } else {
+      paths.push(p);
+    }
+  }
+
+  if (paths.length === 0) return null;
+  return { kind: "tail", paths, lines, follow };
 }

@@ -64,6 +64,11 @@ function buildSource(kind: StageKind, ctx?: Context): Pipeline<unknown> {
       return sources.range(kind.start, kind.end) as Pipeline<unknown>;
     case "glob":
       return sources.glob(kind.pattern) as Pipeline<unknown>;
+    case "tail":
+      return sources.tail(kind.paths, {
+        lines: kind.lines,
+        follow: kind.follow,
+      }) as Pipeline<unknown>;
     case "http":
       if (kind.verb === "GET") return sources.GET(kind.url) as Pipeline<unknown>;
       throw new Error(`${kind.verb} cannot be a source — needs upstream items`);
@@ -108,6 +113,7 @@ function applyStage(input: Pipeline<unknown>, kind: StageKind, ctx?: Context): P
     }
     case "range":
     case "glob":
+    case "tail":
       throw new Error(`${kind.kind} cannot appear as a non-first stage`);
     case "time":
       throw new Error("time: only allowed as the first stage of a pipeline");

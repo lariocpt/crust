@@ -1,4 +1,4 @@
-import { test, expect, describe } from "bun:test";
+import { describe, expect, test } from "bun:test";
 
 const ENTRY = `${import.meta.dir}/../src/index.ts`;
 
@@ -77,5 +77,57 @@ describe("crust CLI", () => {
   test("-c with multiple lines exits with last line status", async () => {
     const r = await runCli(["-c", "true\nexit 4"]);
     expect(r.code).toBe(4);
+  });
+
+  test("-c 'tail <path>' streams the last N lines through the pipeline", async () => {
+    const { mkdtemp, writeFile, rm } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const dir = await mkdtemp(join(tmpdir(), "crust-cli-tail-"));
+    try {
+      const log = join(dir, "app.log");
+      await writeFile(log, "INFO ok\nERROR boom\nINFO ok\nERROR oops\n");
+      const r = await runCli(["-c", `tail -n 100 ${log} | grep ERROR`]);
+      expect(r.code).toBe(0);
+      expect(r.stdout).toBe("ERROR boom\nERROR oops\n");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("-c 'tail logs/*.log' glob-expands across multiple files", async () => {
+    const { mkdtemp, writeFile, rm } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const dir = await mkdtemp(join(tmpdir(), "crust-cli-multitail-"));
+    try {
+      await writeFile(join(dir, "alpha.log"), "A1\nA2\n");
+      await writeFile(join(dir, "beta.log"), "B1\nB2\n");
+      const r = await runCli(["-c", `tail -n 100 ${dir}/*.log | grep -E "A|B"`]);
+      expect(r.code).toBe(0);
+      const lines = r.stdout.trimEnd().split("\n");
+      expect(new Set(lines)).toEqual(new Set(["A1", "A2", "B1", "B2"]));
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("-c 'tail a.log b.log' tails multiple files explicitly", async () => {
+    const { mkdtemp, writeFile, rm } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const dir = await mkdtemp(join(tmpdir(), "crust-cli-multitail-explicit-"));
+    try {
+      const a = join(dir, "a.log");
+      const b = join(dir, "b.log");
+      await writeFile(a, "X1\nX2\n");
+      await writeFile(b, "Y1\nY2\n");
+      const r = await runCli(["-c", `tail -n 100 ${a} ${b}`]);
+      expect(r.code).toBe(0);
+      const lines = r.stdout.trimEnd().split("\n");
+      expect(new Set(lines)).toEqual(new Set(["X1", "X2", "Y1", "Y2"]));
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
