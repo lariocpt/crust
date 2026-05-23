@@ -164,17 +164,26 @@ tail --lines=100 app.log           # same
 tail -F app.log                    # last 10 lines, then stream new ones forever
 tail -F -n 0 app.log               # follow only — skip the initial cut
 
+# Multiple files: paths and globs are accepted. Lines from all files
+# merge into one stream as they arrive (like `tail -f a.log b.log`).
+tail a.log b.log                   # explicit list
+tail logs/*.log                    # glob expansion
+tail -F services/*/access.log     # follow N files at once
+
 # Compose like any other source
 tail -F app.log | grep ERROR
 tail -F app.log | (l => JSON.parse(l))
 tail -F app.log | POST :3000/ingest
+tail logs/*.log | grep ERROR > combined.log
 ```
 
 `-F` follows the file by inode + size. Rotate-and-recreate (logrotate-style) is detected via inode change and the source switches over to the new file automatically. A truncate that shrinks the file below the current offset is also detected and resets the stream. A truncate-and-immediate-overwrite to a size ≥ the prior offset is indistinguishable from an append via `stat` alone, and is treated as an append — matches GNU `tail -F` behavior.
 
+With multiple inputs, each file is tracked independently — every file gets its own inode/size loop, rotation handling, and initial-N-lines cut. Lines yield as they arrive (non-deterministic across files, deterministic within one file). When all paths are non-follow, the source completes once each file is drained.
+
 Unrecognized flags (`-c`, `--pid`, etc.) fall back to the system `tail` via shell, so `tail -c 200 app.log` and `tail --help` still work as expected. Bare `tail` with no path also falls through to shell.
 
-Polling interval is 200ms by default. From the TS API: `tail(path, { lines, follow, pollMs })` — see [TypeScript API](#typescript-api).
+Polling interval is 200ms by default. From the TS API: `tail(paths, { lines, follow, pollMs })` where `paths` is a string or string[] (globs expanded automatically) — see [TypeScript API](#typescript-api).
 
 ### Builtins
 
@@ -203,7 +212,7 @@ Pipeline             // class — the unified stream abstraction
 range(start, end)    // source
 glob(pattern)        // source
 read(path)           // source — Pipeline<string> of lines
-tail(path, opts?)    // source — last N lines, optionally follow forever
+tail(paths, opts?)   // source — string | string[]; globs expanded; multi-file merges
 GET(url, opts?)      // source
 POST(url, opts?)     // transform: Pipeline<T> → Pipeline<Response>
 PUT, PATCH, DELETE   // same shape as POST
@@ -212,7 +221,7 @@ parallel(n, fn)      // transform — N concurrent workers, order-preserving
 $                    // Bun's tagged-template shell (`Bun.$`)
 ```
 
-`tail(path, opts?)` options: `lines` (default `10`, set `0` to skip the initial cut), `follow` (default `false`), `pollMs` (default `200`). With `follow: true`, the stream never ends until the consumer stops iterating — handle that explicitly with `break`, `.lines()`, or by tying the iteration to an `AbortController`.
+`tail(paths, opts?)` accepts a single path, an array, or a glob pattern (or a mix). Options: `lines` (default `10`, set `0` to skip the initial cut), `follow` (default `false`), `pollMs` (default `200`). With `follow: true`, the stream never ends until the consumer stops iterating — handle that explicitly with `break`, `.lines()`, or by tying the iteration to an `AbortController`.
 
 ```ts
 // Last 50 lines of a log, ship to S3
@@ -224,6 +233,16 @@ await tail("application.log", { lines: 50 })
 for await (const line of tail("application.log", { follow: true }).lines()) {
   if (line.includes("ERROR")) await notifyPager(line);
 }
+
+// Tail every service's access log into one stream
+for await (const line of tail("services/*/access.log", { follow: true }).lines()) {
+  if (/5\d\d/.test(line)) await notifyPager(line);
+}
+
+// Explicit list — same semantics as the glob form
+await tail(["api.log", "worker.log", "scheduler.log"], { lines: 100 })
+  .filter((l) => l.includes("ERROR"))
+  .to(write("errors.log"));
 ```
 
 And these sinks are imported directly (`from "crust/sinks"` once published; today: `from "../src/sinks"` if you're hacking on the repo):
