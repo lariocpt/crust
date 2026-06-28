@@ -1,3 +1,5 @@
+import { isSwagger2, swagger2to3 } from "./swagger2to3";
+
 export interface OpenApiSpec {
   openapi?: string;
   swagger?: string;
@@ -40,6 +42,9 @@ export async function loadSpec(source: string): Promise<{ spec: OpenApiSpec; ori
     throw new Error(`spec at ${source} did not parse to an object`);
   }
   const spec = parsed as OpenApiSpec;
+  // Normalise Swagger 2.0 documents into the OpenAPI 3.x shape the mock server
+  // consumes (so a Flasgger/Swagger-2.0 spec works without manual conversion).
+  if (isSwagger2(spec)) swagger2to3(spec);
   if (!spec.paths || typeof spec.paths !== "object") {
     throw new Error(`spec at ${source} has no 'paths' object`);
   }
