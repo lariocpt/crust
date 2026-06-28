@@ -315,5 +315,5 @@ function splitFlag(arg: string): [string, string | undefined] {
 }
 
 if (import.meta.main) {
-  process.exit(await runCli(process.argv.slice(2)));
+  runCli(process.argv.slice(2)).then((code) => process.exit(code));
 }

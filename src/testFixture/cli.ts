@@ -104,5 +104,5 @@ export async function runCli(args: string[]): Promise<number> {
 }
 
 if (import.meta.main) {
-  process.exit(await runCli(process.argv.slice(2)));
+  runCli(process.argv.slice(2)).then((code) => process.exit(code));
 }
