@@ -1,0 +1,47 @@
+#!/usr/bin/env node
+// crust — launcher shim.
+//
+// The real binary is a ~91 MB Bun-compiled ELF living in the user's cache. This shim finds
+// it, downloading it on first use if the postinstall never ran, and hands over the process.
+//
+// The lazy download is the load-bearing part: npm 12 blocks install scripts by DEFAULT, so
+// a package that only fetches in postinstall installs "successfully" and then cannot run.
+// Fetching here means `npm i -g crust` works under any script policy — the cost is that the
+// very first invocation pays the download.
+import { spawnSync } from "node:child_process";
+import { ensureBinary, readManifest, APPS_URL_EFFECTIVE } from "../lib/install.mjs";
+
+const say = (m) => console.error(`[crust] ${m}`);
+
+function bail(lines, code = 127) {
+  for (const l of lines) console.error(`[crust] ${l}`);
+  process.exit(code);
+}
+
+let manifest = readManifest();
+
+if (!manifest) {
+  try {
+    // Progress goes to stderr, never stdout: crust is a shell and gets piped, so anything on
+    // stdout here would corrupt the first command someone runs through it.
+    manifest = await ensureBinary({ log: say, warn: say });
+  } catch (e) {
+    bail([
+      `could not install the crust binary: ${e.message}`,
+      `The binary is hosted on the LAN at ${APPS_URL_EFFECTIVE}, so this needs to run on that network.`,
+      "Override the host with CRUST_APPS_URL, or install directly with:",
+      "  curl -fsSL https://apps.in.drlario.org/install.sh | bash -s -- crust",
+    ]);
+  }
+}
+
+// spawnSync with inherited stdio rather than exec: crust is an interactive shell, so it needs
+// the real tty, and this shim must be transparent about how the process ended.
+const r = spawnSync(manifest.bin, process.argv.slice(2), { stdio: "inherit" });
+if (r.error) bail([`failed to launch ${manifest.bin}: ${r.error.message}`]);
+// A plain exit-code passthrough loses signals, which makes `crust` dying to SIGINT look
+// different from the binary dying to SIGINT. Re-raise instead.
+if (r.signal) {
+  process.kill(process.pid, r.signal);
+}
+process.exit(r.status ?? 0);

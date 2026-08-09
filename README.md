@@ -4,8 +4,19 @@ A Bun-powered shell with first-class pipelines and devops primitives. Globs, HTT
 
 ## Install
 
+crust is published to the LAN artifact plane on the build host. Either channel resolves the same
+prebuilt binary and verifies its sha256 — no clone, no GitHub credential, and no Bun needed
+on the target machine:
+
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lariocpt/crust/main/install.sh | bash
+curl -fsSL https://apps.in.drlario.org/install.sh | bash -s -- crust
+npm i -g crust --registry https://npm.in.drlario.org
+```
+
+To hack on it instead, clone and build for your own architecture:
+
+```bash
+git clone git@github.com:lariocpt/crust.git ~/.crust && ~/.crust/install.sh
 ```
 
 ## What it looks like

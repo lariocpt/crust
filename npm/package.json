@@ -1,0 +1,32 @@
+{
+  "name": "crust",
+  "version": "0.0.0-dev",
+  "description": "A Bun-powered shell with first-class pipelines and devops primitives",
+  "type": "module",
+  "license": "MIT",
+  "author": "Lario Borges",
+  "bin": {
+    "crust": "./bin/crust"
+  },
+  "files": [
+    "bin",
+    "lib",
+    "scripts",
+    "README.md"
+  ],
+  "scripts": {
+    "postinstall": "node scripts/postinstall.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "publishConfig": {
+    "registry": "https://npm.in.drlario.org"
+  }
+}

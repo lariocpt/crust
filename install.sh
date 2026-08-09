@@ -1,13 +1,31 @@
 #!/usr/bin/env bash
-# crust installer — curl -fsSL https://raw.githubusercontent.com/lariocpt/crust/main/install.sh | bash
-
+# crust — build and install from a local clone.
+#
+#   git clone git@github.com:lariocpt/crust.git ~/.crust && ~/.crust/install.sh
+#
+# THIS IS THE DEVELOPER PATH, NOT THE INSTALL PATH.
+# It used to be a `curl … raw.githubusercontent.com/…/install.sh | bash` one-liner against a
+# public repo. That stopped being possible when crust went private — raw.githubusercontent
+# requires auth for a private repo, so a piped installer would fetch a 404 and run it. It
+# also pointed at `lariocpt/crust`, an org that no longer holds this project.
+#
+# For installing crust on a machine, use the LAN artifact plane instead. It downloads the
+# prebuilt binary Jenkins published, verifies its sha256, and needs neither a clone, nor a
+# GitHub credential, nor Bun on the target host:
+#
+#   curl -fsSL https://apps.in.drlario.org/install.sh | bash -s -- crust
+#   npm i -g crust --registry https://npm.in.drlario.org
+#
+# What this script is still good for is a working copy you intend to change: it compiles for
+# the host architecture, seeds the config, and registers the shell.
 set -euo pipefail
 
-CRUST_DIR="${CRUST_DIR:-$HOME/.crust}"
-REPO="${CRUST_REPO:-https://github.com/lariocpt/crust.git}"
-BRANCH="${CRUST_BRANCH:-main}"
+CRUST_DIR="${CRUST_DIR:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)}"
 
-say() { printf '\033[36m==>\033[0m %s\n' "$1"; }
+say()  { printf '\033[36m==>\033[0m %s\n' "$1"; }
+die()  { printf '\033[31m[error]\033[0m %s\n' "$1" >&2; exit 1; }
+
+[ -f "$CRUST_DIR/package.json" ] || die "run this from a crust checkout (no package.json in $CRUST_DIR)"
 
 # 1. Bun
 if ! command -v bun >/dev/null 2>&1; then
@@ -16,28 +34,22 @@ if ! command -v bun >/dev/null 2>&1; then
   export PATH="$HOME/.bun/bin:$PATH"
 fi
 
-# 2. Clone or update crust
-if [[ -d "$CRUST_DIR/.git" ]]; then
-  say "Updating crust in $CRUST_DIR"
-  git -C "$CRUST_DIR" pull --ff-only origin "$BRANCH"
-else
-  say "Cloning crust into $CRUST_DIR"
-  git clone --depth 1 -b "$BRANCH" "$REPO" "$CRUST_DIR"
-fi
-
-# 3. Dependencies
+# 2. Dependencies
 say "Installing dependencies"
 ( cd "$CRUST_DIR" && bun install )
 
-# 3a. Compile bytecode binaries for this host
+# 3. Compile for this host.
+#
+# --target is derived rather than assumed: the published LAN artifact is linux-x64 only, so
+# building locally is the supported route on anything else.
 say "Compiling crust binaries (bytecode, host arch)"
 mkdir -p "$CRUST_DIR/bin"
 OS=$(uname -s | tr A-Z a-z)
 RAW_ARCH=$(uname -m)
 case "$RAW_ARCH" in
-  x86_64|amd64) ARCH=x64 ;;
+  x86_64|amd64)  ARCH=x64 ;;
   aarch64|arm64) ARCH=arm64 ;;
-  *) ARCH=$RAW_ARCH ;;
+  *)             ARCH=$RAW_ARCH ;;
 esac
 TARGET="bun-${OS}-${ARCH}"
 ( cd "$CRUST_DIR" && \
@@ -73,7 +85,10 @@ cat <<EOF
   COSMIC Terminal: Settings → Profiles → Command: $CRUST_BIN
   Set as login:    chsh -s $CRUST_BIN
   Config:          ~/.config/crust/init.ts
-  Update:          curl -fsSL https://raw.githubusercontent.com/lariocpt/crust/main/install.sh | bash
-  Uninstall:       rm -rf ~/.crust ~/.config/crust
+  Update:          git -C $CRUST_DIR pull && $CRUST_DIR/install.sh
+  Uninstall:       rm -rf $CRUST_DIR ~/.config/crust
+
+  To install on another machine, prefer the prebuilt binary:
+    curl -fsSL https://apps.in.drlario.org/install.sh | bash -s -- crust
 
 EOF
