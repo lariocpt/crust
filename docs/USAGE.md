@@ -11,6 +11,7 @@ A Bun-powered shell with first-class pipelines. Shell commands, TypeScript lambd
 - [One-liner mode](#one-liner-mode)
 - [The Pipeline model](#the-pipeline-model)
 - [Shell-line syntax](#shell-line-syntax)
+- [CI gates: thresholds, baselines, exit codes](#ci-gates-thresholds-baselines-exit-codes)
 - [Shorthand fixture grammar](#shorthand-fixture-grammar)
 - [TypeScript API](#typescript-api)
 - [Builtins](#builtins)
@@ -93,7 +94,7 @@ Every command in crust produces a stream — a `Pipeline<T>`. Stages compose und
 |---|---|---|
 | **Source** | Produces a stream | `ls`, `range(0,9)`, `**/*.ts`, `GET <url>` |
 | **Transform** | Stream-in, stream-out | shell command, `(x => …)`, `POST <url>` |
-| **Sink** | Stream-in, value-out | stdout (default), `write`, `dest`, `stats` |
+| **Sink** | Stream-in, value-out | stdout (default), `write`, `dest` |
 
 The shell parser classifies each `|`-separated stage by looking at its first token:
 
@@ -101,11 +102,15 @@ The shell parser classifies each `|`-separated stage by looking at its first tok
 |---|---|
 | Contains `*` / `?` / `[…]` | Glob source |
 | Matches `range(a, b)` | Range source |
+| Matches `load <dur> <rate>[, …]` | Paced load source (malformed spec = hard error; bare `load` = shell) |
 | Starts with `{` or `[` | JSON-literal source (invalid JSON = hard error, never shell) |
 | Starts with `read <path\|glob>` | Whole-file source — one item per matched file |
 | Starts with `tail <path>` (with optional `-F` / `-n N`) | Native `tail` source |
 | Starts with `(` and contains `=>` | TypeScript lambda |
 | Starts with `assert (` | Assert stage — falsy or empty upstream fails the pipeline |
+| Matches `capture NAME [(fn)]` | Capture stage — writes `process.env.NAME` for later lines |
+| Matches `expect NNN` or `expect Nxx` | Expect stage — status equality or class (`2xx`…`5xx`) |
+| Matches `stats [--every N] [--out f.json]` | Stats stage (unknown flags fall through to shell) |
 | Starts with `GET` / `POST` / `PUT` / `PATCH` / `DELETE` | HTTP stage (`-H` headers, `$VAR` expansion, `:port` shorthand) |
 | First token is a builtin name | Builtin (no piping; in-process dispatch) |
 | First token is a `crust.fn`-registered function | Registered function (per-item transform) |
@@ -134,6 +139,8 @@ GET :3000/health                  # localhost shorthand
 read fixtures/*.json              # whole-file contents, one item per file
 {"name": "Court"}                 # JSON literal — one parsed item (the request body)
 procs({web: "bun run dev", api: "bun api.ts"})   # merge long-lived processes
+load 30s 100/s                    # paced ticks: 100/s for 30s (load runs)
+load 10s 50/s, 30s 200/s          # ramp: comma-separated phases, one stream
 ```
 
 `read <path|glob>` yields each matched file's **entire contents** as one item
@@ -150,6 +157,25 @@ hard error — it never falls back to a shell command.
 `Response` (fixture asserts); **mid-pipeline** it's a per-item timed request
 yielding `{ status, ms, url }` records (load pipelines). See
 [Shorthand fixture grammar](#shorthand-fixture-grammar).
+
+`load <dur> <rate>` yields one tick per scheduled slot — durations in
+`ms`/`s`/`m`, rates as `N/s` or `N/m` (decimals allowed). Slots are anchored
+to absolute times, so pacing doesn't drift, and each phase ends on its
+wall-clock regardless of how many ticks got out. When downstream can't keep
+up (the `parallel` pool is saturated), stale slots are **skipped, never
+burst**, counted, and reported to stderr on drain:
+
+```
+load: target 3000 ticks — emitted 2868, dropped 132 (downstream saturated; raise parallel N?), achieved 95.6/s
+```
+
+`stats.rps` is always the **measured** rate — crust structurally cannot
+report a target rate it didn't sustain (the classic coordinated-omission
+trap). Ticks are `{n, phase, scheduledAt, lagMs}` objects, so a body-builder
+lambda gets real material: `load 10s 20/s | (t => ({name: "user" + t.n})) |
+parallel 8 | POST :3000/users`. Bun's ~1ms sleep floor makes roughly
+500–1000/s per process the honest ceiling — this is CI smoke-load and soak
+tooling, not a distributed load rig.
 
 `procs({name: "command", …})` spawns each command and streams
 `{ proc, stream, line }` for every stdout/stderr line (plus an `exit`
@@ -187,10 +213,18 @@ procs({
 with `parallel` and `stats` for load pipelines.
 
 Every http verb stage accepts repeatable `-H "Key: value"` header flags
-(quote them — values may contain spaces and colons). URLs and `-H` values are
-`$VAR`/`${VAR}` env-expanded, and the `:port/path` localhost shorthand works
-for **all** verbs, source or transform. `parallel N` upstream is honored for
-non-GET verbs too: `read fixtures/*.json | parallel 8 | POST :3000/users`.
+(quote them — values may contain spaces and colons). The **whole** raw `-H`
+string is `$VAR`/`${VAR}` env-expanded before the `Key: value` split, so one
+variable can carry a complete header line (`-H "$AUTH_HEADER"`). URLs are
+expanded too, and the `:port/path` localhost shorthand works for **all**
+verbs, source or transform.
+
+**The `parallel` modifier puts any http verb in load mode**: output becomes
+`{status, ms, url}` timing records, response bodies are drained, and a
+network error yields a `status: 0` record instead of killing the run. That
+includes `parallel 1 | POST …` — the explicit opt-in for serial-but-timed.
+Without `parallel`, non-GET verbs keep yielding real `Response` objects
+(`{…} | POST :3000/users | (r => r.json())` still works).
 
 HTTP transforms auto-set `content-type: application/json` for object items. String items are sent as text. `Buffer`/`Uint8Array` go raw.
 
@@ -199,28 +233,104 @@ HTTP transforms auto-set `content-type: application/json` for object items. Stri
 ```bash
 range(0, 999) | parallel 50 | GET :3000/health | expect 200 | stats
 sql "SELECT count(*)::int AS c FROM users" | assert (r => r.c === 1)
-range(0, 599) | parallel 50 | GET :3000/health | stats --every 5
+load 60s 25/s | parallel 25 | GET :3000/health | stats --every 5
+{"n":"x"} | POST :3000/things | (r => r.json()) | capture THING_ID (t => t.id)
 ```
 
-- `parallel N` — sets the fan-out for the NEXT http stage (it is a modifier,
-  not a buffering stage). **Results stream in COMPLETION order, not input
-  order** — a deliberate contract change so downstream windowed stats see a
-  live stream instead of a final-millisecond dump. If you need input order,
-  sort downstream.
-- `expect NNN` — passes items through; when the stream drains, fails the
-  pipeline (exit 1) naming the mismatch count if any item's `status` didn't
-  match.
+- `parallel N` — sets the fan-out for the NEXT stage (it is a modifier, not a
+  buffering stage). It applies to http verbs (load mode — see above), TS
+  lambdas, and registered functions (`parallel 4 | sql "…"`); putting it
+  before any other stage kind, or leaving it trailing, is a **parse error**
+  (it used to be silently ignored). **Results stream in COMPLETION order,
+  not input order** — a deliberate contract so downstream windowed stats see
+  a live stream instead of a final-millisecond dump. If you need input
+  order, sort downstream.
+- `expect NNN` / `expect Nxx` — passes items through; when the stream drains,
+  fails the pipeline (exit 1) naming the mismatch count if any item's
+  `status` didn't match the code or class (`2xx` = 200–299). Items with no
+  numeric `status` count as mismatches.
 - `assert (x => expr)` — per-item predicate; a **falsy** result fails the
   pipeline naming the item. Unlike a plain lambda (which maps), and unlike
   `expect`, an **empty upstream also fails** ("no items reached") — the
-  sql-returned-zero-rows silent pass is exactly the trap this closes.
+  sql-returned-zero-rows silent pass is exactly the trap this closes. Async
+  predicates are awaited, so `assert (async s => …)` can read files or hit
+  the DB.
+- `capture NAME (fn)` — runs `fn` on each item and writes the result to
+  `process.env.NAME` (last item wins; omit the lambda to capture the item
+  itself — objects are JSON-stringified). Items pass through unchanged.
+  Because crust parses each line right before running it, **every later line
+  sees `$NAME`** — in the REPL, in `-c` scripts, and in `.pipes` files. A
+  nullish captured value or an empty upstream fails the pipeline
+  immediately: a capture that silently captured nothing turns into a
+  baffling `""` expansion three lines later. Mind the names: capturing into
+  `TOKEN`, `BASE`, or `PATH` overwrites those for the rest of the run.
 - `stats` — consumes the stream and yields one summary: `count`, `wallMs`,
   `rps`, a status histogram, and real `p50/p95/p99/meanMs` latency
-  percentiles from the timed-GET records.
+  percentiles from the timed-request records.
 - `stats --every N` — additionally emits a **per-window delta summary** every
   N seconds (`{window: 1, …}`, `{window: 2, …}`) and finishes with one
   cumulative summary tagged `{final: true}`. Windows flush on the item path —
   a fully stalled upstream delays the next window until an item arrives.
+  Because `parallel` streams in completion order, a slow request lands in
+  the window it *finished* in; `ms` values are true durations, so the
+  percentiles stay honest.
+- `stats --out results.json` — also writes the run to a versioned JSON
+  artifact: `{crustStats: 1, startedAt, urls, summary, windows?}` where
+  `summary` is exactly the stdout summary object. The file is written
+  **before** the final summary is yielded, so a downstream threshold gate
+  that fails the pipeline still leaves the artifact behind for CI upload.
+  The path is env-expanded (`--out $RUN_DIR/health.json`); only `.json` is
+  supported.
+
+### CI gates: thresholds, baselines, exit codes
+
+`stats` yields plain objects, and `assert` awaits real JS predicates — so
+thresholds are just composition, no special syntax:
+
+```bash
+load 30s 100/s | parallel 50 | GET :3000/health | stats \
+  | assert (s => s.p95 < 200) \
+  | assert (s => s.rps > 80)
+```
+
+Chain **one assert per threshold**: the failure message names the exact
+predicate and prints the actual summary —
+`assert: item 1 failed (s => s.p95 < 200) — got {"count":3000,…,"p95":312.4,…}` —
+and the line exits 1, which `crust -c` propagates (it stops at the first
+failing line).
+
+**Baselines.** `--out` writes the artifact; an async assert reads it back.
+The "worse than 2× baseline p95 is a failure" gate is one line:
+
+```bash
+load 10s 100/s | parallel 50 | GET :3000/health | stats --out load/last.json \
+  | assert (async s => { const b = await Bun.file("load/baseline.json").json(); return s.p95 < 2 * b.summary.p95 })
+```
+
+**Soak gating with `--every`.** A bare predicate runs against every window
+object AND the final summary — fail-fast the moment a window degrades. Guard
+with the tag keys to scope it:
+
+```bash
+… | stats --every 5 | assert (s => !s.window || s.p95 < 400)   # windows only
+… | stats --every 5 | assert (s => !s.final  || s.p95 < 200)   # final only
+```
+
+Both guards are also correct without `--every` (the plain summary carries
+neither key, so the threshold applies).
+
+**Warmup** is a separate line in the same `-c` script — its summary simply
+isn't gated:
+
+```bash
+crust -c 'range(0, 99) | parallel 10 | GET :3000/health | stats
+load 30s 100/s | parallel 50 | GET :3000/health | stats | assert (s => s.p95 < 200)'
+```
+
+**Ordering trap:** in `… | expect 200 | stats | assert (…)`, a failing
+`expect` throws at drain — *before* `stats` emits — so you lose the summary.
+Either gate status inside the predicate (`s.status["200"] === s.count`) or
+accept that a hard expect failure hides the stats.
 
 ### Timing a pipeline (`time "label"`)
 
@@ -290,7 +400,8 @@ assertion. This is what [test-pipes](#test-pipes) runs from `.pipes` files,
 and it works identically at the prompt and in `crust -c`:
 
 ```bash
-{"name": "Court", "floors": 3} | POST $BASE/api/buildings -H "authorization: Bearer $TOKEN" | expect 201
+{"name": "Court", "floors": 3} | POST $BASE/api/buildings -H "authorization: Bearer $TOKEN" | assert (r => r.status === 201) | (r => r.json()) | capture BID (b => b.building.id)
+GET $BASE/api/buildings/$BID -H "authorization: Bearer $TOKEN" | expect 200
 sql "SELECT count(*)::int AS c FROM buildings WHERE name = $1" "Court" | assert (r => r.c === 1)
 read fixtures/*.json | POST :3000/users | expect 201
 GET :3000/api/buildings -H "authorization: Bearer $TOKEN" | (r => r.json()) | assert (b => b.items.length > 0)
@@ -307,8 +418,12 @@ The pieces:
   (sorted; zero matches errors). Gotcha: this shadows POSIX `read <var>` at
   the prompt.
 - **`assert (x => expr)`** — falsy fails the pipeline; **empty upstream also
-  fails**. `expect NNN` stays the status-code assertion; `assert` is for
-  everything else (DB rows, parsed bodies).
+  fails**. `expect NNN` / `expect Nxx` stays the status assertion; `assert`
+  is for everything else (DB rows, parsed bodies).
+- **`capture NAME (fn)`** — the chaining primitive: write a value from this
+  line into `process.env.NAME` so `$NAME` expands on every later line.
+  Captures happen at **run** time; `$VAR` expansion happens at **parse**
+  time — which is why chaining works *across* lines but never within one.
 - **`:port/path`** — localhost shorthand, all verbs, source or transform.
 - **GET dual role** — first stage: one `Response` item (fixture asserts);
   mid-pipeline: per-item timed `{status, ms, url}` records (load).
@@ -321,10 +436,11 @@ string. Expansion is **opt-in per position** — crust expands exactly:
 | Position | Expanded? |
 |---|---|
 | URLs (all http verbs) | yes |
-| `-H` header values | yes |
+| `-H` header strings (name and value) | yes — one `$VAR` can hold the whole header line |
 | JSON-literal sources | yes |
+| `stats --out` paths | yes |
 | Registered-fn args (`sql "…" "$RUN_ID"`) | yes — SQL positionals `$1`/`$2` survive (a digit can't start an env var name) |
-| Lambda / `assert` bodies | **no** — they're JS; use `process.env.TOKEN` |
+| Lambda / `assert` / `capture` bodies | **no** — they're JS; use `process.env.TOKEN` |
 | Shell stages | untouched — `sh` does its own expansion |
 
 ---
@@ -346,6 +462,11 @@ POST(url, opts?)     // transform: Pipeline<T> → Pipeline<Response>
 PUT, PATCH, DELETE   // same shape as POST
 expectStage(matcher) // transform — fails the pipeline on mismatch
 parallel(n, fn)      // transform — N concurrent workers, COMPLETION order
+load(phases, opts?)  // source — paced LoadTick stream (the shell's `load`)
+timedGet(url, opts?)          // per-item fn — timed GET → {status, ms, url}
+timedHttpItem(m, url, opts?)  // per-item fn — timed any-verb, body = item
+statsStage(everySec?, out?)   // transform — the shell's `stats`
+captureEnv(name, fn?)         // transform — the shell's `capture`
 $                    // Bun's tagged-template shell (`Bun.$`)
 ```
 
@@ -378,8 +499,11 @@ And these sinks are imported directly (`from "crust/sinks"` once published; toda
 ```ts
 write(path)          // sink — line-per-item to disk
 dest(dir)            // sink — vinyl-ish {path, contents} items to a dir
-stats()              // sink — { count, durationMs, status, p50, p95, p99 }
 ```
+
+(The old `stats()` sink is gone — it reported fabricated zero percentiles.
+Use `statsStage()` in a `.pipe()` chain instead:
+`load([{durMs: 10_000, rps: 100}]).pipe(parallel(50, timedGet(url))).pipe(statsStage())`.)
 
 ### Pipeline methods
 
@@ -559,11 +683,19 @@ test-pipes --target smoke.pipes --setup ./seed.ts
 ```
 
 ```bash
-# smoke.pipes — a whole CRUD suite, no framework
-{"name": "Court", "floors": 3} | POST $BASE/api/buildings -H "authorization: Bearer $TOKEN" | expect 201
+# smoke.pipes — a whole CRUD suite with request chaining, no framework
+{"name": "Court", "floors": 3} | POST $BASE/api/buildings -H "authorization: Bearer $TOKEN" | assert (r => r.status === 201) | (r => r.json()) | capture BID (b => b.building.id)
+GET $BASE/api/buildings/$BID -H "authorization: Bearer $TOKEN" | expect 200
 sql "SELECT count(*)::int AS c FROM buildings WHERE name = 'Court'" | assert (r => r.c === 1)
-GET $BASE/api/buildings -H "authorization: Bearer $TOKEN" | (r => r.json()) | assert (b => b.items.length > 0)
+{} | DELETE $BASE/api/buildings/$BID -H "authorization: Bearer $TOKEN" | expect 204
+GET $BASE/api/buildings/$BID -H "authorization: Bearer $TOKEN" | expect 404
 ```
+
+**Chaining.** `capture NAME (fn)` on line N makes `$NAME` expand on every
+later line of the same file — ids, tokens, anything a response yields. This
+works because each line is parsed (and env-expanded) right before it runs.
+Captures require the sequential-per-file execution model; that's a contract,
+not an accident.
 
 Flags: `--bail` stops at the first failing line (across files); `--timeout
 <ms>` fails any line that runs longer.
@@ -582,9 +714,11 @@ export default async () => {
 ```
 
 Each file gets a fresh, hermetic pipeline context: builtin fns (`sql`, …)
-registered, but no `init.ts` and no shared alias state — a `.pipes` file
-must behave the same on every machine. Exit codes: `0` all lines pass,
-`1` any fail, `2` no files matched / bad args.
+registered, but no `init.ts` and no shared alias state — and `process.env`
+is **snapshotted before setup and restored when the file finishes**, so
+setup vars and captures never leak across files or into your interactive
+session. A `.pipes` file must behave the same on every machine. Exit codes:
+`0` all lines pass, `1` any fail, `2` no files matched / bad args.
 
 ### gen-fixtures
 
@@ -941,13 +1075,17 @@ POST the path strings. For a whole suite of lines like this, put them in a
 
 ### Health-check spam
 
-In a `.ts` file (run with `bun script.ts`):
+```bash
+range(0, 999) | parallel 50 | GET :3000/health | expect 200 | stats
+```
+
+Or in a `.ts` file (run with `bun script.ts`):
 
 ```ts
-await range(0, 999)
-  .pipe(parallel(50, () => fetch("http://localhost:3000/health")))
-  .pipe(expectStage(200))
-  .to(stats());
+const summary = await load([{ durMs: 10_000, rps: 100 }])
+  .pipe(parallel(50, timedGet("http://localhost:3000/health")))
+  .pipe(statsStage())
+  .collect();
 ```
 
 ### Log mining
