@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import pkg from "../package.json" with { type: "json" };
+import { renderBuiltinList } from "./builtins";
 import { type CrustGlobal, loadConfig } from "./config";
 import { readLine } from "./editor";
 import { appendHistory, loadHistory } from "./history";
@@ -17,7 +18,8 @@ usage:
   crust -c <line>          run one line and exit
   crust -h | --help        show this help
   crust -V | --version     show version
-`;
+
+${renderBuiltinList()}`;
 
 async function shutdown(code: number): Promise<never> {
   const userCrust = (globalThis as { crust?: CrustGlobal }).crust;

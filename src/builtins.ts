@@ -121,10 +121,7 @@ const historyBuiltin: Builtin = (_rawArgs, ctx) => {
 };
 
 const helpBuiltin: Builtin = () => {
-  process.stdout.write("crust builtins:\n");
-  for (const name of Object.keys(builtins).sort()) {
-    process.stdout.write(`  ${name}\n`);
-  }
+  process.stdout.write(renderBuiltinList());
   return 0;
 };
 
@@ -309,6 +306,34 @@ export const builtins: Record<string, Builtin> = {
   "mock-server": mockServerBuiltin,
   "verify-web-links": verifyWebLinksBuiltin,
 };
+
+// Keyed by registry name so `help` and `crust -h` can't drift from what is
+// actually registered; renderBuiltinList shows an undescribed builtin with an
+// empty summary rather than hiding it.
+const builtinSummaries: Record<string, string> = {
+  skills: "list/run installed crust skills",
+  cd: "change directory (cd -, cd ~)",
+  export: "set an environment variable",
+  alias: "define or list command aliases",
+  unalias: "remove a command alias",
+  source: "run a .crust script in this session",
+  exit: "leave the REPL",
+  history: "print numbered command history",
+  help: "show this builtin list",
+  dotenv: "load .env into the session (status/clear/--append)",
+  "test-fixture": "run .crust.ts fixture files against a server",
+  "test-pipes": "run shorthand pipe fixtures from a file",
+  "gen-fixtures": "generate fixture suites from an OpenAPI spec",
+  "mock-server": "serve an OpenAPI spec's examples (optionally --stateful)",
+  "verify-web-links": "crawl a site from its sitemap and verify every link",
+};
+
+export function renderBuiltinList(): string {
+  const names = Object.keys(builtins).sort();
+  const width = Math.max(...names.map((n) => n.length));
+  const lines = names.map((n) => `  ${n.padEnd(width)}  ${builtinSummaries[n] ?? ""}`);
+  return `builtins (run "<builtin> --help" for details):\n${lines.join("\n")}\n`;
+}
 
 export function isBuiltin(name: string): boolean {
   return name in builtins;

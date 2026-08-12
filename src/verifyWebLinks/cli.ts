@@ -31,6 +31,10 @@ optionally diff Open Graph / meta tags against .crust.ts fixtures.
                            status checking. Never recursed.
   --exclude <substring>    skip URLs containing <substring> (repeatable). Use for
                            subtrees that redirect by design, e.g. --exclude /checkout/.
+  --max-pages N            stop fetching after N URLs; the report counts what was
+                           left unchecked. Safety valve for crawls that explode
+                           (e.g. WooCommerce filter URLs). Default 0 = unlimited.
+  --no-progress            suppress the 5s progress heartbeat on stderr.
   --json                   emit a machine-readable JSON report on stdout.
   -h, --help               show this message.
 
@@ -67,7 +71,7 @@ export async function runCli(args: string[]): Promise<number> {
     }
   }
 
-  const results = await crawl(seeds, origin, opts);
+  const { results, dropped } = await crawl(seeds, origin, opts);
   const failures = collectFailures(results, fixtures, opts);
 
   let pages = 0;
@@ -80,7 +84,7 @@ export async function runCli(args: string[]): Promise<number> {
   const report: VerifyReport = {
     results,
     failures,
-    totals: { pages, assets, failures: failures.length },
+    totals: { pages, assets, failures: failures.length, dropped },
   };
 
   if (opts.json) {
@@ -198,6 +202,8 @@ function parseArgs(args: string[]): VerifyOpts | number {
   let redirectWarnings = true;
   let includeExternal = false;
   const exclude: string[] = [];
+  let progress = true;
+  let maxPages = 0;
   let json = false;
 
   function intFlag(value: string | undefined, name: string): number | null {
@@ -282,6 +288,19 @@ function parseArgs(args: string[]): VerifyOpts | number {
         exclude.push(v);
         break;
       }
+      case "--max-pages": {
+        const n = intFlag(consume(), "--max-pages");
+        if (n === null) return 2;
+        if (n < 0) {
+          process.stderr.write("verify-web-links: --max-pages must be >= 0\n");
+          return 2;
+        }
+        maxPages = n;
+        break;
+      }
+      case "--no-progress":
+        progress = false;
+        break;
       case "--json":
         json = true;
         break;
@@ -317,6 +336,8 @@ function parseArgs(args: string[]): VerifyOpts | number {
     redirectWarnings,
     includeExternal,
     exclude,
+    progress,
+    maxPages,
     json,
   };
 }

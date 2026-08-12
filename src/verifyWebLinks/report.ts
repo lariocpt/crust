@@ -2,8 +2,11 @@ import type { CrawlResult, Failure, VerifyReport } from "./types";
 
 export function renderText(report: VerifyReport): string {
   const lines: string[] = [];
-  const { pages, assets, failures } = report.totals;
+  const { pages, assets, failures, dropped } = report.totals;
   lines.push(`verify-web-links: ${pages} page(s), ${assets} asset(s), ${failures} failure(s)`);
+  if (dropped > 0) {
+    lines.push(`  note: --max-pages reached — ${dropped} discovered URL(s) NOT checked`);
+  }
   if (failures > 0) {
     lines.push("");
     const byKind = new Map<string, Failure[]>();

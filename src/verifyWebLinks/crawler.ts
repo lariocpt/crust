@@ -9,13 +9,19 @@ interface QueueItem {
   asPage: boolean;
 }
 
-export async function crawl(
-  seeds: string[],
-  origin: URL,
-  opts: VerifyOpts,
-): Promise<Map<string, CrawlResult>> {
+export interface CrawlOutcome {
+  results: Map<string, CrawlResult>;
+  /** unique discovered URLs never fetched because maxPages was reached */
+  dropped: number;
+}
+
+export async function crawl(seeds: string[], origin: URL, opts: VerifyOpts): Promise<CrawlOutcome> {
   const visited = new Map<string, CrawlResult>();
   const queue: QueueItem[] = [];
+  // A Set, not a counter: process() keeps discovering links while in-flight
+  // fetches drain after the cap, so the same URL can hit the drop path twice.
+  const droppedUrls = new Set<string>();
+  let completed = 0;
 
   for (const s of seeds) {
     const url = stripFragment(s);
@@ -27,10 +33,18 @@ export async function crawl(
 
   const startNext = (): boolean => {
     while (queue.length > 0) {
+      if (opts.maxPages > 0 && visited.size >= opts.maxPages) {
+        for (const q of queue) {
+          if (!visited.has(q.url)) droppedUrls.add(q.url);
+        }
+        queue.length = 0;
+        return false;
+      }
       const item = queue.shift()!;
       if (visited.has(item.url)) continue;
       visited.set(item.url, placeholder(item.url));
       const task: Promise<void> = process(item, origin, opts, visited, queue).finally(() => {
+        completed++;
         inFlight.delete(task);
       });
       inFlight.add(task);
@@ -39,14 +53,28 @@ export async function crawl(
     return false;
   };
 
-  while (queue.length > 0 || inFlight.size > 0) {
-    while (inFlight.size < opts.concurrency && startNext()) {
-      // fill pool
+  // Heartbeat on stderr: big crawls previously ran for many minutes with no
+  // output at all, which reads as a hang — especially in CI logs.
+  const heartbeat = opts.progress
+    ? setInterval(() => {
+        globalThis.process.stderr.write(
+          `verify-web-links: ${completed} fetched, ${queue.length + inFlight.size} pending\n`,
+        );
+      }, 5000)
+    : null;
+
+  try {
+    while (queue.length > 0 || inFlight.size > 0) {
+      while (inFlight.size < opts.concurrency && startNext()) {
+        // fill pool
+      }
+      if (inFlight.size > 0) await Promise.race(inFlight);
     }
-    if (inFlight.size > 0) await Promise.race(inFlight);
+  } finally {
+    if (heartbeat) clearInterval(heartbeat);
   }
 
-  return visited;
+  return { results: visited, dropped: droppedUrls.size };
 }
 
 function placeholder(url: string): CrawlResult {

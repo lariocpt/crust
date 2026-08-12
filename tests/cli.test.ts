@@ -34,6 +34,15 @@ describe("crust CLI", () => {
     expect(r.stdout).toContain("-c");
   });
 
+  test("--help lists the builtins", async () => {
+    const r = await runCli(["--help"]);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("builtins");
+    expect(r.stdout).toContain("verify-web-links");
+    expect(r.stdout).toContain("mock-server");
+    expect(r.stdout).toContain("test-fixture");
+  });
+
   test("-c with no arg errors and exits 2", async () => {
     const r = await runCli(["-c"]);
     expect(r.code).toBe(2);

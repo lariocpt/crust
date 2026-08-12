@@ -254,6 +254,39 @@ describe("verify-web-links CLI", () => {
     expect(r2.code).toBe(0);
   });
 
+  test("--max-pages caps the crawl and reports what was dropped", async () => {
+    // sitemap-good has 2 pages; page 1 links /about and /about links nothing
+    // new, so capping at 1 must drop at least the second seed and say so.
+    const r = await runCli(["--site-map-url", `${base}/sitemap-good.xml`, "--max-pages", "1"]);
+    expect(r.stdout).toContain("NOT checked");
+    expect(r.stdout).toMatch(/1 page\(s\)/);
+
+    const rJson = await runCli([
+      "--site-map-url",
+      `${base}/sitemap-good.xml`,
+      "--max-pages",
+      "1",
+      "--json",
+    ]);
+    const parsed = JSON.parse(rJson.stdout);
+    expect(parsed.totals.dropped).toBeGreaterThan(0);
+  });
+
+  test("--max-pages 0 means unlimited; negative exits 2", async () => {
+    const r0 = await runCli(["--site-map-url", `${base}/sitemap-good.xml`, "--max-pages", "0"]);
+    expect(r0.code).toBe(0);
+    expect(r0.stdout).not.toContain("NOT checked");
+
+    const rNeg = await runCli(["--site-map-url", `${base}/sitemap-good.xml`, "--max-pages", "-1"]);
+    expect(rNeg.code).toBe(2);
+  });
+
+  test("--no-progress is accepted and output stays clean", async () => {
+    const r = await runCli(["--site-map-url", `${base}/sitemap-good.xml`, "--no-progress"]);
+    expect(r.code).toBe(0);
+    expect(r.stderr).not.toContain("pending");
+  });
+
   test("--exclude without a value exits 2", async () => {
     const r = await runCli(["--site-map-url", `${base}/sitemap-good.xml`, "--exclude"]);
     expect(r.code).toBe(2);

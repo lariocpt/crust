@@ -56,6 +56,8 @@ export interface VerifyOpts {
   redirectWarnings: boolean;
   includeExternal: boolean;
   exclude: string[];
+  progress: boolean;
+  maxPages: number;
   json: boolean;
 }
 
@@ -66,5 +68,7 @@ export interface VerifyReport {
     pages: number;
     assets: number;
     failures: number;
+    /** URLs discovered but never fetched because --max-pages was reached. */
+    dropped: number;
   };
 }
