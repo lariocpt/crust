@@ -630,14 +630,21 @@ function emitFlow(f: FlowPlan): string {
     steps.push("update");
     const verb = f.itemOps.patch ? "PATCH" : "PUT";
     const s = lowest2xx(update) ?? 200;
-    // Single-field body: the first schema property with a valid value (the
-    // update op's own schema when it has one, else the POST's).
-    const props =
-      update.requestBody?.content?.["application/json"]?.schema?.properties ??
-      bodySchema.properties ??
-      {};
-    const firstKey = Object.keys(props)[0];
-    const body = firstKey ? { [firstKey]: validValue(props[firstKey], firstKey) } : {};
+    const updateSchema = update.requestBody?.content?.["application/json"]?.schema;
+    let body: Record<string, unknown>;
+    if (verb === "PATCH") {
+      // PATCH is a partial update — a single perturbed field is the point.
+      // First schema property with a valid value (the update op's own schema
+      // when it has one, else the POST's).
+      const props = updateSchema?.properties ?? bodySchema.properties ?? {};
+      const firstKey = Object.keys(props)[0];
+      body = firstKey ? { [firstKey]: validValue(props[firstKey], firstKey) } : {};
+    } else {
+      // PUT is full-replace: a single-field body 400s on any op with other
+      // required fields — send a full schema-valid body from the update op's
+      // own request schema (falling back to the POST's).
+      body = baseBody(updateSchema ?? bodySchema);
+    }
     lines.push(`${JSON.stringify(body)} | ${verb} ${itemUrl} ${H} | expect ${s}`);
   }
 
@@ -682,9 +689,20 @@ import { headersFor, resolvePath, shared } from ${JSON.stringify(specifier)};
 export default async function setup(): Promise<void> {
   const ctx = await shared();
   const headers = headersFor(ctx, "member");
-  const auth = Object.entries(headers).find(([k]) => k.toLowerCase() !== "content-type");
-  if (!auth) throw new Error("gen flows: headersFor(ctx, 'member') returned no auth header");
-  process.env.GEN_AUTH_HEADER = \`\${auth[0]}: \${auth[1]}\`;
+  const auth = Object.entries(headers).filter(([k]) => k.toLowerCase() !== "content-type");
+  if (auth.length === 0) {
+    throw new Error("gen flows: headersFor(ctx, 'member') returned no auth header");
+  }
+  if (auth.length > 1) {
+    // Flows carry exactly ONE auth header ($GEN_AUTH_HEADER) — silently
+    // dropping the rest would make every generated request fail mysteriously.
+    throw new Error(
+      \`gen flows: headersFor(ctx, 'member') returned \${auth.length} auth headers (\${auth
+        .map(([k]) => k)
+        .join(", ")}) — generated flows can send only one; reduce headersFor to a single auth header\`,
+    );
+  }
+  process.env.GEN_AUTH_HEADER = \`\${auth[0]![0]}: \${auth[0]![1]}\`;
 ${urlLines}
 }
 `;

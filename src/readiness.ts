@@ -88,6 +88,12 @@ export async function probeOnce(t: ReadyTarget, timeoutMs: number): Promise<bool
 export interface AwaitReadyOpts {
   intervalMs: number;
   timeoutMs: number;
+  /**
+   * Per-probe cap (default min(intervalMs * 4, 2000)). Raise it for targets
+   * that accept slowly — a health endpoint with a >2s TTFB can never pass
+   * the default cap no matter how generous timeoutMs is.
+   */
+  probeTimeoutMs?: number;
   onAttempt?: () => void;
   /** checked between attempts — return true to stop waiting (yields null) */
   abort?: () => boolean;
@@ -95,15 +101,16 @@ export interface AwaitReadyOpts {
   waitBetween?: (ms: number) => Promise<unknown>;
 }
 
-// Poll until ready or the deadline passes. Per-probe timeout is
+// Poll until ready or the deadline passes. Per-probe timeout defaults to
 // min(intervalMs * 4, 2000) so a black-holed target can't eat the budget in
-// one bite. Resolves {ms, attempts} on success, null on timeout or abort.
+// one bite; probeTimeoutMs overrides it for slow-to-accept targets.
+// Resolves {ms, attempts} on success, null on timeout or abort.
 export async function awaitReady(
   t: ReadyTarget,
   opts: AwaitReadyOpts,
 ): Promise<{ ms: number; attempts: number } | null> {
   const start = performance.now();
-  const probeTimeoutMs = Math.min(opts.intervalMs * 4, 2000);
+  const probeTimeoutMs = opts.probeTimeoutMs ?? Math.min(opts.intervalMs * 4, 2000);
   const sleep = opts.waitBetween ?? ((ms: number) => Bun.sleep(ms));
   let attempts = 0;
   for (;;) {

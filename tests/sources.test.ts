@@ -371,6 +371,20 @@ describe("procs object specs", () => {
   });
 });
 
+// After a group SIGKILL, `child.exited` resolves when the direct child is
+// reaped — the grandchild (the `sleep` under `sh -c`) is reaped by init a few
+// ms later. Poll briefly so the assertion races the reaper, not the kill: a
+// REAL orphan (SIGTERM ignored, no escalation) would live for 30s.
+async function expectNoProcess(marker: string): Promise<void> {
+  let out = "";
+  for (let i = 0; i < 50; i++) {
+    out = Bun.spawnSync(["pgrep", "-f", marker]).stdout.toString().trim();
+    if (out === "") return;
+    await Bun.sleep(10);
+  }
+  throw new Error(`orphaned process still alive after 500ms: ${marker} (pids ${out})`);
+}
+
 // Concurrent: each test owns its servers and pipelines, and the mandated
 // 250ms restart backoffs + probe timeouts would otherwise stack serially.
 describe.concurrent("procs readiness and ordering", () => {
@@ -559,6 +573,123 @@ describe.concurrent("procs readiness and ordering", () => {
     ).rejects.toThrow(/dependency "dep" exited before becoming ready/);
   });
 
+  test("ready-timeout kills do NOT reset the restart strikes (becameReady gating)", async () => {
+    const { procs } = await import("../src/sources");
+    const port = deadPort();
+    // healthyUptimeMs: 0 — under the old wall-clock-only rule EVERY spawn
+    // (alive ~60ms while its ready probe times out) would count as a healthy
+    // stretch, reset the counter, and {max: 1} would restart forever. The
+    // fix gates the reset on the proc actually having become READY.
+    const lines = await procs(
+      {
+        web: {
+          cmd: "sleep 5",
+          ready: { port, timeoutMs: 60, intervalMs: 10 },
+          restart: { max: 1 },
+        },
+      },
+      { healthyUptimeMs: 0 },
+    ).collect();
+    expect(lines.filter((l) => l.line.startsWith("not ready after"))).toHaveLength(2);
+    expect(lines.filter((l) => l.line.startsWith("restarting in"))).toHaveLength(1);
+    expect(lines.some((l) => l.line === "giving up after 1 restart(s)")).toBe(true);
+  });
+
+  test("procs without ready: still count as ready at spawn for the strike reset", async () => {
+    const { procs } = await import("../src/sources");
+    // No ready: -> becameReady at spawn, so with healthyUptimeMs: 0 (ANY
+    // uptime counts as healthy — a fast exit can live under 1ms) every crash
+    // counts as a fresh healthy stretch and {max: 1} never gives up — the
+    // pre-fix behavior for ready-less procs, preserved.
+    const lines = await collectUntil(
+      procs({ flaky: { cmd: "echo ran; exit 1", restart: { max: 1 } } }, { healthyUptimeMs: 0 }),
+      (_l, all) => all.filter((x) => x.stream === "stdout" && x.line === "ran").length >= 3,
+    );
+    expect(lines.filter((l) => l.stream === "stdout" && l.line === "ran").length).toBe(3);
+    expect(lines.some((l) => l.line.startsWith("giving up"))).toBe(false);
+  });
+
+  test("awaitReady: probeTimeoutMs override lets a slow-to-accept target pass", async () => {
+    const { awaitReady, parseReadyTarget } = await import("../src/readiness");
+    const server = Bun.serve({
+      port: 0,
+      fetch: async () => {
+        await Bun.sleep(80);
+        return new Response("ok");
+      },
+    });
+    try {
+      const target = parseReadyTarget(`http://localhost:${server.port}/health`);
+      // Default per-probe cap is min(intervalMs*4, 2000) = 40ms — an 80ms
+      // TTFB can never answer in time, no matter how generous timeoutMs is.
+      expect(await awaitReady(target, { intervalMs: 10, timeoutMs: 160 })).toBeNull();
+      const res = await awaitReady(target, {
+        intervalMs: 10,
+        timeoutMs: 1000,
+        probeTimeoutMs: 500,
+      });
+      expect(res).not.toBeNull();
+      expect(res!.attempts).toBe(1);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("ready spec long form plumbs probeTimeoutMs through procs", async () => {
+    const { procs } = await import("../src/sources");
+    const server = Bun.serve({
+      port: 0,
+      fetch: async () => {
+        await Bun.sleep(80);
+        return new Response("ok");
+      },
+    });
+    try {
+      const lines = await collectUntil(
+        procs({
+          web: {
+            cmd: "sleep 5",
+            ready: {
+              url: `http://localhost:${server.port}/`,
+              intervalMs: 10,
+              timeoutMs: 1000,
+              probeTimeoutMs: 500,
+            },
+          },
+        }),
+        (l) => l.stream === "ready" && l.line.startsWith("ready after"),
+      );
+      expect(lines.some((l) => l.stream === "ready" && l.line.startsWith("ready after"))).toBe(
+        true,
+      );
+      expect(lines.some((l) => l.line.startsWith("not ready"))).toBe(false);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("ready-timeout kill escalates to SIGKILL when the child ignores SIGTERM", async () => {
+    const { procs } = await import("../src/sources");
+    const port = deadPort();
+    const marker = "sleep 31.415"; // unique pgrep-able token for THIS test
+    const lines = await procs(
+      {
+        stubborn: {
+          cmd: `trap '' TERM; ${marker}`,
+          ready: { port, timeoutMs: 60, intervalMs: 10 },
+          restart: { max: 1 },
+        },
+      },
+      { killGraceMs: 100 },
+    ).collect();
+    // The TERM-ignoring child must not wedge the restart loop: both spawns
+    // get put down (escalated), then the strike budget trips.
+    expect(lines.filter((l) => l.line.startsWith("restarting in"))).toHaveLength(1);
+    expect(lines.some((l) => l.line === "giving up after 1 restart(s)")).toBe(true);
+    // No orphans — SIGTERM was ignored, so only the SIGKILL can have worked.
+    await expectNoProcess(marker);
+  });
+
   test("unknown after name, self-dependency, and cycles throw synchronously", async () => {
     const { procs } = await import("../src/sources");
     expect(() => procs({ a: { cmd: "echo hi", after: "nope" } })).toThrow(/unknown proc "nope"/);
@@ -569,6 +700,46 @@ describe.concurrent("procs readiness and ordering", () => {
         b: { cmd: "echo b", after: "a" },
       }),
     ).toThrow(/dependency cycle/);
+  });
+});
+
+// Serial ON PURPOSE: this test finds the pipeline's SIGINT handler by
+// diffing process.listeners(), which would race any concurrently starting
+// procs pipeline.
+describe("procs kill escalation", () => {
+  test("kill() (Ctrl-C path) owns the SIGTERM -> SIGKILL escalation and is idempotent", async () => {
+    const { procs } = await import("../src/sources");
+    const marker = "sleep 27.182"; // unique pgrep-able token for THIS test
+    const before = new Set(process.listeners("SIGINT"));
+    const pipeline = procs(
+      { stubborn: { cmd: `trap '' TERM; echo up; ${marker}` } },
+      { killGraceMs: 100 },
+    );
+    const iter = pipeline.lines()[Symbol.asyncIterator]();
+    // First line proves the child is up and the SIGINT handler is installed.
+    const first = await iter.next();
+    expect(first.value!.line).toBe("up");
+    const added = process.listeners("SIGINT").filter((l) => !before.has(l));
+    expect(added).toHaveLength(1);
+    // Simulate Ctrl-C twice — the second call must reuse the in-flight
+    // escalation, not stack a new timer.
+    (added[0] as () => void)();
+    (added[0] as () => void)();
+    // The child ignores SIGTERM and the consumer never closes the iterator,
+    // so ONLY kill()'s own escalation can end the wedged stream.
+    const drain = (async () => {
+      for (;;) {
+        const { done } = await iter.next();
+        if (done) return;
+      }
+    })();
+    await Promise.race([
+      drain,
+      Bun.sleep(2000).then(() => {
+        throw new Error("stream did not end after kill()");
+      }),
+    ]);
+    await expectNoProcess(marker);
   });
 });
 

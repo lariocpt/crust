@@ -199,9 +199,39 @@ describe.concurrent("wait", () => {
     }
   });
 
+  test("--probe-timeout raises the per-probe cap for slow-to-accept targets", async () => {
+    // 80ms TTFB: the default per-probe cap (min(interval*4, 2s) = 40ms)
+    // aborts every probe before the target can answer.
+    const server = Bun.serve({
+      port: 0,
+      fetch: async () => {
+        await Bun.sleep(80);
+        return new Response("ok");
+      },
+    });
+    try {
+      await expect(
+        wait(`:${server.port}/`, "--interval", "10ms", "--timeout", "160ms"),
+      ).rejects.toThrow(/not ready/);
+      const res = await wait(
+        `:${server.port}/`,
+        "--interval",
+        "10ms",
+        "--timeout",
+        "1s",
+        "--probe-timeout",
+        "500ms",
+      );
+      expect(res.ready).toBe(true);
+    } finally {
+      server.stop(true);
+    }
+  });
+
   test("bad arguments throw usage-style errors", async () => {
     await expect(wait()).rejects.toThrow(/missing target/);
     await expect(wait("port:1", "--timeout", "soon")).rejects.toThrow(/bad duration/);
+    await expect(wait("port:1", "--probe-timeout", "soon")).rejects.toThrow(/bad duration/);
     await expect(wait("localhost:80")).rejects.toThrow(/bad target/);
     await expect(wait("port:1", "--frobnicate", "2")).rejects.toThrow(/unknown flag/);
   });

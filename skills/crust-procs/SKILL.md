@@ -23,13 +23,15 @@ procs({ db: {cmd: "docker compose up pg", ready: "port:5432"}, api: {cmd: "bun a
 
 - `env` — per-proc overlay on the inherited environment.
 - `restart: true` — respawn on unexpected exit (backoff 250ms→2s; >10s
-  healthy uptime resets it). `restart: {max: N}` gives up after N
+  uptime while READY resets it — a proc that hangs un-ready until its
+  ready-timeout kill never does). `restart: {max: N}` gives up after N
   consecutive restarts. Ctrl-C never respawns.
 - `ready:` — `":3001/health"` / `"http(s)://…"` (any 2xx) or `"port:5432"`
-  (TCP connect). Long form `{url?, port?, timeoutMs?, intervalMs?}`
-  (defaults 30s / 250ms). Timeout: a restartable proc is killed and
-  respawned (readiness re-awaited each spawn); a non-restartable one FAILS
-  the whole pipeline — CI semantics.
+  (TCP connect). Long form `{url?, port?, timeoutMs?, intervalMs?,
+  probeTimeoutMs?}` (defaults 30s / 250ms; each probe capped at
+  `min(intervalMs*4, 2s)` unless `probeTimeoutMs` raises it). Timeout: a
+  restartable proc is killed and respawned (readiness re-awaited each
+  spawn); a non-restartable one FAILS the whole pipeline — CI semantics.
 - `after:` — name or list; the proc spawns only once its dependencies are
   READY (no `ready:` on the dep = ready at spawn). One-shot gate; a dep
   that dies before ever becoming ready fails the pipeline. Unknown names /
@@ -55,6 +57,8 @@ wait :3001/api/health --timeout 40s --interval 2s
 Blocks until the target answers (URL = any 2xx; `port:5432` = TCP connect),
 then emits `{target, ready: true, ms, attempts}` and exits 0. Not ready in
 time → error, exit 1. Durations: `300ms`, `30s`, `2m` (defaults 30s/500ms).
+`--probe-timeout 5s` raises the per-probe cap (default `min(interval*4, 2s)`)
+for targets that take longer than that to first byte.
 Works in the REPL, `crust -c` (replaces hand-rolled curl-sleep retry loops
 in CI), and `.pipes` files. Env-expanded args work:
 `wait "$BASE_URL/health" --timeout 40s`.

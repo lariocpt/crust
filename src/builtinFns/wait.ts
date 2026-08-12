@@ -1,9 +1,10 @@
 import { awaitReady, parseDuration, parseReadyTarget } from "../readiness";
 
 const USAGE =
-  "usage: wait <target> [--timeout <dur>] [--interval <dur>]\n" +
+  "usage: wait <target> [--timeout <dur>] [--interval <dur>] [--probe-timeout <dur>]\n" +
   '  target:   ":3001/api/health" | "http(s)://…" | "port:3001"\n' +
-  '  duration: "300ms", "30s", "2m" (bare number = ms); --timeout defaults 30s, --interval 500ms';
+  '  duration: "300ms", "30s", "2m" (bare number = ms); --timeout defaults 30s, --interval 500ms\n' +
+  "  --probe-timeout caps each probe (default min(interval*4, 2s)) — raise for slow-to-accept targets";
 
 // `wait :3001/health --timeout 30s` — block until a target answers, then emit
 // one summary item (so it works as a pipeline source in the REPL, `crust -c`,
@@ -18,20 +19,23 @@ export async function wait(...args: unknown[]): Promise<{
   let target: string | null = null;
   let timeout = "30s";
   let interval = "500ms";
+  let probeTimeout: string | null = null;
 
   for (let i = 0; i < strs.length; i++) {
     const a = strs[i]!;
-    const eq = a.match(/^--(timeout|interval)=(.+)$/);
+    const eq = a.match(/^--(timeout|interval|probe-timeout)=(.+)$/);
     if (eq) {
       if (eq[1] === "timeout") timeout = eq[2]!;
-      else interval = eq[2]!;
+      else if (eq[1] === "interval") interval = eq[2]!;
+      else probeTimeout = eq[2]!;
       continue;
     }
-    if (a === "--timeout" || a === "--interval") {
+    if (a === "--timeout" || a === "--interval" || a === "--probe-timeout") {
       const v = strs[++i];
       if (v == null) throw new Error(`wait: ${a} needs a value\n${USAGE}`);
       if (a === "--timeout") timeout = v;
-      else interval = v;
+      else if (a === "--interval") interval = v;
+      else probeTimeout = v;
       continue;
     }
     if (a.startsWith("--")) throw new Error(`wait: unknown flag ${a}\n${USAGE}`);
@@ -43,15 +47,17 @@ export async function wait(...args: unknown[]): Promise<{
   let parsed: ReturnType<typeof parseReadyTarget>;
   let timeoutMs: number;
   let intervalMs: number;
+  let probeTimeoutMs: number | undefined;
   try {
     parsed = parseReadyTarget(target);
     timeoutMs = parseDuration(timeout);
     intervalMs = parseDuration(interval);
+    probeTimeoutMs = probeTimeout == null ? undefined : parseDuration(probeTimeout);
   } catch (err) {
     throw new Error(`wait: ${(err as Error).message}\n${USAGE}`);
   }
 
-  const res = await awaitReady(parsed, { intervalMs, timeoutMs });
+  const res = await awaitReady(parsed, { intervalMs, timeoutMs, probeTimeoutMs });
   if (!res) throw new Error(`wait: ${target} not ready after ${timeout}`);
   return { target, ready: true, ms: res.ms, attempts: res.attempts };
 }

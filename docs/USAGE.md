@@ -197,12 +197,17 @@ procs({
   250ms and doubling to a 2s cap (a `restarting in Nms` line is emitted on
   the `exit` stream). A **user kill** (Ctrl-C / SIGTERM) never respawns.
   `restart: {max: N}` gives up after N consecutive restarts with a
-  `giving up after N restart(s)` line; a stretch of >10s uptime resets the
-  counter (it guards against crash *loops*, not against ever crashing twice).
+  `giving up after N restart(s)` line; a stretch of >10s uptime **while
+  ready** resets the counter (it guards against crash *loops*, not against
+  ever crashing twice; procs without `ready:` count as ready at spawn — a
+  proc that hangs un-ready until its ready-timeout kill never resets it).
 - `ready` — a readiness probe: `":3001/health"` / `"http(s)://…"` (ready =
   any 2xx) or `"port:5432"` (ready = TCP connect succeeds). Long form
-  `{url?, port?, timeoutMs?, intervalMs?}` (defaults 30s / 250ms). Probe
-  progress is reported on a `ready` stream (`ready after 120ms (…)`). On
+  `{url?, port?, timeoutMs?, intervalMs?, probeTimeoutMs?}` (defaults 30s /
+  250ms; each probe is capped at `min(intervalMs*4, 2s)` unless
+  `probeTimeoutMs` raises it — needed for health endpoints that take >2s to
+  first byte). Probe progress is reported on a `ready` stream
+  (`ready after 120ms (…)`). On
   timeout, a restartable proc is killed and respawned (readiness is
   re-awaited after every restart); a non-restartable one fails the whole
   pipeline — CI semantics.
@@ -215,7 +220,9 @@ procs({
 
 Children are spawned in their own process group and the whole group is
 SIGTERM'd on teardown, escalating to SIGKILL after 3s — grandchildren
-(a dev server spawned by `sh -c`, say) don't outlive the pipeline.
+(a dev server spawned by `sh -c`, say) don't outlive the pipeline. The same
+escalation runs on Ctrl-C and on a ready-timeout kill, so a child that
+ignores SIGTERM can't wedge the shutdown or the restart loop.
 
 ### Transforms
 
@@ -1065,7 +1072,7 @@ Crust ships a small set of `crust.fn`-registered helpers. They work as both pipe
 | `jwt sign \| verify \| decode --secret <s>` | HS256 JWT. Reads `$JWT_SECRET` if `--secret` omitted. Item can be a JSON string (sign) or a token (verify/decode). |
 | `bundle <entry> [--outdir \| --outfile \| --minify \| --sourcemap \| --target=bun\|browser\|node]` | Wraps `Bun.build` for one-shot bundling. With `--outfile`, writes the first artifact and returns `{outfile, bytes}`. |
 | `sql "<query>" [params…]` | Runs a SQL query via Bun's SQL client using `$DATABASE_URL`. As a source, **streams one item per row** (the parser flattens Array results from function-as-source). |
-| `wait <target> [--timeout <dur>] [--interval <dur>]` | Blocks until a target answers, then emits `{target, ready, ms, attempts}`. Target: `:3001/health` / `http(s)://…` (ready = any 2xx) or `port:5432` (TCP connect). Durations like `300ms`/`30s`/`2m` (defaults 30s / 500ms). Not ready in time → error, exit 1 — CI-friendly. |
+| `wait <target> [--timeout <dur>] [--interval <dur>] [--probe-timeout <dur>]` | Blocks until a target answers, then emits `{target, ready, ms, attempts}`. Target: `:3001/health` / `http(s)://…` (ready = any 2xx) or `port:5432` (TCP connect). Durations like `300ms`/`30s`/`2m` (defaults 30s / 500ms). `--probe-timeout` caps each probe (default `min(interval*4, 2s)`) — raise it for slow-to-accept targets. Not ready in time → error, exit 1 — CI-friendly. |
 
 Examples:
 
