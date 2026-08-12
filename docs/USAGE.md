@@ -928,9 +928,13 @@ violation carries `pointer` (JSON pointer into the body, or the param name),
 `422` and creates nothing.
 
 What is checked: path/query parameters (string values are coerced to the
-declared `integer`/`number`/`boolean` type first; `header`/`cookie` params
-are skipped), required query params, `requestBody.required` (`required-body`),
-unparseable JSON bodies (`json-parse`), and JSON body schemas. The schema
+declared `integer`/`number`/`boolean` type first; path params are
+percent-decoded before validation; `header`/`cookie` params are skipped),
+required query params, `requestBody.required` (`required-body`),
+unparseable JSON bodies (`json-parse`), and JSON body schemas. Query arrays
+accept the exploded form (`?tag=a&tag=b`), plus the comma-joined form
+(`?tag=a,b`) when the spec says `explode: false` (form style); other
+serialization styles pass unchecked. The schema
 walker supports `type` (incl. the 3.1 `["string","null"]` array form),
 `required`, `properties`/`items`, `enum`, `nullable`, `anyOf`/`oneOf` (pass if
 any branch passes), `allOf`, `format` (`uuid`, `email`, `date`, `date-time`,

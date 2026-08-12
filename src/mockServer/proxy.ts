@@ -3,8 +3,13 @@
 // upstream body so the validator can inspect it, and rebuilds an equivalent
 // Response for the client.
 
+import { isJsonContentType } from "./validateRequest";
+
 export interface ProxyResult {
   response: Response;
+  /** True when the upstream body was non-empty (any content type). */
+  hasBody: boolean;
+  /** Decoded body text — only when the upstream said JSON and the body was non-empty. */
   bodyText: string | null;
 }
 
@@ -27,6 +32,18 @@ const STRIP_REQUEST_HEADERS = [
 
 const STRIP_RESPONSE_HEADERS = ["content-encoding", "content-length", "transfer-encoding"];
 
+export function joinUpstreamUrl(url: URL, upstream: string): URL {
+  // `new URL(url.pathname, upstream)` would resolve the ABSOLUTE pathname
+  // against the upstream and drop its base path — join the pathnames instead
+  // so `--proxy http://host/base` forwards /api/x to /base/api/x.
+  const base = new URL(upstream);
+  const target = new URL(base);
+  target.pathname = base.pathname.replace(/\/$/, "") + url.pathname;
+  target.search = url.search;
+  target.hash = "";
+  return target;
+}
+
 export async function forward(
   method: string,
   url: URL,
@@ -35,13 +52,13 @@ export async function forward(
   upstream: string,
   timeoutMs: number,
 ): Promise<ProxyResult> {
-  const target = new URL(url.pathname + url.search, upstream);
+  const target = joinUpstreamUrl(url, upstream);
   const outHeaders = new Headers(headers);
   for (const h of STRIP_REQUEST_HEADERS) outHeaders.delete(h);
 
   const hasBody = rawBody !== null && rawBody.byteLength > 0;
   let upstreamRes: Response;
-  let bodyText: string;
+  let raw: ArrayBuffer;
   try {
     upstreamRes = await fetch(target, {
       method,
@@ -50,8 +67,10 @@ export async function forward(
       redirect: "manual", // 3xx pass through untouched
       signal: AbortSignal.timeout(timeoutMs),
     });
-    // Read fully — validation needs the text, and streaming it twice is worse.
-    bodyText = await upstreamRes.text();
+    // Read fully ONCE as raw bytes — decoding to text and back would mangle
+    // binary bodies (images, identity-served gzip, …). Validation only ever
+    // needs text when the upstream declared JSON.
+    raw = await upstreamRes.arrayBuffer();
   } catch (err) {
     throw new UpstreamError((err as Error).message || String(err), { cause: err });
   }
@@ -60,11 +79,15 @@ export async function forward(
   for (const h of STRIP_RESPONSE_HEADERS) respHeaders.delete(h);
   // 101/204/205/304 (and empty bodies generally) must be rebuilt body-less.
   const bodyAllowed =
-    bodyText.length > 0 && ![101, 204, 205, 304].includes(upstreamRes.status) && method !== "HEAD";
-  const response = new Response(bodyAllowed ? bodyText : null, {
+    raw.byteLength > 0 && ![101, 204, 205, 304].includes(upstreamRes.status) && method !== "HEAD";
+  const response = new Response(bodyAllowed ? raw : null, {
     status: upstreamRes.status,
     statusText: upstreamRes.statusText,
     headers: respHeaders,
   });
-  return { response, bodyText: bodyText.length > 0 ? bodyText : null };
+  const bodyText =
+    raw.byteLength > 0 && isJsonContentType(upstreamRes.headers.get("content-type"))
+      ? new TextDecoder().decode(raw)
+      : null;
+  return { response, hasBody: raw.byteLength > 0, bodyText };
 }

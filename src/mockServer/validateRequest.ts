@@ -106,9 +106,15 @@ export function validateSchema(
   if (!schema || typeof schema !== "object" || Array.isArray(schema)) return [];
   const s = schema as Record<string, unknown>;
 
+  // The `visited` guard only tracks $ref indirection at the SAME instance
+  // position ($ref → $ref → … without consuming any value): that is the only
+  // place a cycle can loop forever. Descending into the instance (items /
+  // properties) always makes progress, so those branches get a fresh set —
+  // otherwise a legitimately-repeated $ref at a deeper position would be
+  // skipped and its violations silently passed.
   if (typeof s.$ref === "string") {
     const refName = s.$ref;
-    if (visited.has(refName)) return []; // cycle — pass
+    if (visited.has(refName)) return []; // same-position cycle — pass
     const resolved = resolveRef(refName, spec);
     if (!resolved) return []; // remote/unresolvable — pass
     const next = new Set(visited);
@@ -295,7 +301,8 @@ export function validateSchema(
     }
     if (s.items !== undefined) {
       for (let i = 0; i < value.length; i++) {
-        out.push(...validateSchema(value[i], s.items, spec, `${pointer}/${i}`, visited));
+        // Fresh guard set: the instance pointer deepens, so recursion is finite.
+        out.push(...validateSchema(value[i], s.items, spec, `${pointer}/${i}`, new Set<string>()));
       }
     }
   }
@@ -316,7 +323,10 @@ export function validateSchema(
     if (isPlainObject(s.properties)) {
       for (const [key, propSchema] of Object.entries(s.properties)) {
         if (key in value) {
-          out.push(...validateSchema(value[key], propSchema, spec, `${pointer}/${key}`, visited));
+          // Fresh guard set: the instance pointer deepens, so recursion is finite.
+          out.push(
+            ...validateSchema(value[key], propSchema, spec, `${pointer}/${key}`, new Set<string>()),
+          );
         }
       }
     }
@@ -559,23 +569,35 @@ function validateQueryValues(
   const name = param.name!;
   const type = declaredType(param.schema, spec);
   if (type === "array") {
-    // repeated keys → array; coerce each item by the items schema type
+    // Serialization: explode:true (the form-style default) means repeated keys
+    // (?tag=a&tag=b); explode:false with style form means one comma-joined
+    // value (?tag=a,b). Anything else (spaceDelimited, pipeDelimited, …, or a
+    // non-exploded param sent with repeated keys) isn't modeled — pass rather
+    // than invent a violation.
+    let items = values;
+    if (param.explode === false) {
+      const style = typeof param.style === "string" ? param.style : "form";
+      if (style !== "form" || values.length !== 1) return [];
+      items = values[0]!.split(",");
+    }
+    // exploded repeated keys (or the comma-split above) → array; coerce each
+    // item by the items schema type
     const schema = resolveMaybeRef(param.schema, spec);
     const itemsSchema = isPlainObject(schema) ? schema.items : undefined;
     const itemType = declaredType(itemsSchema, spec);
     const out: Violation[] = [];
     const coercedItems: unknown[] = [];
-    for (let i = 0; i < values.length; i++) {
-      const c = coerceByType(values[i]!, itemType);
+    for (let i = 0; i < items.length; i++) {
+      const c = coerceByType(items[i]!, itemType);
       if (c.error) {
         out.push(
           toViolation(
             {
               pointer: `${name}/${i}`,
               rule: "type",
-              message: `expected ${c.error.expected}, got '${values[i]}'`,
+              message: `expected ${c.error.expected}, got '${items[i]}'`,
               expected: c.error.expected,
-              received: truncate(values[i]),
+              received: truncate(items[i]),
             },
             "query",
             ctx,

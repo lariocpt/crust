@@ -3,6 +3,7 @@ import { mkdtemp, readFile, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { OpenApiSpec } from "../src/mockServer/loadSpec";
+import { joinUpstreamUrl } from "../src/mockServer/proxy";
 import { startServer } from "../src/mockServer/server";
 import { type Violation, validateSchema } from "../src/mockServer/validateRequest";
 
@@ -19,6 +20,25 @@ const SCHEMA_SPEC: OpenApiSpec = {
           child: { $ref: "#/components/schemas/Node" },
         },
       },
+      Leaf: { type: "string", minLength: 2 },
+      Pair: {
+        type: "object",
+        properties: {
+          value: { $ref: "#/components/schemas/Leaf" },
+          child: { $ref: "#/components/schemas/Leaf" },
+        },
+      },
+      Holder: {
+        type: "object",
+        properties: {
+          value: { $ref: "#/components/schemas/Leaf" },
+          child: { $ref: "#/components/schemas/Holder" },
+        },
+      },
+      // A cycle at the SAME value position: $ref -> $ref -> back, consuming
+      // no instance. Must terminate (pass), unlike instance-descent repeats.
+      LoopA: { $ref: "#/components/schemas/LoopB" },
+      LoopB: { $ref: "#/components/schemas/LoopA" },
     },
   },
 };
@@ -136,10 +156,33 @@ describe("validateSchema", () => {
     { name: "integer rejects float", value: 1.5, schema: { type: "integer" }, rules: ["type"] },
     { name: "number accepts integer", value: 5, schema: { type: "number" }, rules: [] },
     {
-      name: "cyclic $ref passes on re-entry",
+      // Regression (cycle-guard scope): the repeated Node ref at a DEEPER
+      // instance position must be validated, not skipped as a "cycle" —
+      // child: 42 is a real type violation two levels down.
+      name: "repeated $ref at deeper instance position is validated",
       value: { name: "a", child: { name: "b", child: 42 } },
       schema: { $ref: "#/components/schemas/Node" },
+      rules: ["type"],
+    },
+    {
+      name: "self-referencing $ref terminates and passes on a valid finite instance",
+      value: { name: "a", child: { name: "b" } },
+      schema: { $ref: "#/components/schemas/Node" },
       rules: [],
+    },
+    {
+      name: "same-position $ref cycle passes (no infinite recursion)",
+      value: 42,
+      schema: { $ref: "#/components/schemas/LoopA" },
+      rules: [],
+    },
+    {
+      // Regression: the same Leaf ref at two sibling instance positions —
+      // the second occurrence's violation must be reported.
+      name: "repeated $ref at sibling instance positions both validated",
+      value: { value: "ok", child: "x" },
+      schema: { $ref: "#/components/schemas/Pair" },
+      rules: ["minLength"],
     },
     {
       name: "unresolvable $ref passes",
@@ -195,6 +238,19 @@ describe("validateSchema", () => {
     expect(violations).toHaveLength(1);
     expect(violations[0]!.pointer).toBe("/name");
     expect(violations[0]!.rule).toBe("required");
+  });
+
+  test("nested repeat of an already-visited $ref is validated with the right pointer", () => {
+    // Holder -> child: Holder (already in `visited` from the ancestor) whose
+    // value violates Leaf. Pre-fix the whole child subtree was skipped.
+    const violations = validateSchema(
+      { value: "ok", child: { value: "x" } },
+      { $ref: "#/components/schemas/Holder" },
+      SCHEMA_SPEC,
+    );
+    expect(violations).toHaveLength(1);
+    expect(violations[0]!.pointer).toBe("/child/value");
+    expect(violations[0]!.rule).toBe("minLength");
   });
 });
 
@@ -552,6 +608,235 @@ describe("--proxy validation-proxy e2e", () => {
     } finally {
       await orphan.stop();
     }
+  });
+});
+
+const DECODE_SPEC = {
+  openapi: "3.0.0",
+  info: { title: "decode", version: "1" },
+  paths: {
+    "/colors/{color}": {
+      get: {
+        parameters: [
+          {
+            name: "color",
+            in: "path",
+            required: true,
+            schema: { type: "string", enum: ["café", "red x"] },
+          },
+        ],
+        responses: {
+          "200": { description: "ok", content: { "application/json": { example: { ok: true } } } },
+        },
+      },
+    },
+    "/items": {
+      post: {
+        responses: {
+          "201": { description: "created", content: { "application/json": { example: {} } } },
+        },
+      },
+    },
+    "/items/{itemId}": {
+      get: {
+        parameters: [{ name: "itemId", in: "path", required: true, schema: { type: "string" } }],
+        responses: {
+          "200": { description: "ok", content: { "application/json": { example: {} } } },
+        },
+      },
+    },
+  },
+} as unknown as OpenApiSpec;
+
+describe("path param percent-decoding", () => {
+  test("encoded path params validate against the DECODED value", async () => {
+    const server = startServer({
+      port: 0,
+      hostname: "127.0.0.1",
+      spec: DECODE_SPEC,
+      validate: true,
+      log: () => {},
+    });
+    const base = `http://127.0.0.1:${server.port}`;
+    try {
+      // Pre-fix the raw "caf%C3%A9" / "red%20x" reached the enum check.
+      expect((await fetch(`${base}/colors/caf%C3%A9`)).status).toBe(200);
+      expect((await fetch(`${base}/colors/red%20x`)).status).toBe(200);
+
+      const bad = await fetch(`${base}/colors/mauve`);
+      expect(bad.status).toBe(422);
+      const badBody = (await bad.json()) as { violations: Array<{ rule: string }> };
+      expect(badBody.violations.map((v) => v.rule)).toContain("enum");
+
+      // Malformed %-sequence: decodeURIComponent throws — must fall back to
+      // the raw text (a genuine enum miss, never a 500).
+      const malformed = await fetch(`${base}/colors/%E0%A4%A`);
+      expect(malformed.status).toBe(422);
+      const malBody = (await malformed.json()) as {
+        violations: Array<{ rule: string; received?: unknown }>;
+      };
+      expect(malBody.violations.map((v) => v.rule)).toContain("enum");
+    } finally {
+      await server.stop();
+    }
+  });
+
+  test("stateful store lookups use the decoded id", async () => {
+    const server = startServer({
+      port: 0,
+      hostname: "127.0.0.1",
+      spec: DECODE_SPEC,
+      stateful: true,
+      log: () => {},
+    });
+    const base = `http://127.0.0.1:${server.port}`;
+    try {
+      const created = await fetch(`${base}/items`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: "a b", name: "thing" }),
+      });
+      expect(created.status).toBe(201);
+
+      // The encoded id must decode to the stored key ("a b"), not miss as "a%20b".
+      const got = await fetch(`${base}/items/a%20b`);
+      expect(got.status).toBe(200);
+      expect(await got.json()).toEqual({ id: "a b", name: "thing" });
+
+      expect((await fetch(`${base}/items/missing`)).status).toBe(404);
+    } finally {
+      await server.stop();
+    }
+  });
+});
+
+const EXPLODE_SPEC = {
+  openapi: "3.0.0",
+  info: { title: "explode", version: "1" },
+  paths: {
+    "/search": {
+      get: {
+        parameters: [
+          {
+            name: "tags",
+            in: "query",
+            required: true,
+            style: "form",
+            explode: false,
+            schema: { type: "array", items: { type: "string", enum: ["a", "b", "c"] } },
+          },
+          {
+            name: "spaced",
+            in: "query",
+            style: "spaceDelimited",
+            explode: false,
+            schema: { type: "array", items: { type: "string", enum: ["a", "b"] } },
+          },
+        ],
+        responses: {
+          "200": { description: "ok", content: { "application/json": { example: { ok: true } } } },
+        },
+      },
+    },
+  },
+} as unknown as OpenApiSpec;
+
+describe("query array explode:false (comma form)", () => {
+  test("comma-joined values validate per item; bad items are still caught", async () => {
+    const server = startServer({
+      port: 0,
+      hostname: "127.0.0.1",
+      spec: EXPLODE_SPEC,
+      validate: true,
+      log: () => {},
+    });
+    const base = `http://127.0.0.1:${server.port}`;
+    try {
+      // Pre-fix "a,b" was validated as ONE item and failed the enum.
+      expect((await fetch(`${base}/search?tags=a,b`)).status).toBe(200);
+
+      const bad = await fetch(`${base}/search?tags=a,z`);
+      expect(bad.status).toBe(422);
+      const badBody = (await bad.json()) as {
+        violations: Array<{ pointer: string; rule: string }>;
+      };
+      expect(badBody.violations).toEqual([
+        expect.objectContaining({ pointer: "tags/1", rule: "enum" }),
+      ]);
+
+      // Unmodeled serializations never invent a violation:
+      // spaceDelimited style passes wholesale…
+      expect((await fetch(`${base}/search?tags=a,b&spaced=x%20y`)).status).toBe(200);
+      // …and so does a non-exploded param that arrived with repeated keys.
+      expect((await fetch(`${base}/search?tags=a&tags=zzz`)).status).toBe(200);
+    } finally {
+      await server.stop();
+    }
+  });
+});
+
+describe("proxy binary passthrough and upstream base path", () => {
+  test("joinUpstreamUrl keeps the upstream base path", () => {
+    const u = new URL("http://client.local/api/x?q=1");
+    expect(joinUpstreamUrl(u, "http://up.local:8080/base").href).toBe(
+      "http://up.local:8080/base/api/x?q=1",
+    );
+    expect(joinUpstreamUrl(u, "http://up.local:8080/base/").href).toBe(
+      "http://up.local:8080/base/api/x?q=1",
+    );
+    expect(joinUpstreamUrl(u, "http://up.local:8080").href).toBe("http://up.local:8080/api/x?q=1");
+  });
+
+  const seenPaths: string[] = [];
+  let upstream: ReturnType<typeof Bun.serve>;
+  let proxy: ReturnType<typeof startServer>;
+  let base: string;
+
+  beforeAll(() => {
+    upstream = Bun.serve({
+      port: 0,
+      fetch(req) {
+        const url = new URL(req.url);
+        seenPaths.push(url.pathname + url.search);
+        if (url.pathname === "/base/bytes") {
+          return new Response(new Uint8Array([0xff, 0x00, 0xfe]), {
+            headers: { "content-type": "application/octet-stream" },
+          });
+        }
+        return new Response(JSON.stringify({ ok: true }), {
+          headers: { "content-type": "application/json" },
+        });
+      },
+    });
+    proxy = startServer({
+      port: 0,
+      hostname: "127.0.0.1",
+      spec: { openapi: "3.0.0", paths: {} } as OpenApiSpec,
+      proxy: `http://127.0.0.1:${upstream.port}/base`,
+      log: () => {},
+    });
+    base = `http://127.0.0.1:${proxy.port}`;
+  });
+
+  afterAll(async () => {
+    await proxy.stop();
+    upstream.stop();
+  });
+
+  test("binary upstream body passes through byte-identical", async () => {
+    const res = await fetch(`${base}/bytes`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("application/octet-stream");
+    // 0xff / 0xfe are invalid UTF-8 — a text() round-trip would mangle them.
+    expect(new Uint8Array(await res.arrayBuffer())).toEqual(new Uint8Array([0xff, 0x00, 0xfe]));
+  });
+
+  test("upstream base path is prepended to the request path", async () => {
+    const res = await fetch(`${base}/api/x?q=1`);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+    expect(seenPaths).toContain("/base/api/x?q=1");
+    expect(seenPaths).toContain("/base/bytes");
   });
 });
 
