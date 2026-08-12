@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Pipeline } from "../src/pipeline";
 
 describe("Pipeline.of — construction", () => {
@@ -120,6 +123,103 @@ describe("load pipeline stages", () => {
       void runLine;
     } finally {
       server.stop();
+    }
+  });
+
+  test("load | parallel | GET | expect | stats end-to-end", async () => {
+    const server = Bun.serve({
+      port: 0,
+      fetch: () => new Response("ok", { status: 200 }),
+    });
+    try {
+      const { parse } = await import("../src/parser");
+      const p = parse(
+        `load 150ms 60/s | parallel 8 | GET http://localhost:${server.port}/x | expect 200 | stats`,
+      )();
+      const out: unknown[] = [];
+      for await (const item of p.lines()) out.push(item);
+      expect(out).toHaveLength(1);
+      const s = out[0] as { count: number; status: Record<string, number>; p50: number };
+      expect(s.count).toBeGreaterThanOrEqual(4);
+      expect(s.count).toBeLessThanOrEqual(12);
+      expect(s.status["200"]).toBe(s.count);
+      expect(s.p50).toBeGreaterThan(0);
+    } finally {
+      server.stop();
+    }
+  });
+
+  test("parallel N | POST yields timing records — percentiles are real", async () => {
+    const server = Bun.serve({
+      port: 0,
+      fetch: () => new Response("{}", { status: 201 }),
+    });
+    try {
+      const { parse } = await import("../src/parser");
+      const p = parse(
+        `range(0, 9) | parallel 2 | POST http://localhost:${server.port}/x | expect 201 | stats`,
+      )();
+      const out: unknown[] = [];
+      for await (const item of p.lines()) out.push(item);
+      const s = out[0] as { count: number; p50: number };
+      expect(s.count).toBe(10);
+      expect(s.p50).toBeGreaterThan(0);
+    } finally {
+      server.stop();
+    }
+  });
+
+  test("stats | assert gates thresholds; --out artifact survives a failing gate", async () => {
+    const server = Bun.serve({
+      port: 0,
+      fetch: () => new Response("ok", { status: 200 }),
+    });
+    const dir = await mkdtemp(join(tmpdir(), "crust-stats-"));
+    try {
+      const { parse } = await import("../src/parser");
+      const base = `http://localhost:${server.port}/x`;
+
+      const okFile = join(dir, "run.json");
+      const ok = parse(
+        `range(0, 4) | GET ${base} | stats --out ${okFile} | assert (s => s.p95 < 10000) | assert (s => s.count === 5)`,
+      )();
+      const items: unknown[] = [];
+      for await (const it of ok.lines()) items.push(it);
+      expect(items).toHaveLength(1);
+      const doc = (await Bun.file(okFile).json()) as {
+        crustStats: number;
+        urls: string[];
+        summary: { count: number; p95: number };
+      };
+      expect(doc.crustStats).toBe(1);
+      expect(doc.summary.count).toBe(5);
+      expect(doc.urls).toEqual([base]);
+
+      const failFile = join(dir, "fail.json");
+      const bad = parse(
+        `range(0, 4) | GET ${base} | stats --out ${failFile} | assert (s => s.p95 < 0)`,
+      )();
+      let msg = "";
+      try {
+        for await (const _ of bad.lines()) {
+          // drain
+        }
+      } catch (err) {
+        msg = (err as Error).message;
+      }
+      expect(msg).toContain("assert: item 1 failed (s => s.p95 < 0)");
+      expect(await Bun.file(failFile).exists()).toBe(true);
+
+      // Async baseline predicate: the mechanized ">2x p95 is a finding" gate.
+      const gate = parse(
+        `range(0, 4) | GET ${base} | stats | assert (async s => { const b = await Bun.file("${okFile}").json(); return s.p95 < 2000 * (b.summary.p95 + 1) })`,
+      )();
+      const gated: unknown[] = [];
+      for await (const it of gate.lines()) gated.push(it);
+      expect(gated).toHaveLength(1);
+    } finally {
+      server.stop();
+      await rm(dir, { recursive: true, force: true });
     }
   });
 

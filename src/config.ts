@@ -1,8 +1,19 @@
 import { registerBuiltinFns } from "./builtinFns";
 import { discoverGlobals } from "./discover";
 import { Pipeline } from "./pipeline";
-import { GET, glob, range, read } from "./sources";
-import { DELETE, expect, PATCH, POST, PUT, parallel } from "./transforms";
+import { GET, glob, load, range, read } from "./sources";
+import {
+  captureEnv,
+  DELETE,
+  expect,
+  PATCH,
+  POST,
+  PUT,
+  parallel,
+  statsStage,
+  timedGet,
+  timedHttpItem,
+} from "./transforms";
 import type { Context, SignalHandler, SignalName } from "./types";
 
 export interface CrustGlobal {
@@ -62,6 +73,11 @@ export async function loadConfig(ctx: Context, configPath?: string): Promise<voi
   g.DELETE = DELETE;
   g.expectStage = expect;
   g.parallel = parallel;
+  g.load = load;
+  g.timedGet = timedGet;
+  g.timedHttpItem = timedHttpItem;
+  g.statsStage = statsStage;
+  g.captureEnv = captureEnv;
   g.$ = Bun.$;
 
   // Built-in fns first so an explicitly-installed global npm package or

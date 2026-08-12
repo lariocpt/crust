@@ -9,6 +9,8 @@ import {
   expectStatus,
   POST,
   parallel,
+  statsStage,
+  timedHttpItem,
 } from "../src/transforms";
 
 let server: ReturnType<typeof Bun.serve>;
@@ -218,5 +220,43 @@ describe("captureEnv", () => {
   test("empty upstream throws", async () => {
     const p = Pipeline.of([]).pipe(captureEnv("CAP_T")).collect();
     await expect(p).rejects.toThrow("capture CAP_T: no items reached capture — upstream was empty");
+  });
+});
+
+describe("timedHttpItem", () => {
+  test("times a POST with the item as JSON body", async () => {
+    const hit = await timedHttpItem("POST", `${baseUrl}/users`)({ name: "x" });
+    expect(hit.status).toBe(201);
+    expect(hit.ms).toBeGreaterThan(0);
+    expect(hit.url).toBe(`${baseUrl}/users`);
+  });
+
+  test("network error yields a status-0 record instead of throwing", async () => {
+    const hit = await timedHttpItem("POST", "http://127.0.0.1:1/x")({ a: 1 });
+    expect(hit.status).toBe(0);
+    expect(hit.ms).toBeGreaterThan(0);
+  });
+});
+
+describe("statsStage windows", () => {
+  test("yields window objects then a {final: true} cumulative summary", async () => {
+    const src = Pipeline.of(
+      (async function* () {
+        for (let i = 0; i < 6; i++) {
+          await Bun.sleep(20);
+          yield { status: 200, ms: 5 };
+        }
+      })(),
+    );
+    const out = await src.pipe(statsStage(0.05)).collect();
+    const windows = out.filter((o) => typeof (o as { window?: number }).window === "number");
+    const finals = out.filter((o) => (o as { final?: boolean }).final === true);
+    expect(windows.length).toBeGreaterThanOrEqual(1);
+    expect(finals).toHaveLength(1);
+    expect((finals[0] as { count: number }).count).toBe(6);
+  });
+
+  test("--out rejects non-json extensions at build time", () => {
+    expect(() => statsStage(undefined, "results.txt")).toThrow("only .json is supported");
   });
 });

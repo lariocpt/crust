@@ -30,8 +30,10 @@ export function parse(line: string): (ctx?: Context) => Pipeline<unknown> {
     }
 
     let pipeline: Pipeline<unknown> | null = null;
-    // `parallel N` is a modifier for the NEXT http stage, not a stage of its
-    // own — it sets the fan-out for the per-item requests that follow.
+    // `parallel N` is a modifier for the NEXT stage, not a stage of its own —
+    // it sets the fan-out for the per-item work that follows. Only http,
+    // lambda, and function stages can consume it; anything else is a loud
+    // error (it used to be a silent drop, which read as "worked").
     let pendingParallel: number | null = null;
     for (let i = startIdx; i < tokens.length; i++) {
       const kind = resolveKind(tokens[i]!.text, ctx);
@@ -43,12 +45,20 @@ export function parse(line: string): (ctx?: Context) => Pipeline<unknown> {
         pendingParallel = kind.n;
         continue;
       }
+      if (pendingParallel !== null && !CONSUMES_PARALLEL.has(kind.kind)) {
+        throw new Error(
+          `parallel ${pendingParallel}: only applies to http, lambda, or function stages — got ${kind.kind}`,
+        );
+      }
       if (pipeline === null) {
         pipeline = buildSource(kind, ctx);
       } else {
         pipeline = applyStage(pipeline, kind, ctx, pendingParallel);
         pendingParallel = null;
       }
+    }
+    if (pendingParallel !== null) {
+      throw new Error("parallel: must be followed by an http, lambda, or function stage");
     }
     if (!pipeline) throw new Error("parser: empty pipeline");
     if (timeLabel !== null) {
@@ -57,6 +67,8 @@ export function parse(line: string): (ctx?: Context) => Pipeline<unknown> {
     return pipeline;
   };
 }
+
+const CONSUMES_PARALLEL = new Set<StageKind["kind"]>(["http", "lambda", "function"]);
 
 // Demote a shell stage to a function stage when its first word is a
 // crust.fn()-registered name. The lexer is intentionally pure (no ctx),
@@ -121,6 +133,8 @@ function buildSource(kind: StageKind, ctx?: Context): Pipeline<unknown> {
     }
     case "readsrc":
       return sources.readAll(kind.pattern) as Pipeline<unknown>;
+    case "load":
+      return sources.load(kind.phases) as Pipeline<unknown>;
     case "procs": {
       // Evaluate the full `procs({...})` expression with the real source in
       // scope — same trusted-eval stance as evalLambda below.
@@ -167,8 +181,13 @@ function applyStage(
   concurrency?: number | null,
 ): Pipeline<unknown> {
   switch (kind.kind) {
-    case "lambda":
-      return input.pipe(evalLambda(kind.source));
+    case "lambda": {
+      const fn = evalLambda(kind.source);
+      if (concurrency !== null && concurrency !== undefined) {
+        return input.pipe(transforms.parallel(concurrency, fn) as never) as Pipeline<unknown>;
+      }
+      return input.pipe(fn);
+    }
     case "shell":
       return shellTransform(input, kind.text);
     case "http": {
@@ -181,9 +200,11 @@ function applyStage(
         const n = concurrency ?? 1;
         return input.pipe(transforms.parallel(n, fn) as never) as Pipeline<unknown>;
       }
-      if (concurrency && concurrency > 1) {
+      if (concurrency !== null && concurrency !== undefined) {
+        // The `parallel` modifier (any N, including 1) puts a verb in load
+        // mode: {status, ms, url} timing records, bodies drained.
         return input.pipe(
-          transforms.parallel(concurrency, transforms.httpItem(kind.verb, url, opts)) as never,
+          transforms.parallel(concurrency, transforms.timedHttpItem(kind.verb, url, opts)) as never,
         ) as Pipeline<unknown>;
       }
       return input.pipe(transforms[kind.verb](url, opts) as never) as Pipeline<unknown>;
@@ -226,7 +247,9 @@ function applyStage(
       );
     }
     case "stats":
-      return input.pipe(transforms.statsStage(kind.everySec) as never) as Pipeline<unknown>;
+      return input.pipe(
+        transforms.statsStage(kind.everySec, kind.out ? expandEnv(kind.out) : undefined) as never,
+      ) as Pipeline<unknown>;
     case "range":
     case "glob":
     case "tail":
@@ -234,13 +257,18 @@ function applyStage(
     case "parallel":
     case "json":
     case "readsrc":
+    case "load":
       throw new Error(`${kind.kind} cannot appear as a non-first stage`);
     case "time":
       throw new Error("time: only allowed as the first stage of a pipeline");
     case "function": {
       const fn = ctx?.functions.get(kind.name);
       if (!fn) throw new Error(`function "${kind.name}" not registered`);
-      return input.pipe((item: unknown) => fn(item, ...kind.args));
+      const apply = (item: unknown) => fn(item, ...kind.args);
+      if (concurrency !== null && concurrency !== undefined) {
+        return input.pipe(transforms.parallel(concurrency, apply) as never) as Pipeline<unknown>;
+      }
+      return input.pipe(apply);
     }
   }
 }

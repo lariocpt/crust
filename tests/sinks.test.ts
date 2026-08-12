@@ -3,7 +3,7 @@ import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Pipeline } from "../src/pipeline";
-import { dest, stats, write } from "../src/sinks";
+import { dest, write } from "../src/sinks";
 
 describe("write", () => {
   let dir: string;
@@ -46,32 +46,5 @@ describe("dest", () => {
     expect(files).toEqual(["a.txt", "b.txt"]);
     expect(await readFile(join(dir, "a.txt"), "utf8")).toBe("alpha");
     expect(await readFile(join(dir, "b.txt"), "utf8")).toBe("bravo");
-  });
-});
-
-describe("stats", () => {
-  test("returns count and status histogram", async () => {
-    const responses = [
-      new Response("a", { status: 200 }),
-      new Response("b", { status: 200 }),
-      new Response("c", { status: 404 }),
-    ];
-    const s = await Pipeline.of(responses).to(stats());
-    expect(s.count).toBe(3);
-    expect(s.status).toEqual({ 200: 2, 404: 1 });
-  });
-
-  test("includes timing percentiles", async () => {
-    const s = await Pipeline.of([new Response("ok", { status: 200 })]).to(stats());
-    expect(typeof s.p50).toBe("number");
-    expect(typeof s.p95).toBe("number");
-    expect(typeof s.p99).toBe("number");
-    expect(typeof s.durationMs).toBe("number");
-  });
-
-  test("empty pipeline produces zero stats", async () => {
-    const s = await Pipeline.of<Response>([]).to(stats());
-    expect(s.count).toBe(0);
-    expect(s.status).toEqual({});
   });
 });

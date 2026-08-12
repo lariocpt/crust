@@ -47,6 +47,55 @@ describe("parser — transforms", () => {
   });
 });
 
+describe("parallel modifier", () => {
+  test("errors loudly before a non-consuming stage", () => {
+    expect(() => parse("range(0, 3) | parallel 2 | stats")()).toThrow(
+      "parallel 2: only applies to http, lambda, or function stages — got stats",
+    );
+  });
+
+  test("errors when trailing", () => {
+    expect(() => parse("range(0, 3) | parallel 2")()).toThrow(
+      "parallel: must be followed by an http, lambda, or function stage",
+    );
+  });
+
+  test("fans out lambda stages", async () => {
+    const out = await parse("range(0, 9) | parallel 4 | (x => x * 2)")().collect();
+    expect([...(out as number[])].sort((a, b) => a - b)).toEqual([
+      0, 2, 4, 6, 8, 10, 12, 14, 16, 18,
+    ]);
+  });
+
+  test("fans out registered functions, capping in-flight at N", async () => {
+    let inFlight = 0;
+    let peak = 0;
+    const ctx = {
+      aliases: new Map<string, string>(),
+      functions: new Map<string, (...args: unknown[]) => unknown>([
+        [
+          "slowfn",
+          async (x: unknown) => {
+            inFlight++;
+            peak = Math.max(peak, inFlight);
+            await Bun.sleep(15);
+            inFlight--;
+            return x;
+          },
+        ],
+      ]),
+      history: [],
+      exit: (() => {}) as never,
+      dotenv: { history: [], snapshot: null },
+      signalHandlers: new Map(),
+    };
+    const out = await parse("range(0, 9) | parallel 3 | slowfn")(ctx).collect();
+    expect(out).toHaveLength(10);
+    expect(peak).toBeGreaterThan(1);
+    expect(peak).toBeLessThanOrEqual(3);
+  });
+});
+
 describe("parser — registered functions (crust.fn)", () => {
   test("dispatches a registered function as a per-item transform", async () => {
     const ctx = {

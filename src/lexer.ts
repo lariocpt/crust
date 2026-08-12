@@ -122,12 +122,35 @@ export function classify(text: string): StageKind {
     return { kind: "expect", matcher: /^\d{3}$/.test(m) ? parseInt(m, 10) : m };
   }
 
-  const statsMatch = t.match(/^stats(?:\s+--every[= ](\d+)s?)?$/);
-  if (statsMatch) {
-    return {
-      kind: "stats",
-      everySec: statsMatch[1] ? parseInt(statsMatch[1], 10) : undefined,
-    };
+  if (t === "stats" || t.startsWith("stats ")) {
+    const kind = classifyStats(t);
+    if (kind) return kind;
+    // Unknown flags fall through to shell, like any other unparsed word.
+  }
+
+  // `load <dur> <rate>[, <dur> <rate>…]` — e.g. `load 30s 100/s` or the ramp
+  // `load 10s 50/s, 30s 200/s`. A malformed spec is a hard error (same stance
+  // as JSON literals: a typo'd load exec'ing as a command would be baffling);
+  // bare `load` still shells out.
+  const loadMatch = t.match(/^load\s+(.+)$/);
+  if (loadMatch) {
+    const phases = loadMatch[1]!.split(",").map((s) => s.trim());
+    const parsed: { durMs: number; rps: number }[] = [];
+    for (const ph of phases) {
+      const m = ph.match(/^(\d+(?:\.\d+)?)(ms|s|m)\s+(\d+(?:\.\d+)?)\/(s|m)$/);
+      if (!m) {
+        throw new Error(
+          `load: expected "<dur> <rate>[, <dur> <rate>…]" e.g. \`load 30s 100/s\` — got "${ph}"`,
+        );
+      }
+      const durMs = parseFloat(m[1]!) * (m[2] === "ms" ? 1 : m[2] === "s" ? 1000 : 60_000);
+      const rps = parseFloat(m[3]!) / (m[4] === "m" ? 60 : 1);
+      if (durMs <= 0 || rps <= 0) {
+        throw new Error(`load: duration and rate must be > 0 — got "${ph}"`);
+      }
+      parsed.push({ durMs, rps });
+    }
+    return { kind: "load", phases: parsed };
   }
 
   const rangeMatch = t.match(/^range\(\s*(-?\d+)\s*,\s*(-?\d+)\s*\)$/);
@@ -148,6 +171,40 @@ export function classify(text: string): StageKind {
   if (tailKind) return tailKind;
 
   return { kind: "shell", text: t };
+}
+
+// `stats [--every N[s]] [--out file.json]` — null on any unknown flag so the
+// caller can fall through to shell.
+function classifyStats(t: string): StageKind | null {
+  const parts = splitArgs(t);
+  let everySec: number | undefined;
+  let out: string | undefined;
+  for (let i = 1; i < parts.length; i++) {
+    const p = parts[i]!;
+    const everyEq = p.match(/^--every=(\d+)s?$/);
+    if (everyEq) {
+      everySec = parseInt(everyEq[1]!, 10);
+      continue;
+    }
+    if (p === "--every") {
+      const next = (parts[++i] ?? "").match(/^(\d+)s?$/);
+      if (!next) return null;
+      everySec = parseInt(next[1]!, 10);
+      continue;
+    }
+    if (p.startsWith("--out=")) {
+      out = p.slice("--out=".length);
+      continue;
+    }
+    if (p === "--out") {
+      const next = parts[++i];
+      if (!next) return null;
+      out = next;
+      continue;
+    }
+    return null;
+  }
+  return { kind: "stats", everySec, out };
 }
 
 // Recognize the common shapes of `tail` — path, `-F`/`-f`, `-n N`,

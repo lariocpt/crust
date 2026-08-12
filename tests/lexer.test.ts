@@ -211,3 +211,73 @@ describe("expect classification", () => {
     expect(classify("expect ok").kind).toBe("shell");
   });
 });
+
+describe("load classification", () => {
+  test("single phase", () => {
+    expect(classify("load 30s 100/s")).toEqual({
+      kind: "load",
+      phases: [{ durMs: 30000, rps: 100 }],
+    });
+  });
+
+  test("ms durations, per-minute and decimal rates", () => {
+    expect(classify("load 200ms 50/s")).toEqual({
+      kind: "load",
+      phases: [{ durMs: 200, rps: 50 }],
+    });
+    expect(classify("load 1m 30/m")).toEqual({
+      kind: "load",
+      phases: [{ durMs: 60000, rps: 0.5 }],
+    });
+    expect(classify("load 2s 0.5/s")).toEqual({
+      kind: "load",
+      phases: [{ durMs: 2000, rps: 0.5 }],
+    });
+  });
+
+  test("ramp phases", () => {
+    expect(classify("load 100ms 20/s, 100ms 60/s")).toEqual({
+      kind: "load",
+      phases: [
+        { durMs: 100, rps: 20 },
+        { durMs: 100, rps: 60 },
+      ],
+    });
+  });
+
+  test("malformed spec throws with usage", () => {
+    expect(() => classify("load 30 100")).toThrow("load: expected");
+    expect(() => classify("load fast")).toThrow("load: expected");
+    expect(() => classify("load 10s 50/s, nope")).toThrow("load: expected");
+  });
+
+  test("bare load falls through to shell", () => {
+    expect(classify("load").kind).toBe("shell");
+  });
+});
+
+describe("stats flags", () => {
+  test("--every forms still classify", () => {
+    expect(classify("stats --every 5s")).toEqual({ kind: "stats", everySec: 5, out: undefined });
+    expect(classify("stats --every=2")).toEqual({ kind: "stats", everySec: 2, out: undefined });
+    expect(classify("stats")).toEqual({ kind: "stats", everySec: undefined, out: undefined });
+  });
+
+  test("--out alone and combined with --every", () => {
+    expect(classify("stats --out results.json")).toEqual({
+      kind: "stats",
+      everySec: undefined,
+      out: "results.json",
+    });
+    expect(classify("stats --every 2 --out r.json")).toEqual({
+      kind: "stats",
+      everySec: 2,
+      out: "r.json",
+    });
+  });
+
+  test("unknown flag falls through to shell", () => {
+    expect(classify("stats --bogus").kind).toBe("shell");
+    expect(classify("stats --out").kind).toBe("shell");
+  });
+});

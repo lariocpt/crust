@@ -22,40 +22,5 @@ export function dest(
   };
 }
 
-export interface Stats {
-  count: number;
-  durationMs: number;
-  status: Record<number, number>;
-  p50: number;
-  p95: number;
-  p99: number;
-}
-
-export function stats(): (input: Pipeline<Response>) => Promise<Stats> {
-  return async (input) => {
-    const start = Date.now();
-    const latencies: number[] = [];
-    const statusCounts: Record<number, number> = {};
-    let count = 0;
-    for await (const r of input.lines()) {
-      count++;
-      statusCounts[r.status] = (statusCounts[r.status] ?? 0) + 1;
-      // Per-request latency tracking deferred — see v0.1.5 stretch.
-      latencies.push(0);
-    }
-    const durationMs = Date.now() - start;
-    const sorted = latencies.slice().sort((a, b) => a - b);
-    const pct = (p: number): number =>
-      sorted.length === 0
-        ? 0
-        : (sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * p))] ?? 0);
-    return {
-      count,
-      durationMs,
-      status: statusCounts,
-      p50: pct(0.5),
-      p95: pct(0.95),
-      p99: pct(0.99),
-    };
-  };
-}
+// The old `stats()` sink lived here; it hardcoded every latency to 0 and
+// reported fabricated percentiles. `transforms.statsStage` is the real one.

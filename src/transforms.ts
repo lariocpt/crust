@@ -198,6 +198,28 @@ export function timedGet(url: string, opts?: RequestInit): (x: unknown) => Promi
   };
 }
 
+// Per-item timed request for ANY verb — what the parser uses when the
+// `parallel` modifier puts an http stage in load mode. The upstream item is
+// the request body (same conversion rules as POST/PUT/PATCH/DELETE stages);
+// the body is drained so keep-alive sockets recycle and timing includes it.
+// Network errors become {status: 0} records instead of killing the run.
+export function timedHttpItem(
+  method: string,
+  url: string,
+  opts?: RequestInit,
+): (item: unknown) => Promise<TimedHit> {
+  return async (item) => {
+    const t0 = performance.now();
+    try {
+      const r = await httpRequest(url, method, item, opts);
+      await r.arrayBuffer();
+      return { status: r.status, ms: performance.now() - t0, url };
+    } catch {
+      return { status: 0, ms: performance.now() - t0, url };
+    }
+  };
+}
+
 // Pass items through; on drain, fail the pipeline if any item's status
 // didn't match. Works on TimedHit records and Response objects.
 // `expected` is an exact code (201) or a class ("2xx").
@@ -294,18 +316,30 @@ function summarize(acc: StatsAcc, wallMs: number): Record<string, unknown> {
 // everySec, a per-window delta summary every N seconds PLUS a final
 // cumulative one tagged {final: true}). Windows are emitted on the item path
 // — a fully stalled upstream delays the flush until the next item arrives.
+// With `out`, the run is also written to a versioned JSON artifact — BEFORE
+// the final yield, so the file exists even when a downstream threshold
+// assert fails the pipeline.
 export function statsStage(
   everySec?: number,
+  out?: string,
 ): PipelineStage<{ status: number; ms?: number }, unknown> {
+  if (out !== undefined && !out.endsWith(".json")) {
+    throw new Error(`stats --out: only .json is supported — got ${out}`);
+  }
   return pipelineStage((input) =>
     Pipeline.of(
       (async function* () {
+        const startedAt = new Date().toISOString();
         const t0 = performance.now();
         const total: StatsAcc = { latencies: [], status: {}, count: 0 };
+        const urls = new Set<string>();
+        const windows: Record<string, unknown>[] = [];
         let win: StatsAcc = { latencies: [], status: {}, count: 0 };
         let winStart = t0;
         let winNo = 0;
         for await (const item of input.lines()) {
+          const u = (item as { url?: unknown }).url;
+          if (typeof u === "string") urls.add(u);
           for (const acc of [total, win]) {
             acc.count++;
             acc.status[item.status] = (acc.status[item.status] ?? 0) + 1;
@@ -313,21 +347,32 @@ export function statsStage(
           }
           if (everySec && performance.now() - winStart >= everySec * 1000) {
             winNo++;
-            yield { window: winNo, ...summarize(win, performance.now() - winStart) };
+            const w = { window: winNo, ...summarize(win, performance.now() - winStart) };
+            windows.push(w);
+            yield w;
             win = { latencies: [], status: {}, count: 0 };
             winStart = performance.now();
           }
         }
         const wallMs = performance.now() - t0;
-        if (everySec) {
-          if (win.count > 0) {
-            winNo++;
-            yield { window: winNo, ...summarize(win, performance.now() - winStart) };
-          }
-          yield { final: true, ...summarize(total, wallMs) };
-        } else {
-          yield summarize(total, wallMs);
+        if (everySec && win.count > 0) {
+          winNo++;
+          const w = { window: winNo, ...summarize(win, performance.now() - winStart) };
+          windows.push(w);
+          yield w;
         }
+        const summary = summarize(total, wallMs);
+        if (out) {
+          const doc: Record<string, unknown> = {
+            crustStats: 1,
+            startedAt,
+            urls: [...urls].sort(),
+            summary,
+          };
+          if (everySec) doc.windows = windows;
+          await Bun.write(out, `${JSON.stringify(doc, null, 2)}\n`);
+        }
+        yield everySec ? { final: true, ...summary } : summary;
       })(),
     ),
   );

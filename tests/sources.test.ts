@@ -4,7 +4,7 @@ import { mkdtemp, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Pipeline } from "../src/pipeline";
-import { GET, glob, range, read, tail } from "../src/sources";
+import { GET, glob, load, range, read, tail } from "../src/sources";
 
 describe("range", () => {
   test("inclusive integer range", async () => {
@@ -368,5 +368,44 @@ describe("procs object specs", () => {
     const runs = lines.filter((l) => l.stream === "stdout" && l.line === "once").length;
     expect(runs).toBe(1);
     expect(lines.some((l) => l.line.startsWith("restarting"))).toBe(false);
+  });
+});
+
+describe("load", () => {
+  test("emits paced ticks across phases with monotonic n", async () => {
+    const ticks = await load([
+      { durMs: 100, rps: 40 },
+      { durMs: 100, rps: 80 },
+    ]).collect();
+    // targets: 4 + 8 = 12; wide tolerance for loaded CI hosts
+    expect(ticks.length).toBeGreaterThanOrEqual(6);
+    expect(ticks.length).toBeLessThanOrEqual(12);
+    expect(ticks[0]!.phase).toBe(0);
+    expect(ticks[ticks.length - 1]!.phase).toBe(1);
+    const ns = ticks.map((t) => t.n);
+    expect(ns).toEqual([...ns].sort((a, b) => a - b));
+    for (const t of ticks) expect(t.lagMs).toBeGreaterThanOrEqual(0);
+  });
+
+  test("saturated consumer drops stale slots and reports the shortfall", async () => {
+    let msg = "";
+    const src = load([{ durMs: 200, rps: 100 }], {
+      warn: (s) => {
+        msg += s;
+      },
+    });
+    const seen: unknown[] = [];
+    for await (const t of src.lines()) {
+      seen.push(t);
+      await Bun.sleep(40); // downstream busy: ~5 pulls fit in the 200ms phase
+    }
+    expect(seen.length).toBeLessThan(20);
+    expect(msg).toContain("load: target 20 ticks");
+    expect(msg).toContain("dropped");
+    expect(msg).toContain("achieved");
+  });
+
+  test("empty phase list throws", () => {
+    expect(() => load([])).toThrow("load: needs at least one phase");
   });
 });

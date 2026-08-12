@@ -328,3 +328,84 @@ export function procs(specs: Record<string, string | ProcSpec>): Pipeline<ProcLi
     })(),
   );
 }
+
+// ---------------------------------------------------------------------------
+// load — a paced arrival schedule for load runs. `load 30s 100/s` yields one
+// tick per scheduled slot; ramps are phase lists (`load 10s 50/s, 30s 200/s`).
+//
+// Open-loop honesty: slots are anchored to absolute times (no drift). When
+// the consumer can't keep up (parallel pool saturated), stale slots are
+// SKIPPED — never burst to catch up — counted, and reported to stderr on
+// drain. Downstream `stats` reports the MEASURED rate only, so the tool
+// structurally cannot claim an arrival rate it didn't sustain.
+// ---------------------------------------------------------------------------
+
+export interface LoadTick {
+  /** global tick index across all phases */
+  n: number;
+  /** phase index this tick belongs to */
+  phase: number;
+  /** performance.now() timestamp of the tick's ideal slot */
+  scheduledAt: number;
+  /** how late the tick actually left its slot */
+  lagMs: number;
+}
+
+export interface LoadOpts {
+  /** shortfall report sink — injectable for tests (default stderr) */
+  warn?: (s: string) => void;
+}
+
+export function load(
+  phases: { durMs: number; rps: number }[],
+  opts: LoadOpts = {},
+): Pipeline<LoadTick> {
+  if (phases.length === 0) throw new Error("load: needs at least one phase");
+  const warn = opts.warn ?? ((s: string) => process.stderr.write(s));
+  return Pipeline.of(
+    (async function* () {
+      const t0 = performance.now();
+      let n = 0;
+      let target = 0;
+      let dropped = 0;
+      for (let p = 0; p < phases.length; p++) {
+        const { durMs, rps } = phases[p]!;
+        const interval = 1000 / rps;
+        const phaseTarget = Math.max(1, Math.round((durMs * rps) / 1000));
+        target += phaseTarget;
+        const phaseStart = performance.now();
+        const phaseEnd = phaseStart + durMs;
+        for (let k = 0; k < phaseTarget; k++) {
+          const ideal = phaseStart + k * interval;
+          const now = performance.now();
+          if (now >= phaseEnd) {
+            // Phase clock ran out with slots left — all of them are drops.
+            dropped += phaseTarget - k;
+            break;
+          }
+          if (now < ideal) {
+            await Bun.sleep(ideal - now);
+          } else if (now - ideal > interval) {
+            // Slot went stale while downstream was busy: skip, don't burst.
+            dropped++;
+            continue;
+          }
+          yield {
+            n: n++,
+            phase: p,
+            scheduledAt: ideal,
+            lagMs: Math.max(0, performance.now() - ideal),
+          };
+        }
+      }
+      if (dropped > 0) {
+        const wallS = (performance.now() - t0) / 1000;
+        const achieved = wallS > 0 ? (n / wallS).toFixed(1) : "0";
+        warn(
+          `load: target ${target} ticks — emitted ${n}, dropped ${dropped} ` +
+            `(downstream saturated; raise parallel N?), achieved ${achieved}/s\n`,
+        );
+      }
+    })(),
+  );
+}

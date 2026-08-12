@@ -24,7 +24,8 @@ export type StageKind =
   | { kind: "readsrc"; pattern: string }
   | { kind: "parallel"; n: number }
   | { kind: "expect"; matcher: number | string }
-  | { kind: "stats"; everySec?: number }
+  | { kind: "stats"; everySec?: number; out?: string }
+  | { kind: "load"; phases: { durMs: number; rps: number }[] }
   | { kind: "shell"; text: string };
 
 export interface DotenvLoadRecord {
