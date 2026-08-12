@@ -574,7 +574,7 @@ The TS-test ecosystem owns the name `expect`. Crust exports the API name as `exp
 | `test-fixture --target g [--out p] [--threads N] [--count N] [--timeout ms] [--bail]` | Runs `.crust.ts` HTTP fixtures. See [test-fixture](#test-fixture). |
 | `test-pipes --target g [--bail] [--timeout ms] [--setup m]` | Runs `.pipes` files — one shorthand fixture pipeline per line. See [test-pipes](#test-pipes). |
 | `gen-fixtures --swagger s --out d --setup m` | Generates negative-case `.crust.ts` fixtures from an OpenAPI spec. See [gen-fixtures](#gen-fixtures). |
-| `mock-server --swagger <url-or-path> [--port N] [--host addr] [--stateful]` | Boots a `Bun.serve` instance that mocks every operation in an OpenAPI 3.x spec; `--stateful` adds an in-memory CRUD layer. See [mock-server](#mock-server). |
+| `mock-server --swagger <url-or-path> [--port N] [--host addr] [--stateful] [--validate] [--proxy <upstream>]` | Boots a `Bun.serve` instance that mocks every operation in an OpenAPI 3.x spec; `--stateful` adds an in-memory CRUD layer, `--validate` rejects spec-violating requests with 422, `--proxy` turns it into a validation proxy in front of a real upstream. See [mock-server](#mock-server). |
 | `exit [code]` | Exits crust with optional code (default 0). |
 | `help` | Lists builtins. |
 
@@ -795,7 +795,7 @@ mock-server --swagger ./spec.json --port 0 --host 127.0.0.1   # OS-assigned port
 mock-server --swagger ./openapi.yaml --port 4000 --stateful   # in-memory CRUD
 ```
 
-Flags: `--swagger <url-or-path>` (required; URL or local `.json`/`.yaml`/`.yml`; Swagger 2.0 specs are auto-converted to OpenAPI 3.x), `--port N` (default `3000`, `0` = ephemeral), `--host addr` (default `0.0.0.0`), `--stateful` (in-memory CRUD layer — see below).
+Flags: `--swagger <url-or-path>` (required; URL or local `.json`/`.yaml`/`.yml`; Swagger 2.0 specs are auto-converted to OpenAPI 3.x), `--port N` (default `3000`, `0` = ephemeral), `--host addr` (default `0.0.0.0`), `--stateful` (in-memory CRUD layer — see below), `--validate` (reject spec-violating requests with `422` — see below), `--proxy <upstream>` (validation-proxy mode — see below; mutually exclusive with `--stateful`), `--proxy-timeout N` (upstream timeout in ms, default `30000`), `--report <path>` (append violations as NDJSON; requires `--proxy`).
 
 Response bodies are picked example-first, schema-fallback:
 
@@ -813,7 +813,7 @@ POST   /pets        201  2ms
 DELETE /pets/99     404  0ms
 ```
 
-Ctrl-C (or `SIGTERM`) shuts the server down cleanly. Limits: remote `$ref` resolution, request validation, faker-style data, and hot-reload are not supported yet.
+Ctrl-C (or `SIGTERM`) shuts the server down cleanly. Limits: remote `$ref` resolution, faker-style data, and hot-reload are not supported yet.
 
 #### Stateful mode (`--stateful`)
 
@@ -833,6 +833,65 @@ you GET back:
 
 **Untouched collections keep serving spec examples** — consumers see no
 change until they write. State lives in memory only; restart = clean slate.
+
+#### Request validation (`--validate`)
+
+Opt-in: by default the mock accepts anything (existing suites may rely on
+that). With `--validate`, every matched request is checked against the spec
+before any mock/stateful handling; violations answer `422` with header
+`x-crust-validation: request` and body
+`{"error": "request validation failed", "violations": [...]}` — each
+violation carries `pointer` (JSON pointer into the body, or the param name),
+`rule`, `message`, `expected`/`received`, and `location`
+(`body`/`path`/`query`). Composes with `--stateful`: an invalid POST returns
+`422` and creates nothing.
+
+What is checked: path/query parameters (string values are coerced to the
+declared `integer`/`number`/`boolean` type first; `header`/`cookie` params
+are skipped), required query params, `requestBody.required` (`required-body`),
+unparseable JSON bodies (`json-parse`), and JSON body schemas. The schema
+walker supports `type` (incl. the 3.1 `["string","null"]` array form),
+`required`, `properties`/`items`, `enum`, `nullable`, `anyOf`/`oneOf` (pass if
+any branch passes), `allOf`, `format` (`uuid`, `email`, `date`, `date-time`,
+`uri`), `pattern`, `minLength`/`maxLength`, `minimum`/`maximum` (incl. both
+`exclusiveMinimum`/`exclusiveMaximum` forms), and `minItems`/`maxItems`.
+
+The governing rule: **a schema the walker can't judge validates
+successfully** — unknown formats, uncompilable patterns, unresolvable or
+cyclic `$ref`s, and unsupported keywords (`not`, `additionalProperties` —
+even `false` — `uniqueItems`, `multipleOf`, …) never produce a violation, so
+extra properties are never rejected. Non-JSON request bodies (multipart,
+form) pass untouched.
+
+#### Validation proxy (`--proxy <upstream>`)
+
+Puts the spec in front of a **real** backend: every request is forwarded to
+the upstream (hop-by-hop headers stripped, 3xx passed through untouched) and
+the upstream's response is returned as-is — while both directions are
+checked against the spec and violations are **recorded, never enforced**.
+Responses are checked for documented status (exact key, then `NXX` range,
+then `default` — miss records `undocumented-status`), documented
+content-type, and JSON body schema conformance. Requests that match no
+documented operation are forwarded anyway and recorded as
+`undocumented-operation`. An unreachable upstream answers
+`502 {"error": "upstream unreachable", ...}` and is *not* recorded — infra
+failures aren't spec violations.
+
+Inspect findings at `GET /__crust/violations`
+(`{count, dropped, violations}`; capped at 1000 in memory, oldest dropped)
+and clear them with `DELETE /__crust/violations`; `--report <path>` also
+appends every violation as one NDJSON line as it happens. Each recorded
+violation adds `ts`, `direction` (`request`/`response`), `method`, `path`,
+`template`, and (response side) `status` to the fields above. Per-request
+log lines gain a ` [N violation(s)]` suffix. `--proxy` implies validation of
+both directions (`--validate` alongside it is accepted, redundant) and is
+mutually exclusive with `--stateful`.
+
+```bash
+mock-server --swagger ./openapi.yaml --port 4000 --validate
+mock-server --swagger ./openapi.yaml --port 4000 \
+  --proxy http://localhost:8080 --report violations.ndjson
+```
 
 #### Stress mode (`--count`) and randomized inputs
 

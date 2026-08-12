@@ -1,6 +1,15 @@
+import { appendFile } from "node:fs/promises";
 import type { OpenApiSpec } from "./loadSpec";
 import { pickResponse, synthesizeBody } from "./mockResponse";
+import { forward, UpstreamError } from "./proxy";
 import { buildRoutes, matchRoute, paramNames, type Route } from "./router";
+import {
+  isJsonContentType,
+  undocumentedOperation,
+  type Violation,
+  validateRequest,
+  validateResponse,
+} from "./validateRequest";
 
 export interface ServerOptions {
   port: number;
@@ -8,6 +17,13 @@ export interface ServerOptions {
   spec: OpenApiSpec;
   log?: (line: string) => void;
   stateful?: boolean;
+  /** Validate requests against the spec; violations → 422 (mock mode). */
+  validate?: boolean;
+  /** Upstream base URL — validation-proxy mode (implies request+response validation). */
+  proxy?: string;
+  proxyTimeoutMs?: number;
+  /** NDJSON file to append violations to as they happen. */
+  report?: string;
 }
 
 export type StateStore = Map<string, Map<string, Record<string, unknown>>>;
@@ -18,6 +34,8 @@ export interface RunningServer {
   routes: Route[];
   state: StateStore;
   resetState: () => void;
+  violations: Violation[];
+  clearViolations: () => void;
   stop: () => Promise<void>;
 }
 
@@ -25,25 +43,47 @@ export interface RunningServer {
 // collection key is "/things" — the same key a bare "/things" template maps to.
 const TRAILING_PARAM = /\/\{[^/}]+\}$/;
 
+const MAX_VIOLATIONS = 1000;
+const DEFAULT_PROXY_TIMEOUT_MS = 30_000;
+
 export function startServer(opts: ServerOptions): RunningServer {
   const routes = buildRoutes(opts.spec);
   const log = opts.log ?? ((line) => process.stderr.write(line + "\n"));
   const state: StateStore = new Map();
+  const violations: Violation[] = [];
+  let dropped = 0;
+  let reportQueue: Promise<void> = Promise.resolve();
+
+  // Capped in-memory ring + optional NDJSON append (one line per violation,
+  // as it happens). The report write is awaited per record so callers reading
+  // the file after a request see everything that request produced.
+  async function record(v: Violation): Promise<void> {
+    violations.push(v);
+    if (violations.length > MAX_VIOLATIONS) {
+      violations.shift();
+      dropped++;
+    }
+    if (opts.report) {
+      reportQueue = reportQueue
+        .then(() => appendFile(opts.report!, `${JSON.stringify(v)}\n`))
+        .catch(() => {});
+      await reportQueue;
+    }
+  }
 
   // In-memory CRUD layer for --stateful. Returns null to fall through to the
   // default example/synthesis behavior — untouched collections keep serving
   // spec examples, so consumers see no change until they write.
-  async function statefulResponse(
-    req: Request,
+  function statefulResponse(
+    body: Record<string, unknown>,
     route: Route,
     params: Record<string, string>,
-  ): Promise<Response | null> {
+  ): Response | null {
     const isItemPath = TRAILING_PARAM.test(route.template);
     const collectionKey = isItemPath ? route.template.replace(TRAILING_PARAM, "") : route.template;
 
     if (!isItemPath) {
       if (route.method === "POST") {
-        const body = await readJsonObject(req);
         const picked = pickResponse(route.operation);
         const synth = synthesizeBody(picked.media, opts.spec);
         const base = isPlainObject(synth) ? synth : {};
@@ -90,7 +130,6 @@ export function startServer(opts: ServerOptions): RunningServer {
     }
     if (route.method === "PATCH" || route.method === "PUT") {
       if (!item) return jsonResponse(404, { error: "not found" });
-      const body = await readJsonObject(req);
       const merged = { ...item, ...body };
       collection.set(id, merged);
       return jsonResponse(200, merged);
@@ -103,34 +142,192 @@ export function startServer(opts: ServerOptions): RunningServer {
     return null;
   }
 
+  const proxyMode = typeof opts.proxy === "string" && opts.proxy.length > 0;
+  const validateMode = opts.validate === true;
+  const needsBody = validateMode || opts.stateful === true || proxyMode;
+
   const server = Bun.serve({
     port: opts.port,
     hostname: opts.hostname,
     async fetch(req) {
       const started = performance.now();
       const url = new URL(req.url);
-      const lookup = matchRoute(routes, req.method, url.pathname);
+      let violationCount = 0;
 
       let response: Response;
       try {
-        if (!lookup.matched) {
+        // Proxy admin endpoint — handled first, never forwarded.
+        if (proxyMode && url.pathname === "/__crust/violations") {
+          if (req.method === "GET") {
+            response = jsonResponse(200, { count: violations.length, dropped, violations });
+          } else if (req.method === "DELETE") {
+            violations.length = 0;
+            dropped = 0;
+            response = new Response(null, { status: 204 });
+          } else {
+            response = jsonResponse(405, { error: "method not allowed" });
+          }
+          logLine(req.method, url.pathname, response.status, started, 0);
+          return response;
+        }
+
+        // Read the raw request body ONCE up front; every consumer (validator,
+        // stateful CRUD, proxy forwarding) works from this copy.
+        let rawBody: ArrayBuffer | null = null;
+        let bodyPresent = false;
+        let parsedBody: unknown;
+        let jsonError: string | undefined;
+        const contentType = req.headers.get("content-type");
+        if (needsBody) {
+          rawBody = await req.arrayBuffer();
+          bodyPresent = rawBody.byteLength > 0;
+          if (bodyPresent) {
+            try {
+              parsedBody = JSON.parse(new TextDecoder().decode(rawBody));
+            } catch (err) {
+              if (isJsonContentType(contentType)) jsonError = (err as Error).message;
+            }
+          }
+        }
+
+        const lookup = matchRoute(routes, req.method, url.pathname);
+
+        if (proxyMode) {
+          // Validate the request (metadata only — the upstream still decides).
+          let reqViolations: Violation[];
+          if (lookup.matched) {
+            reqViolations = validateRequest(
+              {
+                method: req.method,
+                pathname: url.pathname,
+                params: lookup.params,
+                searchParams: url.searchParams,
+                contentType,
+                bodyPresent,
+                body: parsedBody,
+                jsonError,
+              },
+              lookup.matched,
+              opts.spec,
+            );
+          } else {
+            reqViolations = [undocumentedOperation(req.method, url.pathname)];
+          }
+          for (const v of reqViolations) await record(v);
+          violationCount += reqViolations.length;
+
+          try {
+            const result = await forward(
+              req.method,
+              url,
+              req.headers,
+              rawBody,
+              opts.proxy!,
+              opts.proxyTimeoutMs ?? DEFAULT_PROXY_TIMEOUT_MS,
+            );
+            if (lookup.matched) {
+              const respCt = result.response.headers.get("content-type");
+              let respBody: unknown;
+              if (result.bodyText !== null && isJsonContentType(respCt)) {
+                try {
+                  respBody = JSON.parse(result.bodyText);
+                } catch {
+                  // non-JSON body despite the header — the validator skips it
+                }
+              }
+              const respViolations = validateResponse(
+                {
+                  status: result.response.status,
+                  contentType: respCt,
+                  hasBody: result.bodyText !== null,
+                  body: respBody,
+                },
+                lookup.matched,
+                opts.spec,
+              ).map((v) => ({ ...v, path: url.pathname }));
+              for (const v of respViolations) await record(v);
+              violationCount += respViolations.length;
+            }
+            response = result.response;
+          } catch (err) {
+            if (err instanceof UpstreamError) {
+              // Infra failure, not a spec violation — never recorded.
+              response = jsonResponse(502, {
+                error: "upstream unreachable",
+                upstream: opts.proxy,
+                detail: err.message,
+              });
+            } else {
+              throw err;
+            }
+          }
+        } else if (!lookup.matched) {
           const status = lookup.pathExists ? 405 : 404;
           response = jsonResponse(status, {
             error: lookup.pathExists ? "method not allowed" : "not found",
           });
         } else {
-          const stateful = opts.stateful
-            ? await statefulResponse(req, lookup.matched, lookup.params)
-            : null;
-          if (stateful) {
-            response = stateful;
+          let rejected: Response | null = null;
+          if (validateMode) {
+            const reqViolations = validateRequest(
+              {
+                method: req.method,
+                pathname: url.pathname,
+                params: lookup.params,
+                searchParams: url.searchParams,
+                contentType,
+                bodyPresent,
+                body: parsedBody,
+                jsonError,
+              },
+              lookup.matched,
+              opts.spec,
+            );
+            if (reqViolations.length > 0) {
+              for (const v of reqViolations) await record(v);
+              violationCount += reqViolations.length;
+              rejected = new Response(
+                JSON.stringify({
+                  error: "request validation failed",
+                  violations: reqViolations.map(
+                    ({ pointer, rule, message, expected, received, location }) => ({
+                      pointer,
+                      rule,
+                      message,
+                      ...(expected !== undefined ? { expected } : {}),
+                      ...(received !== undefined ? { received } : {}),
+                      location,
+                    }),
+                  ),
+                }),
+                {
+                  status: 422,
+                  headers: {
+                    "content-type": "application/json",
+                    "x-crust-validation": "request",
+                  },
+                },
+              );
+            }
+          }
+          if (rejected) {
+            // Composes with --stateful: an invalid write creates NOTHING.
+            response = rejected;
           } else {
-            const picked = pickResponse(lookup.matched.operation);
-            const body = synthesizeBody(picked.media, opts.spec);
-            if (picked.status === 204 || body === undefined) {
-              response = new Response(null, { status: picked.status });
+            const jsonBody = isPlainObject(parsedBody) ? parsedBody : {};
+            const stateful = opts.stateful
+              ? statefulResponse(jsonBody, lookup.matched, lookup.params)
+              : null;
+            if (stateful) {
+              response = stateful;
             } else {
-              response = jsonResponse(picked.status, body);
+              const picked = pickResponse(lookup.matched.operation);
+              const body = synthesizeBody(picked.media, opts.spec);
+              if (picked.status === 204 || body === undefined) {
+                response = new Response(null, { status: picked.status });
+              } else {
+                response = jsonResponse(picked.status, body);
+              }
             }
           }
         }
@@ -138,18 +335,34 @@ export function startServer(opts: ServerOptions): RunningServer {
         response = jsonResponse(500, { error: (err as Error).message });
       }
 
-      const ms = Math.round(performance.now() - started);
-      log(`${req.method.padEnd(6)} ${url.pathname.padEnd(28)} ${response.status}  ${ms}ms`);
+      logLine(req.method, url.pathname, response.status, started, violationCount);
       return response;
     },
   });
 
+  function logLine(
+    method: string,
+    pathname: string,
+    status: number,
+    started: number,
+    violationCount: number,
+  ): void {
+    const ms = Math.round(performance.now() - started);
+    const suffix = violationCount > 0 ? ` [${violationCount} violation(s)]` : "";
+    log(`${method.padEnd(6)} ${pathname.padEnd(28)} ${status}  ${ms}ms${suffix}`);
+  }
+
   return {
-    port: server.port,
+    port: server.port ?? opts.port,
     hostname: opts.hostname,
     routes,
     state,
     resetState: () => state.clear(),
+    violations,
+    clearViolations: () => {
+      violations.length = 0;
+      dropped = 0;
+    },
     stop: async () => {
       server.stop();
     },
@@ -165,13 +378,4 @@ function jsonResponse(status: number, body: unknown): Response {
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-async function readJsonObject(req: Request): Promise<Record<string, unknown>> {
-  try {
-    const parsed = await req.json();
-    return isPlainObject(parsed) ? parsed : {};
-  } catch {
-    return {};
-  }
 }

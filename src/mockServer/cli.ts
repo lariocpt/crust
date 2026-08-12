@@ -3,6 +3,7 @@ import { loadSpec } from "./loadSpec";
 import { startServer } from "./server";
 
 const USAGE = `mock-server --swagger <url-or-path> [--port N] [--host addr] [--stateful]
+            [--validate] [--proxy <upstream> [--proxy-timeout ms] [--report path]]
 
 Boots a Bun.serve instance that mocks every operation in the given
 OpenAPI 3.x spec. Bodies come from the spec's examples when available,
@@ -15,6 +16,14 @@ arrays -> [item], objects -> {props}, enums -> first value).
   --stateful        in-memory CRUD: POST creates, GET returns what was
                     created, PATCH/PUT merge, DELETE removes. Untouched
                     collections keep serving the spec's examples.
+  --validate        validate requests against the spec; violations answer
+                    422 with a JSON violation list instead of the mock body.
+  --proxy <url>     validation-proxy mode: forward every request to the
+                    upstream, return its response untouched, record request
+                    AND response spec violations (GET /__crust/violations
+                    to inspect, DELETE to clear). Excludes --stateful.
+  --proxy-timeout N upstream timeout in milliseconds (default 30000).
+  --report <path>   append each violation as an NDJSON line (needs --proxy).
 `;
 
 export async function runCli(args: string[]): Promise<number> {
@@ -22,6 +31,10 @@ export async function runCli(args: string[]): Promise<number> {
   let port = 3000;
   let host = "0.0.0.0";
   let stateful = false;
+  let validate = false;
+  let proxy: string | undefined;
+  let proxyTimeout = 30000;
+  let report: string | undefined;
 
   function intFlag(value: string | undefined, name: string): number | null {
     const n = parseInt(value ?? "", 10);
@@ -56,6 +69,24 @@ export async function runCli(args: string[]): Promise<number> {
       host = a.slice("--host=".length);
     } else if (a === "--stateful") {
       stateful = true;
+    } else if (a === "--validate") {
+      validate = true;
+    } else if (a === "--proxy") {
+      proxy = args[++i];
+    } else if (a.startsWith("--proxy=")) {
+      proxy = a.slice("--proxy=".length);
+    } else if (a === "--proxy-timeout") {
+      const n = intFlag(args[++i], "--proxy-timeout");
+      if (n === null) return 2;
+      proxyTimeout = n;
+    } else if (a.startsWith("--proxy-timeout=")) {
+      const n = intFlag(a.slice("--proxy-timeout=".length), "--proxy-timeout");
+      if (n === null) return 2;
+      proxyTimeout = n;
+    } else if (a === "--report") {
+      report = args[++i];
+    } else if (a.startsWith("--report=")) {
+      report = a.slice("--report=".length);
     } else {
       process.stderr.write(`mock-server: unknown arg '${a}'\n`);
       process.stderr.write(USAGE);
@@ -69,6 +100,30 @@ export async function runCli(args: string[]): Promise<number> {
     return 2;
   }
 
+  // Conflicts are caught before any boot work (spec load, port bind).
+  if (proxy !== undefined && stateful) {
+    process.stderr.write("mock-server: --proxy and --stateful are mutually exclusive\n");
+    return 2;
+  }
+  if (report !== undefined && proxy === undefined) {
+    process.stderr.write("mock-server: --report requires --proxy\n");
+    return 2;
+  }
+  if (proxy !== undefined) {
+    try {
+      new URL(proxy);
+    } catch {
+      process.stderr.write(`mock-server: --proxy requires a valid URL (got '${proxy}')\n`);
+      return 2;
+    }
+  }
+  if (proxyTimeout <= 0) {
+    process.stderr.write("mock-server: --proxy-timeout must be a positive integer\n");
+    return 2;
+  }
+  // A redundant --validate alongside --proxy is accepted silently (proxy mode
+  // already implies request+response validation).
+
   let loaded: Awaited<ReturnType<typeof loadSpec>>;
   try {
     loaded = await loadSpec(swagger);
@@ -77,11 +132,21 @@ export async function runCli(args: string[]): Promise<number> {
     return 1;
   }
 
-  const server = startServer({ port, hostname: host, spec: loaded.spec, stateful });
+  const server = startServer({
+    port,
+    hostname: host,
+    spec: loaded.spec,
+    stateful,
+    validate,
+    proxy,
+    proxyTimeoutMs: proxyTimeout,
+    report,
+  });
   process.stdout.write(`mock-server: ${server.routes.length} route(s) from ${loaded.origin}\n`);
-  process.stdout.write(
-    `mock-server: listening on http://${host}:${server.port}${stateful ? " (stateful)" : ""}\n`,
-  );
+  const modes = `${stateful ? " (stateful)" : ""}${validate && proxy === undefined ? " (validate)" : ""}${
+    proxy !== undefined ? ` (proxy -> ${proxy})` : ""
+  }`;
+  process.stdout.write(`mock-server: listening on http://${host}:${server.port}${modes}\n`);
 
   return await new Promise<number>((resolve) => {
     const shutdown = async (signal: NodeJS.Signals): Promise<void> => {
