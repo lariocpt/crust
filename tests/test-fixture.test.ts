@@ -328,3 +328,40 @@ describe("test-fixture cli", () => {
     expect(code).toBe(2);
   });
 });
+
+describe("--timeout and --bail", () => {
+  test("timeout turns a slow fixture into an actionable error", async () => {
+    const file = await writeFixture(
+      "timeout.crust.ts",
+      `export default {
+        name: "slow endpoint",
+        input: { url: "${baseUrl}/sleep" },
+        output: { status: 200 },
+      };\n`,
+    );
+    const report = await runFixtures({ target: file, threads: 1, timeoutMs: 10 });
+    expect(report.totals.error).toBe(1);
+    expect(report.results[0]!.error?.message).toContain("timed out after 10ms");
+    const ok = await runFixtures({ target: file, threads: 1, timeoutMs: 5000 });
+    expect(ok.totals.pass).toBe(1);
+  });
+
+  test("bail stops scheduling after the first failure", async () => {
+    mode = "wrong-status";
+    const file = await writeFixture(
+      "bail.crust.ts",
+      `export default [
+        { name: "f1", input: { url: "${baseUrl}/users/42" }, output: { status: 200 } },
+        { name: "f2", input: { url: "${baseUrl}/users/42" }, output: { status: 200 } },
+        { name: "f3", input: { url: "${baseUrl}/users/42" }, output: { status: 200 } },
+      ];\n`,
+    );
+    const bailed = await runFixtures({ target: file, threads: 1, bail: true });
+    expect(bailed.bailed).toBe(true);
+    expect(bailed.scheduled).toBe(3);
+    expect(bailed.results.length).toBeLessThan(3);
+    const full = await runFixtures({ target: file, threads: 1 });
+    expect(full.results.length).toBe(3);
+    mode = "ok";
+  });
+});

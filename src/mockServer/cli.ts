@@ -2,7 +2,7 @@
 import { loadSpec } from "./loadSpec";
 import { startServer } from "./server";
 
-const USAGE = `mock-server --swagger <url-or-path> [--port N] [--host addr]
+const USAGE = `mock-server --swagger <url-or-path> [--port N] [--host addr] [--stateful]
 
 Boots a Bun.serve instance that mocks every operation in the given
 OpenAPI 3.x spec. Bodies come from the spec's examples when available,
@@ -12,12 +12,16 @@ arrays -> [item], objects -> {props}, enums -> first value).
   --swagger <src>   URL (http://, https://) or local path (.json, .yaml).
   --port N          listen port (default 3000; 0 = OS-assigned).
   --host addr       bind address (default 0.0.0.0).
+  --stateful        in-memory CRUD: POST creates, GET returns what was
+                    created, PATCH/PUT merge, DELETE removes. Untouched
+                    collections keep serving the spec's examples.
 `;
 
 export async function runCli(args: string[]): Promise<number> {
   let swagger: string | undefined;
   let port = 3000;
   let host = "0.0.0.0";
+  let stateful = false;
 
   function intFlag(value: string | undefined, name: string): number | null {
     const n = parseInt(value ?? "", 10);
@@ -50,6 +54,8 @@ export async function runCli(args: string[]): Promise<number> {
       host = args[++i] ?? host;
     } else if (a.startsWith("--host=")) {
       host = a.slice("--host=".length);
+    } else if (a === "--stateful") {
+      stateful = true;
     } else {
       process.stderr.write(`mock-server: unknown arg '${a}'\n`);
       process.stderr.write(USAGE);
@@ -71,9 +77,11 @@ export async function runCli(args: string[]): Promise<number> {
     return 1;
   }
 
-  const server = startServer({ port, hostname: host, spec: loaded.spec });
+  const server = startServer({ port, hostname: host, spec: loaded.spec, stateful });
   process.stdout.write(`mock-server: ${server.routes.length} route(s) from ${loaded.origin}\n`);
-  process.stdout.write(`mock-server: listening on http://${host}:${server.port}\n`);
+  process.stdout.write(
+    `mock-server: listening on http://${host}:${server.port}${stateful ? " (stateful)" : ""}\n`,
+  );
 
   return await new Promise<number>((resolve) => {
     const shutdown = async (signal: NodeJS.Signals): Promise<void> => {

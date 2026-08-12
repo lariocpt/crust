@@ -77,10 +77,16 @@ export interface RunReport {
   results: FixtureResult[];
   totals: { pass: number; fail: number; error: number; ms: number };
   stress?: StressBucket[];
+  // Present only when --bail cut the run short: results then holds just the
+  // tasks that settled, and scheduled is how many were queued in total.
+  bailed?: true;
+  scheduled?: number;
 }
 
 export interface RunOpts {
   target: string;
   threads: number;
   count?: number;
+  timeoutMs?: number;
+  bail?: boolean;
 }

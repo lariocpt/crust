@@ -51,16 +51,31 @@ function countLiteralSegments(template: string): number {
 export interface RouteLookup {
   matched: Route | null;
   pathExists: boolean;
+  params: Record<string, string>;
 }
 
 export function matchRoute(routes: Route[], method: string, pathname: string): RouteLookup {
   const upper = method.toUpperCase();
   let pathExists = false;
   for (const r of routes) {
-    if (r.regex.test(pathname)) {
+    const m = r.regex.exec(pathname);
+    if (m) {
       pathExists = true;
-      if (r.method === upper) return { matched: r, pathExists: true };
+      if (r.method === upper) return { matched: r, pathExists: true, params: extractParams(r, m) };
     }
   }
-  return { matched: null, pathExists };
+  return { matched: null, pathExists, params: {} };
+}
+
+export function paramNames(template: string): string[] {
+  return [...template.matchAll(/\{([^/}]+)\}/g)].map((m) => m[1]!);
+}
+
+function extractParams(route: Route, m: RegExpExecArray): Record<string, string> {
+  const params: Record<string, string> = {};
+  const names = paramNames(route.template);
+  for (let i = 0; i < names.length; i++) {
+    params[names[i]!] = m[i + 1] ?? "";
+  }
+  return params;
 }

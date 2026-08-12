@@ -41,6 +41,9 @@ export function renderText(report: RunReport, useColor: boolean): string {
       `${c.green(t.pass + " pass")}, ${c.red(t.fail + " fail")}, ${c.yellow(t.error + " error")}` +
       `  (${t.ms.toFixed(1)}ms)`,
   );
+  if (report.bailed) {
+    out.push(c.yellow(`bailed after ${report.results.length} of ${report.scheduled} scheduled`));
+  }
   if (report.stress && report.stress.length > 0) {
     out.push("");
     out.push("stress (latency ms, status distribution):");

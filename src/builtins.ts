@@ -272,6 +272,12 @@ const testPipesBuiltin: Builtin = async (rawArgs, _ctx) => {
   return await runCli(args);
 };
 
+const genFixturesBuiltin: Builtin = async (rawArgs, _ctx) => {
+  const args = splitArgsRespectingQuotes(rawArgs);
+  const { runCli } = await import("./genFixtures/cli");
+  return await runCli(args);
+};
+
 const mockServerBuiltin: Builtin = async (rawArgs, _ctx) => {
   const args = splitArgsRespectingQuotes(rawArgs);
   const { runCli } = await import("./mockServer/cli");
@@ -296,6 +302,7 @@ export const builtins: Record<string, Builtin> = {
   dotenv: dotenvBuiltin,
   "test-fixture": testFixtureBuiltin,
   "test-pipes": testPipesBuiltin,
+  "gen-fixtures": genFixturesBuiltin,
   "mock-server": mockServerBuiltin,
   "verify-web-links": verifyWebLinksBuiltin,
 };

@@ -367,3 +367,124 @@ describe("cli runCli", () => {
     expect(code).toBe(1);
   });
 });
+
+describe("stateful mode", () => {
+  const SPEC = {
+    openapi: "3.0.0",
+    info: { title: "t", version: "1" },
+    paths: {
+      "/things": {
+        get: {
+          responses: {
+            "200": {
+              description: "list",
+              content: {
+                "application/json": { example: { items: [{ id: "seed", name: "Example" }] } },
+              },
+            },
+          },
+        },
+        post: {
+          responses: {
+            "201": {
+              description: "created",
+              content: { "application/json": { example: { id: "seed", name: "Example" } } },
+            },
+          },
+        },
+      },
+      "/things/{thingId}": {
+        get: { responses: { "200": { description: "one" } } },
+        patch: { responses: { "200": { description: "patched" } } },
+        delete: { responses: { "204": { description: "gone" } } },
+      },
+      "/untouched": {
+        get: {
+          responses: {
+            "200": {
+              description: "static",
+              content: { "application/json": { example: { fixed: true } } },
+            },
+          },
+        },
+      },
+    },
+  };
+
+  test("POST -> GET -> PATCH -> DELETE round-trip", async () => {
+    const { startServer } = await import("../src/mockServer/server");
+    const server = startServer({
+      port: 0,
+      hostname: "127.0.0.1",
+      spec: SPEC as never,
+      stateful: true,
+      log: () => {},
+    });
+    const base = `http://127.0.0.1:${server.port}`;
+    try {
+      const created = await fetch(`${base}/things`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: "Crusty" }),
+      });
+      expect(created.status).toBe(201);
+      const item = (await created.json()) as { id: string; name: string };
+      expect(item.name).toBe("Crusty");
+      expect(item.id).toBeTruthy();
+
+      const got = await fetch(`${base}/things/${item.id}`);
+      expect(got.status).toBe(200);
+      expect(((await got.json()) as { name: string }).name).toBe("Crusty");
+
+      const list = (await (await fetch(`${base}/things`)).json()) as {
+        items: Array<{ id: string }>;
+      };
+      expect(list.items.some((i) => i.id === item.id)).toBe(true);
+
+      const patched = await fetch(`${base}/things/${item.id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: "Renamed" }),
+      });
+      expect(((await patched.json()) as { name: string }).name).toBe("Renamed");
+
+      const del = await fetch(`${base}/things/${item.id}`, { method: "DELETE" });
+      expect(del.status).toBe(204);
+      expect((await fetch(`${base}/things/${item.id}`)).status).toBe(404);
+
+      // untouched collection still serves the example
+      const untouched = (await (await fetch(`${base}/untouched`)).json()) as {
+        fixed: boolean;
+      };
+      expect(untouched.fixed).toBe(true);
+    } finally {
+      await server.stop();
+    }
+  });
+
+  test("non-stateful mode ignores writes (regression)", async () => {
+    const { startServer } = await import("../src/mockServer/server");
+    const server = startServer({
+      port: 0,
+      hostname: "127.0.0.1",
+      spec: SPEC as never,
+      log: () => {},
+    });
+    const base = `http://127.0.0.1:${server.port}`;
+    try {
+      await fetch(`${base}/things`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: "Ghost" }),
+      });
+      const list = (await (await fetch(`${base}/things`)).json()) as {
+        items: Array<{ name: string }>;
+      };
+      // still the spec example, not the posted item
+      expect(list.items[0]!.name).toBe("Example");
+      expect(server.state.size).toBe(0);
+    } finally {
+      await server.stop();
+    }
+  });
+});

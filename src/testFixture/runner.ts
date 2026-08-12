@@ -61,25 +61,35 @@ export async function runFixtures(opts: RunOpts): Promise<RunReport> {
     fxs.forEach((fx, i) => {
       for (let iter = 1; iter <= count; iter++) {
         const iterArg = count > 1 ? iter : undefined;
-        tasks.push(() => runOne(file, fx, i, iterArg));
+        tasks.push(() => runOne(file, fx, i, iterArg, opts.timeoutMs));
       }
     });
   }
 
-  const results: FixtureResult[] = new Array(tasks.length);
+  // Pre-sized so settled results keep task order; under --bail the tail slots
+  // stay holes and are dropped by the filter below — totals must never walk
+  // undefined entries.
+  const slots: FixtureResult[] = new Array(tasks.length);
   const inFlight = new Set<Promise<void>>();
+  let bailed = false;
   for (let i = 0; i < tasks.length; i++) {
     while (inFlight.size >= threads) await Promise.race(inFlight);
+    // A task that settled while we waited may have tripped bail; stop
+    // starting new work but let anything already in flight finish.
+    if (bailed) break;
     const idx = i;
     let t!: Promise<void>;
     t = (async () => {
-      results[idx] = await tasks[idx]!();
+      const r = await tasks[idx]!();
+      slots[idx] = r;
+      if (opts.bail && r.status !== "pass") bailed = true;
     })().finally(() => {
       inFlight.delete(t);
     });
     inFlight.add(t);
   }
   await Promise.all(inFlight);
+  const results = slots.filter((r): r is FixtureResult => r !== undefined);
 
   const totals = { pass: 0, fail: 0, error: 0, ms: 0 };
   for (const r of results) {
@@ -87,6 +97,10 @@ export async function runFixtures(opts: RunOpts): Promise<RunReport> {
     totals.ms += r.durationMs;
   }
   const report: RunReport = { results, totals };
+  if (bailed) {
+    report.bailed = true;
+    report.scheduled = tasks.length;
+  }
   if (count > 1) report.stress = buildStressBuckets(results);
   return report;
 }
@@ -156,6 +170,7 @@ async function runOne(
   fx: Fixture,
   idx: number,
   iter?: number,
+  timeoutMs?: number,
 ): Promise<FixtureResult> {
   const baseName = fx.name ?? `${file}#${idx}`;
   const name = iter != null ? `${baseName} #${iter}` : baseName;
@@ -174,7 +189,7 @@ async function runOne(
         : fx.output;
     const input = (await resolveDeep(rawInput, setupCtx, true)) as Record<string, unknown>;
     const expected = (await resolveDeep(rawOutput, setupCtx, false)) as Record<string, unknown>;
-    const actual = await performRequest(input);
+    const actual = await performRequest(input, timeoutMs);
     responseStatus = actual.status;
     const failures = await diffAsync("output", expected, actual, setupCtx);
     const r: FixtureResult = {
@@ -241,7 +256,10 @@ async function resolveDeep(value: unknown, ctx: unknown, callUnary: boolean): Pr
   return out;
 }
 
-async function performRequest(input: Record<string, unknown>): Promise<{
+async function performRequest(
+  input: Record<string, unknown>,
+  timeoutMs?: number,
+): Promise<{
   status: number;
   headers: Record<string, string>;
   data: unknown;
@@ -254,13 +272,32 @@ async function performRequest(input: Record<string, unknown>): Promise<{
     (init as Record<string, unknown>)[k] = v;
   }
   if (init.method === undefined) init.method = "GET";
-  const r = await fetch(url, init);
+  // A fixture's own `signal` (copied above) wins; --timeout only fills the gap.
+  let timeoutSignal: AbortSignal | undefined;
+  if (timeoutMs != null && init.signal == null) {
+    timeoutSignal = AbortSignal.timeout(timeoutMs);
+    init.signal = timeoutSignal;
+  }
+  let r: Response;
+  let text: string;
+  try {
+    r = await fetch(url, init);
+    // Body read is covered too — a server that streams slowly must not
+    // escape the deadline.
+    text = await r.text();
+  } catch (err) {
+    // Bun's abort error message is generic ("The operation was aborted");
+    // name the deadline so the fixture error is actionable.
+    if (timeoutSignal?.aborted) {
+      throw new Error(`timed out after ${timeoutMs}ms`);
+    }
+    throw err;
+  }
   const headers: Record<string, string> = {};
   r.headers.forEach((v, k) => {
     headers[k] = v;
   });
   let data: unknown;
-  const text = await r.text();
   try {
     data = text === "" ? "" : JSON.parse(text);
   } catch {

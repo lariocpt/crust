@@ -3,7 +3,7 @@ import { extname } from "node:path";
 import { renderJson, renderMarkdown, renderText } from "./report";
 import { runFixtures } from "./runner";
 
-const USAGE = `test-fixture --target <file|glob> [--out <path>] [--threads N] [--count N]
+const USAGE = `test-fixture --target <file|glob> [--out <path>] [--threads N] [--count N] [--timeout <ms>] [--bail]
 
 Run .crust.ts fixture files. Each file exports a Fixture (or array) with
 { input, output } objects. Fields whose value is a 0-arg function are
@@ -16,6 +16,10 @@ are matcher predicates over the actual value.
                  when N > 1. Use the 'random' helper inside fixtures
                  (import { random } from "crust/testFixture/random")
                  to vary inputs across iterations.
+  --timeout <ms> fail any fixture whose request runs longer (a fixture's
+                 own input.signal wins over this).
+  --bail         stop starting new fixtures after the first fail/error;
+                 in-flight fixtures finish.
 `;
 
 export async function runCli(args: string[]): Promise<number> {
@@ -23,6 +27,8 @@ export async function runCli(args: string[]): Promise<number> {
   let out: string | undefined;
   let threads = 1;
   let count = 1;
+  let timeoutMs: number | undefined;
+  let bail = false;
 
   function intFlag(value: string | undefined, name: string): number | null {
     const n = parseInt(value ?? "", 10);
@@ -63,6 +69,16 @@ export async function runCli(args: string[]): Promise<number> {
       const n = intFlag(a.slice("--count=".length), "--count");
       if (n === null) return 2;
       count = n;
+    } else if (a === "--timeout") {
+      const n = intFlag(args[++i], "--timeout");
+      if (n === null) return 2;
+      timeoutMs = n;
+    } else if (a.startsWith("--timeout=")) {
+      const n = intFlag(a.slice("--timeout=".length), "--timeout");
+      if (n === null) return 2;
+      timeoutMs = n;
+    } else if (a === "--bail") {
+      bail = true;
     } else {
       process.stderr.write(`test-fixture: unknown arg '${a}'\n`);
       return 2;
@@ -77,7 +93,7 @@ export async function runCli(args: string[]): Promise<number> {
 
   let report: Awaited<ReturnType<typeof runFixtures>>;
   try {
-    report = await runFixtures({ target, threads, count });
+    report = await runFixtures({ target, threads, count, timeoutMs, bail });
   } catch (err) {
     process.stderr.write(`test-fixture: ${(err as Error).message}\n`);
     return 2;
