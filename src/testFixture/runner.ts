@@ -1,4 +1,4 @@
-import { diff, expandTarget as expandTargetShared } from "../fixtures";
+import { diffAsync, expandTarget as expandTargetShared } from "../fixtures";
 import type { Fixture, FixtureResult, RunOpts, RunReport, StressBucket } from "./types";
 
 export async function runFixtures(opts: RunOpts): Promise<RunReport> {
@@ -165,11 +165,18 @@ async function runOne(
   let responseStatus: number | undefined;
   try {
     if (fx.setup) setupCtx = await fx.setup();
-    const input = (await resolveDeep(fx.input)) as Record<string, unknown>;
-    const expected = (await resolveDeep(fx.output)) as Record<string, unknown>;
+    // input/output may be functions of the setup context — the only way a
+    // fixture can put a setup-created credential or id into the request.
+    const rawInput = typeof fx.input === "function" ? await fx.input(setupCtx as never) : fx.input;
+    const rawOutput =
+      typeof fx.output === "function" && (fx.output as Function).length >= 1
+        ? await (fx.output as (c: unknown) => unknown)(setupCtx)
+        : fx.output;
+    const input = (await resolveDeep(rawInput, setupCtx, true)) as Record<string, unknown>;
+    const expected = (await resolveDeep(rawOutput, setupCtx, false)) as Record<string, unknown>;
     const actual = await performRequest(input);
     responseStatus = actual.status;
-    const failures = diff("output", expected, actual);
+    const failures = await diffAsync("output", expected, actual, setupCtx);
     const r: FixtureResult = {
       file,
       name,
@@ -207,22 +214,29 @@ async function runOne(
   }
 }
 
-async function resolveDeep(value: unknown): Promise<unknown> {
+// callUnary distinguishes the two sides: in INPUT, a 1-arg function is a
+// ctx-consumer and gets called with the setup context; in OUTPUT it is a
+// matcher predicate and must be left alone for diffAsync (which calls it with
+// (actual, ctx)). 0-arg functions resolve on both sides, as before.
+async function resolveDeep(value: unknown, ctx: unknown, callUnary: boolean): Promise<unknown> {
   if (typeof value === "function") {
     if ((value as Function).length === 0) {
       return await (value as () => unknown)();
+    }
+    if (callUnary && (value as Function).length === 1) {
+      return await (value as (c: unknown) => unknown)(ctx);
     }
     return value;
   }
   if (value === null || typeof value !== "object") return value;
   if (Array.isArray(value)) {
     const out: unknown[] = [];
-    for (const v of value) out.push(await resolveDeep(v));
+    for (const v of value) out.push(await resolveDeep(v, ctx, callUnary));
     return out;
   }
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(value)) {
-    out[k] = await resolveDeep(v);
+    out[k] = await resolveDeep(v, ctx, callUnary);
   }
   return out;
 }

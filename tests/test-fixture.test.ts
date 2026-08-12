@@ -1,9 +1,9 @@
-import { test, expect, describe, beforeAll, afterAll } from "bun:test";
-import { mkdtemp, rm, mkdir, writeFile, realpath } from "node:fs/promises";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runFixtures } from "../src/testFixture/runner";
 import { runCli } from "../src/testFixture/cli";
+import { runFixtures } from "../src/testFixture/runner";
 
 let server: ReturnType<typeof Bun.serve>;
 let baseUrl: string;
@@ -29,10 +29,10 @@ beforeAll(async () => {
         });
       }
       if (url.pathname === "/echo-header") {
-        return new Response(
-          JSON.stringify({ token: req.headers.get("x-token") }),
-          { status: 200, headers: { "content-type": "application/json" } },
-        );
+        return new Response(JSON.stringify({ token: req.headers.get("x-token") }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
       }
       if (url.pathname === "/sleep") {
         return new Promise<Response>((resolve) =>
@@ -95,6 +95,82 @@ describe("test-fixture runner", () => {
     expect(r.failures[0]!.path).toBe("output.status");
     expect(r.failures[0]!.expected).toBe(200);
     expect(r.failures[0]!.actual).toBe(500);
+  });
+
+  test("async matcher predicates are awaited (pass and fail)", async () => {
+    mode = "ok";
+    const file = await writeFixture(
+      "async-matcher.crust.ts",
+      `export default [
+        {
+          name: "async matcher that resolves true",
+          input: { url: "${baseUrl}/users/42" },
+          output: { status: 200, data: async (d) => { await new Promise(r => setTimeout(r, 5)); return d.id === 42; } },
+        },
+        {
+          name: "async matcher that resolves false must FAIL",
+          input: { url: "${baseUrl}/users/42" },
+          output: { status: 200, data: async (d) => { await new Promise(r => setTimeout(r, 5)); return d.id === 999; } },
+        },
+      ];\n`,
+    );
+    const report = await runFixtures({ target: file, threads: 1 });
+    expect(report.totals.pass).toBe(1);
+    // Before diffAsync, a returned Promise was truthy and this silently passed.
+    expect(report.totals.fail).toBe(1);
+    expect(report.results[1]!.failures[0]!.path).toBe("output.data");
+  });
+
+  test("input as a function receives the setup context", async () => {
+    mode = "ok";
+    const file = await writeFixture(
+      "ctx-input.crust.ts",
+      `export default {
+        name: "setup token reaches the request",
+        setup: async () => ({ token: "ctx-" + "42" }),
+        input: (ctx) => ({
+          url: "${baseUrl}/echo-header",
+          headers: { "x-token": ctx.token },
+        }),
+        output: { status: 200, data: { token: "ctx-42" } },
+      };\n`,
+    );
+    const report = await runFixtures({ target: file, threads: 1 });
+    expect(report.totals.pass).toBe(1);
+    expect(report.totals.error).toBe(0);
+  });
+
+  test("unary input FIELD functions receive the setup context", async () => {
+    mode = "ok";
+    const file = await writeFixture(
+      "ctx-field.crust.ts",
+      `export default {
+        setup: () => ({ token: "field-ctx" }),
+        input: {
+          url: "${baseUrl}/echo-header",
+          headers: (ctx) => ({ "x-token": ctx.token }),
+        },
+        output: { status: 200, data: { token: "field-ctx" } },
+      };\n`,
+    );
+    const report = await runFixtures({ target: file, threads: 1 });
+    expect(report.totals.pass).toBe(1);
+    expect(report.totals.error).toBe(0);
+  });
+
+  test("output matchers receive the setup context as second argument", async () => {
+    mode = "ok";
+    const file = await writeFixture(
+      "ctx-matcher.crust.ts",
+      `export default {
+        setup: () => ({ expectedName: "Lario" }),
+        input: { url: "${baseUrl}/users/42" },
+        output: { status: 200, data: (d, ctx) => d.name === ctx.expectedName },
+      };\n`,
+    );
+    const report = await runFixtures({ target: file, threads: 1 });
+    expect(report.totals.pass).toBe(1);
+    expect(report.totals.error).toBe(0);
   });
 
   test("thunk in input is resolved at run time", async () => {

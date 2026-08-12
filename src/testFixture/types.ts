@@ -1,4 +1,9 @@
-export type Matcher<T = unknown> = T | ((actual: T) => boolean) | (() => unknown);
+// Matcher predicates receive the actual value and (since 0.2) the fixture's
+// setup context; they may be async — the runner awaits them.
+export type Matcher<T = unknown> =
+  | T
+  | ((actual: T, ctx?: unknown) => boolean | Promise<boolean>)
+  | (() => unknown);
 
 export interface FixtureInput {
   url: string;
@@ -9,21 +14,32 @@ export interface FixtureInput {
 }
 
 export interface FixtureOutput {
-  status?: number | ((actual: number) => boolean) | (() => unknown);
-  headers?: Record<string, unknown> | ((actual: Record<string, string>) => boolean) | (() => unknown);
+  status?:
+    | number
+    | ((actual: number, ctx?: unknown) => boolean | Promise<boolean>)
+    | (() => unknown);
+  headers?:
+    | Record<string, unknown>
+    | ((actual: Record<string, string>, ctx?: unknown) => boolean | Promise<boolean>)
+    | (() => unknown);
   data?: unknown;
   [key: string]: unknown;
 }
 
-export interface Fixture {
+export interface Fixture<Ctx = unknown> {
   name?: string;
-  setup?: () => unknown | Promise<unknown>;
-  teardown?: (ctx: unknown) => unknown | Promise<unknown>;
-  input: FixtureInput;
-  output: FixtureOutput;
+  setup?: () => Ctx | Promise<Ctx>;
+  teardown?: (ctx: Ctx) => unknown | Promise<unknown>;
+  // input/output may be built from the setup context: pass a function of ctx
+  // for the whole object, or 1-arg functions for individual input fields.
+  input: FixtureInput | ((ctx: Ctx) => FixtureInput | Promise<FixtureInput>);
+  output: FixtureOutput | ((ctx: Ctx) => FixtureOutput | Promise<FixtureOutput>);
 }
 
-export type FixtureModule = Fixture | Fixture[] | (() => Fixture | Fixture[] | Promise<Fixture | Fixture[]>);
+export type FixtureModule =
+  | Fixture
+  | Fixture[]
+  | (() => Fixture | Fixture[] | Promise<Fixture | Fixture[]>);
 
 export interface FixtureFailure {
   path: string;
