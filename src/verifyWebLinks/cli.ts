@@ -15,7 +15,7 @@ optionally diff Open Graph / meta tags against .crust.ts fixtures.
   --site-map-url <src>     URL (http://, https://) or local path to a sitemap.xml.
                            Mutually exclusive with --base-url.
   --base-url <url>         Auto-discover the sitemap: probe /robots.txt for
-                           Sitemap: lines, then fall back to /sitemap.xml.
+                           Sitemap: lines, then fall back to /sitemap.xml and /sitemap-index.xml.
   --fixtures <glob>        .crust.ts fixture file or glob exporting
                            { url, meta: { ... } } (or array). Each fixture's
                            meta is diffed against the page's extracted meta.

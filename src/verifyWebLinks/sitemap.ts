@@ -28,13 +28,22 @@ export async function discoverSeeds(opts: DiscoverOpts): Promise<DiscoverResult>
   const fromRobots = await tryRobots(base, opts);
   if (fromRobots.length > 0) return { seeds: fromRobots, origin: base };
 
-  const fallback = new URL("/sitemap.xml", base).toString();
-  const body = await loadSitemapBody(fallback, opts);
-  const seeds = await parseSitemap(body, opts);
-  if (seeds.length === 0) {
-    throw new Error(`no sitemap entries found via robots.txt or ${fallback}`);
+  // /sitemap.xml is the convention; /sitemap-index.xml is what Astro's
+  // sitemap integration emits by default — probe both before giving up.
+  const candidates = ["/sitemap.xml", "/sitemap-index.xml"];
+  for (const path of candidates) {
+    const fallback = new URL(path, base).toString();
+    try {
+      const body = await loadSitemapBody(fallback, opts);
+      const seeds = await parseSitemap(body, opts);
+      if (seeds.length > 0) return { seeds, origin: base };
+    } catch {
+      // try the next candidate
+    }
   }
-  return { seeds, origin: base };
+  throw new Error(
+    `no sitemap entries found via robots.txt, ${candidates.join(" or ")} on ${base.origin}`,
+  );
 }
 
 async function tryRobots(base: URL, opts: DiscoverOpts): Promise<string[]> {
