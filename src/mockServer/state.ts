@@ -66,12 +66,16 @@ export type SqlDialect = "sqlite" | "postgres";
 
 export interface StateSqlStrings {
   ddl: string;
+  ddlTouched: string;
   upsert: string;
+  touch: string;
   get: string;
   list: string;
   has: string;
+  hasTouched: string;
   del: string;
   clear: string;
+  clearTouched: string;
 }
 
 /**
@@ -85,14 +89,18 @@ export function stateSql(dialect: SqlDialect): StateSqlStrings {
         "CREATE TABLE IF NOT EXISTS crust_mock_state (" +
         "collection TEXT NOT NULL, id TEXT NOT NULL, doc TEXT, " +
         "updated_at TEXT NOT NULL, PRIMARY KEY (collection, id))",
+      ddlTouched: "CREATE TABLE IF NOT EXISTS crust_mock_touched (collection TEXT PRIMARY KEY)",
       upsert:
         "INSERT OR REPLACE INTO crust_mock_state (collection, id, doc, updated_at) " +
         "VALUES (?, ?, ?, ?)",
+      touch: "INSERT OR IGNORE INTO crust_mock_touched (collection) VALUES (?)",
       get: "SELECT doc FROM crust_mock_state WHERE collection = ? AND id = ?",
       list: "SELECT doc FROM crust_mock_state WHERE collection = ? ORDER BY updated_at, id",
       has: "SELECT 1 AS present FROM crust_mock_state WHERE collection = ? LIMIT 1",
+      hasTouched: "SELECT 1 AS present FROM crust_mock_touched WHERE collection = ? LIMIT 1",
       del: "DELETE FROM crust_mock_state WHERE collection = ? AND id = ? RETURNING id",
       clear: "DELETE FROM crust_mock_state",
+      clearTouched: "DELETE FROM crust_mock_touched",
     };
   }
   return {
@@ -100,14 +108,18 @@ export function stateSql(dialect: SqlDialect): StateSqlStrings {
       "CREATE TABLE IF NOT EXISTS crust_mock_state (" +
       "collection TEXT NOT NULL, id TEXT NOT NULL, doc JSONB, " +
       "updated_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY (collection, id))",
+    ddlTouched: "CREATE TABLE IF NOT EXISTS crust_mock_touched (collection TEXT PRIMARY KEY)",
     upsert:
       "INSERT INTO crust_mock_state (collection, id, doc) VALUES ($1, $2, $3::jsonb) " +
       "ON CONFLICT (collection, id) DO UPDATE SET doc = EXCLUDED.doc, updated_at = now()",
+    touch: "INSERT INTO crust_mock_touched (collection) VALUES ($1) ON CONFLICT DO NOTHING",
     get: "SELECT doc FROM crust_mock_state WHERE collection = $1 AND id = $2",
     list: "SELECT doc FROM crust_mock_state WHERE collection = $1 ORDER BY updated_at, id",
     has: "SELECT 1 AS present FROM crust_mock_state WHERE collection = $1 LIMIT 1",
+    hasTouched: "SELECT 1 AS present FROM crust_mock_touched WHERE collection = $1 LIMIT 1",
     del: "DELETE FROM crust_mock_state WHERE collection = $1 AND id = $2 RETURNING id",
     clear: "DELETE FROM crust_mock_state",
+    clearTouched: "DELETE FROM crust_mock_touched",
   };
 }
 
@@ -134,26 +146,31 @@ function createSqlClient(url: string): SqlClient {
 export class SqlStateBackend implements StateBackend {
   readonly dialect: SqlDialect;
   private readonly sql: StateSqlStrings;
-  // Collections written by THIS process. `has()` must stay true after a
-  // delete-all (the memory backend's "ever written" semantics — an emptied
-  // collection 404s instead of falling back to spec examples), which row
-  // existence alone can't express. Persisted rows cover the cross-process case.
+  // Fast path for collections written by THIS process; the persisted
+  // crust_mock_touched table carries the same "ever written" fact across
+  // processes and restarts, so a delete-emptied collection keeps 404ing
+  // (never reverts to spec examples) no matter who emptied it.
   private readonly touched = new Set<string>();
   private ready: Promise<SqlClient> | null = null;
 
   constructor(readonly url: string) {
-    this.dialect = url.startsWith("sqlite:") ? "sqlite" : "postgres";
+    this.dialect = stateDialect(url);
     this.sql = stateSql(this.dialect);
   }
 
   // Lazy open + idempotent DDL, function-wrapped (never top-level await —
-  // that breaks --bytecode compiles).
+  // that breaks --bytecode compiles). A failed open is NOT cached: the next
+  // call retries instead of serving the stale rejection forever.
   private ensure(): Promise<SqlClient> {
     this.ready ??= (async () => {
       const client = createSqlClient(this.url);
       await client.unsafe(this.sql.ddl);
+      await client.unsafe(this.sql.ddlTouched);
       return client;
-    })();
+    })().catch((err) => {
+      this.ready = null;
+      throw err;
+    });
     return this.ready;
   }
 
@@ -173,7 +190,9 @@ export class SqlStateBackend implements StateBackend {
     if (this.touched.has(collection)) return true;
     const client = await this.ensure();
     const rows = await client.unsafe(this.sql.has, [collection]);
-    return rows.length > 0;
+    if (rows.length > 0) return true;
+    const marks = await client.unsafe(this.sql.hasTouched, [collection]);
+    return marks.length > 0;
   }
 
   async put(collection: string, id: string, doc: Record<string, unknown>): Promise<void> {
@@ -183,12 +202,14 @@ export class SqlStateBackend implements StateBackend {
         ? [collection, id, JSON.stringify(doc), new Date().toISOString()]
         : [collection, id, JSON.stringify(doc)];
     await client.unsafe(this.sql.upsert, params);
+    await client.unsafe(this.sql.touch, [collection]);
     this.touched.add(collection);
   }
 
   async delete(collection: string, id: string): Promise<boolean> {
     const client = await this.ensure();
     const rows = await client.unsafe(this.sql.del, [collection, id]);
+    await client.unsafe(this.sql.touch, [collection]);
     this.touched.add(collection);
     return rows.length > 0;
   }
@@ -196,6 +217,7 @@ export class SqlStateBackend implements StateBackend {
   async clear(): Promise<void> {
     const client = await this.ensure();
     await client.unsafe(this.sql.clear);
+    await client.unsafe(this.sql.clearTouched);
     this.touched.clear();
   }
 
@@ -225,7 +247,11 @@ export function normalizeStateUrl(state: string): string {
   const m = SCHEME.exec(state);
   if (!m) return `sqlite://${state}`;
   const scheme = m[1]!.toLowerCase();
-  if (scheme === "sqlite" || scheme === "postgres" || scheme === "postgresql") return state;
+  if (scheme === "sqlite" || scheme === "postgres" || scheme === "postgresql") {
+    // Canonicalize the scheme so dialect detection downstream can't disagree
+    // with the check here (SQLITE://x must not open as postgres).
+    return scheme + state.slice(m[1]!.length);
+  }
   throw new Error(
     `unsupported --state scheme '${scheme}:' (use a file path, sqlite://, or postgres://)`,
   );

@@ -435,13 +435,19 @@ async function applySeed(
     }
     // Empty-only: collections that already have rows are left untouched.
     if (await backend.has(collection)) continue;
-    for (const item of items) {
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i]!;
       if (!isPlainObject(item)) {
         throw new Error(`seed collection '${collection}' contains a non-object item`);
       }
       const rawId = item.id;
+      // Id-less seed items get a DETERMINISTIC id (hash of collection+index+
+      // content) so concurrent seeders of a shared store converge on the same
+      // rows instead of racing random UUIDs into duplicates.
       const id =
-        typeof rawId === "string" || typeof rawId === "number" ? rawId : crypto.randomUUID();
+        typeof rawId === "string" || typeof rawId === "number"
+          ? rawId
+          : `seed-${Bun.hash(`${collection}#${i}#${JSON.stringify(item)}`).toString(16)}`;
       await backend.put(collection, String(id), { ...item, id });
       inserted++;
     }

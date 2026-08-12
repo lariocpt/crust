@@ -64,7 +64,12 @@ function collectStdout(proc: ReturnType<typeof Bun.spawn>): { text: string } {
 
 async function pollUntil(cond: () => boolean, capMs = 1000): Promise<void> {
   const deadline = Date.now() + capMs;
-  while (!cond() && Date.now() < deadline) {
+  while (!cond()) {
+    if (Date.now() >= deadline) {
+      // Loud, not silent: proceeding on expiry would race the assertions
+      // this poll exists to order.
+      throw new Error(`pollUntil: condition not met within ${capMs}ms`);
+    }
     await new Promise((r) => setTimeout(r, 20));
   }
 }

@@ -184,17 +184,26 @@ async function runOne(
     // input/output may be functions of the setup context — the only way a
     // fixture can put a setup-created credential or id into the request.
     const rawInput = typeof fx.input === "function" ? await fx.input(setupCtx as never) : fx.input;
+    // Resolve a whole-output FUNCTION of any arity here (a 0-arg one ignores
+    // the ctx argument) so the schema extraction below sees the resolved
+    // object — otherwise a 0-arg output factory returning {schema} would
+    // smuggle the schema past extraction into the structural walk.
     let rawOutput =
-      typeof fx.output === "function" && (fx.output as Function).length >= 1
-        ? await (fx.output as (c: unknown) => unknown)(setupCtx)
+      typeof fx.output === "function"
+        ? await (fx.output as (c?: unknown) => unknown)(setupCtx)
         : fx.output;
     // `schema` is a RESERVED output key: a JSON Schema the response body must
     // conform to. Extracted BEFORE resolveDeep — a schema object may carry
-    // keys like `default` whose function values must never be invoked.
+    // keys like `default` whose function values must never be invoked. A
+    // 0-arg FUNCTION as the schema value is the lazy-field form and is
+    // resolved (its returned object's nested functions stay uninvoked).
     let responseSchema: unknown;
     if (rawOutput && typeof rawOutput === "object" && "schema" in rawOutput) {
       const { schema, ...rest } = rawOutput as Record<string, unknown>;
-      responseSchema = schema;
+      responseSchema =
+        typeof schema === "function" && schema.length === 0
+          ? await (schema as () => unknown)()
+          : schema;
       rawOutput = rest as typeof rawOutput;
     }
     const input = (await resolveDeep(rawInput, setupCtx, true)) as Record<string, unknown>;

@@ -1,9 +1,47 @@
 import { Pipeline, type PipelineStage, pipelineStage } from "./pipeline";
 
 // True when an error came from an AbortSignal.timeout firing.
-function isTimeoutError(err: unknown): boolean {
+export function isTimeoutError(err: unknown): boolean {
   const name = (err as { name?: string }).name;
   return name === "TimeoutError" || name === "AbortError";
+}
+
+/** Thrown (or rethrown) only when a stage-minted --timeout budget fired. */
+export class HttpTimeoutError extends Error {
+  constructor(method: string, url: string, timeoutMs: number) {
+    super(`${method} ${url}: timed out after ${timeoutMs}ms`);
+    this.name = "HttpTimeoutError";
+  }
+}
+
+// A Response can outlive its fetch: the --timeout signal keeps governing the
+// body stream, so a budget that fires while a DOWNSTREAM stage reads the body
+// would surface as a bare "The operation timed out." with no verb/url. Patch
+// the body-consuming methods on the instance so the label survives — only
+// called when the stage minted the signal itself.
+export function labelBodyTimeout(
+  res: Response,
+  method: string,
+  url: string,
+  timeoutMs: number,
+): Response {
+  const patch = <K extends "text" | "json" | "arrayBuffer" | "blob" | "bytes">(key: K) => {
+    const original = (res[key] as () => Promise<unknown>).bind(res);
+    (res as unknown as Record<string, unknown>)[key] = async () => {
+      try {
+        return await original();
+      } catch (err) {
+        if (isTimeoutError(err)) throw new HttpTimeoutError(method, url, timeoutMs);
+        throw err;
+      }
+    };
+  };
+  patch("text");
+  patch("json");
+  patch("arrayBuffer");
+  patch("blob");
+  patch("bytes");
+  return res;
 }
 
 async function httpRequest(
@@ -16,9 +54,13 @@ async function httpRequest(
   const init: RequestInit = { ...opts, method };
   // Minted PER REQUEST — a signal created at parse time would start its
   // clock at parse and abort every request after the first window. A
-  // caller-supplied signal (TS API) always wins.
+  // caller-supplied signal (TS API) always wins, and only a MINTED signal's
+  // abort may ever be classified as a timeout (a caller's own abort must
+  // never be relabeled as one).
+  let minted = false;
   if (timeoutMs !== undefined && !opts?.signal) {
     init.signal = AbortSignal.timeout(timeoutMs);
+    minted = true;
   }
 
   if (body !== undefined && body !== null) {
@@ -37,10 +79,11 @@ async function httpRequest(
   }
 
   try {
-    return await fetch(url, init);
+    const res = await fetch(url, init);
+    return minted ? labelBodyTimeout(res, method, url, timeoutMs!) : res;
   } catch (err) {
-    if (timeoutMs !== undefined && isTimeoutError(err)) {
-      throw new Error(`${method} ${url}: timed out after ${timeoutMs}ms`);
+    if (minted && isTimeoutError(err)) {
+      throw new HttpTimeoutError(method, url, timeoutMs!);
     }
     throw err;
   }
@@ -236,7 +279,11 @@ export function timedGet(
   return async (_x: unknown) => {
     const t0 = performance.now();
     const init: RequestInit = { ...opts };
-    if (timeoutMs !== undefined && !opts?.signal) init.signal = AbortSignal.timeout(timeoutMs);
+    let minted = false;
+    if (timeoutMs !== undefined && !opts?.signal) {
+      init.signal = AbortSignal.timeout(timeoutMs);
+      minted = true;
+    }
     try {
       const r = await fetch(url, init);
       // Drain so keep-alive sockets recycle and timing includes the body.
@@ -244,8 +291,9 @@ export function timedGet(
       return { status: r.status, ms: performance.now() - t0, url };
     } catch (err) {
       const hit: TimedHit = { status: 0, ms: performance.now() - t0, url };
-      // Distinguish a timeout from a refusal — both are status 0 records.
-      if (timeoutMs !== undefined && isTimeoutError(err)) hit.timedOut = true;
+      // Distinguish a MINTED timeout from a refusal or a caller abort —
+      // all are status 0 records, but only the budget firing is a timeout.
+      if (minted && isTimeoutError(err)) hit.timedOut = true;
       return hit;
     }
   };
@@ -270,9 +318,9 @@ export function timedHttpItem(
       return { status: r.status, ms: performance.now() - t0, url };
     } catch (err) {
       const hit: TimedHit = { status: 0, ms: performance.now() - t0, url };
-      if (timeoutMs !== undefined && /timed out after/.test((err as Error).message)) {
-        hit.timedOut = true;
-      }
+      // httpRequest throws HttpTimeoutError ONLY for its own minted budget —
+      // typed check, not a message regex (URLs can contain anything).
+      if (err instanceof HttpTimeoutError) hit.timedOut = true;
       return hit;
     }
   };

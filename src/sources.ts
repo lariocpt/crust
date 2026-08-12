@@ -2,6 +2,7 @@ import { stat } from "node:fs/promises";
 import { file, Glob } from "bun";
 import { Pipeline } from "./pipeline";
 import { awaitReady, formatReadyTarget, parseReadyTarget, type ReadyTarget } from "./readiness";
+import { HttpTimeoutError, isTimeoutError, labelBodyTimeout } from "./transforms";
 
 export function range(start: number, end: number): Pipeline<number> {
   return Pipeline.of(
@@ -210,14 +211,21 @@ export function GET(url: string, opts?: RequestInit, timeoutMs?: number): Pipeli
   return Pipeline.of(
     (async function* () {
       const init: RequestInit = { ...opts, method: "GET" };
-      // Minted at generator start (one request per source), caller signal wins.
-      if (timeoutMs !== undefined && !opts?.signal) init.signal = AbortSignal.timeout(timeoutMs);
+      // Minted at generator start (one request per source); a caller signal
+      // wins, and only a MINTED signal's abort is ever labeled a timeout.
+      let minted = false;
+      if (timeoutMs !== undefined && !opts?.signal) {
+        init.signal = AbortSignal.timeout(timeoutMs);
+        minted = true;
+      }
       try {
-        yield await fetch(url, init);
+        const res = await fetch(url, init);
+        // The budget keeps governing the body stream downstream — label
+        // body-phase timeouts too instead of a bare "operation timed out".
+        yield minted ? labelBodyTimeout(res, "GET", url, timeoutMs!) : res;
       } catch (err) {
-        const name = (err as { name?: string }).name;
-        if (timeoutMs !== undefined && (name === "TimeoutError" || name === "AbortError")) {
-          throw new Error(`GET ${url}: timed out after ${timeoutMs}ms`);
+        if (minted && isTimeoutError(err)) {
+          throw new HttpTimeoutError("GET", url, timeoutMs!);
         }
         throw err;
       }
@@ -607,10 +615,12 @@ export function procs(
 // load — a paced arrival schedule for load runs. `load 30s 100/s` yields one
 // tick per scheduled slot; ramps are phase lists (`load 10s 50/s, 30s 200/s`).
 //
-// Open-loop honesty: slots are anchored to absolute times (no drift). When
-// the consumer can't keep up (parallel pool saturated), stale slots are
-// SKIPPED — never burst to catch up — counted, and reported to stderr on
-// drain. Downstream `stats` reports the MEASURED rate only, so the tool
+// Open-loop honesty: slots are anchored to absolute times (no drift). Each
+// wakeup emits EVERY due slot (catch-up of due slots IS the schedule, not a
+// burst), so the generator sustains multi-thousand-tick rates. A due slot is
+// dropped only when consumer backpressure made it older than maxLagMs
+// (default 1s) or the phase clock ran out — counted, and reported to stderr
+// on drain. Downstream `stats` reports the MEASURED rate only, so the tool
 // structurally cannot claim an arrival rate it didn't sustain.
 // ---------------------------------------------------------------------------
 

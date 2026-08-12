@@ -57,6 +57,15 @@ export async function runCli(args: string[]): Promise<number> {
     return n;
   }
 
+  // A value-taking flag must not silently swallow the next flag as its value.
+  function strFlag(value: string | undefined, name: string): string | null {
+    if (value === undefined || value.startsWith("--")) {
+      process.stderr.write(`mock-server: ${name} requires a value\n`);
+      return null;
+    }
+    return value;
+  }
+
   for (let i = 0; i < args.length; i++) {
     const a = args[i]!;
     if (a === "-h" || a === "--help") {
@@ -82,11 +91,15 @@ export async function runCli(args: string[]): Promise<number> {
     } else if (a === "--stateful") {
       stateful = true;
     } else if (a === "--state") {
-      state = args[++i];
+      const v = strFlag(args[++i], "--state");
+      if (v === null) return 2;
+      state = v;
     } else if (a.startsWith("--state=")) {
       state = a.slice("--state=".length);
     } else if (a === "--seed") {
-      seed = args[++i];
+      const v = strFlag(args[++i], "--seed");
+      if (v === null) return 2;
+      seed = v;
     } else if (a.startsWith("--seed=")) {
       seed = a.slice("--seed=".length);
     } else if (a === "--validate") {

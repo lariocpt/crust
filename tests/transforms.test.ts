@@ -362,3 +362,67 @@ describe("http --timeout paths", () => {
     }
   });
 });
+
+describe("review fixes — timeout classification", () => {
+  test("a caller abort is NOT flagged as a timeout even when timeoutMs is set", async () => {
+    const slow = Bun.serve({
+      port: 0,
+      async fetch() {
+        await Bun.sleep(500);
+        return new Response("late");
+      },
+    });
+    try {
+      const ctrl = new AbortController();
+      setTimeout(() => ctrl.abort(), 20);
+      const hit = await timedGet(
+        `http://localhost:${slow.port}/x`,
+        { signal: ctrl.signal },
+        5000,
+      )({});
+      expect(hit.status).toBe(0);
+      expect(hit.timedOut).toBeUndefined();
+      const ctrl2 = new AbortController();
+      setTimeout(() => ctrl2.abort(), 20);
+      const hit2 = await timedHttpItem(
+        "POST",
+        `http://localhost:${slow.port}/x`,
+        {
+          signal: ctrl2.signal,
+        },
+        5000,
+      )({ a: 1 });
+      expect(hit2.timedOut).toBeUndefined();
+    } finally {
+      slow.stop(true);
+    }
+  });
+
+  test("a body-phase timeout keeps the labeled message on plain verbs", async () => {
+    const streamer = Bun.serve({
+      port: 0,
+      fetch() {
+        const stream = new ReadableStream({
+          async start(c) {
+            c.enqueue(new TextEncoder().encode("head"));
+            await Bun.sleep(500);
+            c.enqueue(new TextEncoder().encode("tail"));
+            c.close();
+          },
+        });
+        return new Response(stream);
+      },
+    });
+    try {
+      const p = Pipeline.of([{ a: 1 }])
+        .pipe(POST(`http://localhost:${streamer.port}/x`, undefined, 80))
+        .pipe(async (r: Response) => await r.text())
+        .collect();
+      await expect(p).rejects.toThrow(
+        `POST http://localhost:${streamer.port}/x: timed out after 80ms`,
+      );
+    } finally {
+      streamer.stop(true);
+    }
+  });
+});

@@ -338,9 +338,10 @@ describe("restart persistence (sqlite)", () => {
 describe("--seed", () => {
   const seedItems = [{ id: "s-1", name: "Seeded One" }, { name: "No Id Yet" }];
 
-  test("fresh backend seeds and serves the list; missing ids get uuids", async () => {
+  test("fresh backend seeds and serves the list; missing ids are deterministic", async () => {
     const seedPath = join(dir, "seed-ok.json");
     await writeFile(seedPath, JSON.stringify({ "/things": seedItems }));
+    let firstDerivedId = "";
     await withServer({ spec: FLAT_SPEC, seed: seedPath }, async (server, base) => {
       expect(server.seeded).toBe(2);
       const list = (await (await fetch(`${base}/things`)).json()) as {
@@ -349,11 +350,19 @@ describe("--seed", () => {
       expect(list.items.length).toBe(2);
       expect(list.items.some((i) => i.id === "s-1")).toBe(true);
       const noId = list.items.find((i) => i.name === "No Id Yet")!;
-      expect(typeof noId.id).toBe("string");
-      expect(noId.id.length).toBe(36); // crypto.randomUUID()
+      // Deterministic content-derived id, not a random uuid — concurrent
+      // seeders of a shared store must converge on identical rows.
+      expect(noId.id.startsWith("seed-")).toBe(true);
+      firstDerivedId = noId.id;
       // seeded collections count as written: item GET hits the store
       expect((await fetch(`${base}/things/s-1`)).status).toBe(200);
       expect((await fetch(`${base}/things/absent`)).status).toBe(404);
+    });
+    await withServer({ spec: FLAT_SPEC, seed: seedPath }, async (_server, base) => {
+      const list = (await (await fetch(`${base}/things`)).json()) as {
+        items: Array<{ id: string; name: string }>;
+      };
+      expect(list.items.find((i) => i.name === "No Id Yet")!.id).toBe(firstDerivedId);
     });
   });
 
@@ -689,3 +698,44 @@ async function queryFile(path: string, query: string): Promise<unknown[]> {
     await client.close();
   }
 }
+
+describe("review fixes — state backend", () => {
+  test("normalizeStateUrl canonicalizes scheme case", async () => {
+    const { normalizeStateUrl, stateDialect } = await import("../src/mockServer/state");
+    expect(normalizeStateUrl("SQLITE://./x.db")).toBe("sqlite://./x.db");
+    expect(stateDialect(normalizeStateUrl("SQLITE://./x.db"))).toBe("sqlite");
+  });
+
+  test("has() survives delete-all across a fresh backend over the same file", async () => {
+    const { SqlStateBackend } = await import("../src/mockServer/state");
+    const { mkdtemp, rm } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const d = await mkdtemp(join(tmpdir(), "crust-touch-"));
+    try {
+      const file = join(d, "s.sqlite");
+      const a = new SqlStateBackend(`sqlite://${file}`);
+      await a.put("/api/things", "1", { id: "1" });
+      await a.delete("/api/things", "1");
+      await a.close();
+      // A different process (fresh backend, empty in-memory Set) must still
+      // know the collection was written — emptied ≠ untouched.
+      const b = new SqlStateBackend(`sqlite://${file}`);
+      expect(await b.has("/api/things")).toBe(true);
+      await b.clear();
+      expect(await b.has("/api/things")).toBe(false);
+      await b.close();
+    } finally {
+      await rm(d, { recursive: true, force: true });
+    }
+  });
+
+  test("a failed open is retryable, not cached", async () => {
+    const { SqlStateBackend } = await import("../src/mockServer/state");
+    const bad = new SqlStateBackend("postgres://nobody@127.0.0.1:1/nope");
+    await expect(bad.get("/x", "1")).rejects.toThrow();
+    // Second call must attempt again (fresh rejection, not the cached one).
+    await expect(bad.get("/x", "1")).rejects.toThrow();
+    await bad.close();
+  });
+});

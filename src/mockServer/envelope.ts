@@ -59,7 +59,12 @@ export function computeEnvelopes(routes: Route[], spec: OpenApiSpec): Map<string
     let req: string | null = null;
     if (post) {
       create = detectEnvelopeKey(synthesizeBody(pickResponse(post.operation).media, spec));
-      req = detectEnvelopeKey(requestBodyExample(post.operation, spec));
+      // A request envelope is only trusted when it AGREES with the response
+      // side: a lone object-valued request prop that isn't the response's
+      // envelope key (e.g. an `owner: {...}` sub-object on a flat create) is
+      // entity data, and unwrapping it would corrupt stored entities.
+      const reqCandidate = detectEnvelopeKey(requestBodyExample(post.operation, spec));
+      req = reqCandidate !== null && reqCandidate === create ? reqCandidate : null;
     }
     // Item responses reuse the create envelope when the item GET documents no
     // body; an item GET that documents its own (even flat) object wins.
