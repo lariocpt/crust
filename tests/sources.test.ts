@@ -371,6 +371,207 @@ describe("procs object specs", () => {
   });
 });
 
+// Concurrent: each test owns its servers and pipelines, and the mandated
+// 250ms restart backoffs + probe timeouts would otherwise stack serially.
+describe.concurrent("procs readiness and ordering", () => {
+  type Line = { proc: string; stream: string; line: string };
+
+  // Bun.serve that answers 503 until `flipAfterMs`, then 200.
+  function flipServer(flipAfterMs: number) {
+    let up = false;
+    const timer = setTimeout(() => {
+      up = true;
+    }, flipAfterMs);
+    const server = Bun.serve({
+      port: 0,
+      fetch: () => new Response(up ? "ok" : "starting", { status: up ? 200 : 503 }),
+    });
+    return {
+      url: `http://localhost:${server.port}/health`,
+      stop: () => {
+        clearTimeout(timer);
+        server.stop(true);
+      },
+    };
+  }
+
+  // A TCP port that is (almost certainly) closed: bind, note, release.
+  function deadPort(): number {
+    const l = Bun.listen({ hostname: "localhost", port: 0, socket: { data() {} } });
+    const port = l.port;
+    l.stop(true);
+    return port;
+  }
+
+  async function collectUntil(
+    pipeline: { lines(): AsyncIterable<Line> },
+    done: (l: Line, all: Line[]) => boolean,
+  ): Promise<Line[]> {
+    const lines: Line[] = [];
+    const iter = pipeline.lines()[Symbol.asyncIterator]();
+    try {
+      for (;;) {
+        const { value, done: d } = await iter.next();
+        if (d) break;
+        lines.push(value);
+        if (done(value, lines)) break;
+      }
+    } finally {
+      await iter.return?.(undefined as never);
+    }
+    return lines;
+  }
+
+  test("ready(http): probes until the target answers 2xx, then emits the ready line", async () => {
+    const { procs } = await import("../src/sources");
+    const srv = flipServer(70);
+    try {
+      const lines = await collectUntil(
+        procs({
+          web: { cmd: "sleep 5", ready: { url: srv.url, intervalMs: 10, timeoutMs: 1000 } },
+        }),
+        (l) => l.stream === "ready" && l.line.startsWith("ready after"),
+      );
+      const ready = lines.find((l) => l.stream === "ready" && l.line.startsWith("ready after"));
+      expect(ready).toBeDefined();
+      expect(ready!.proc).toBe("web");
+      expect(ready!.line).toMatch(/^ready after \d+ms \(http:\/\/localhost:/);
+      expect(lines.some((l) => l.line.startsWith("not ready"))).toBe(false);
+    } finally {
+      srv.stop();
+    }
+  });
+
+  test("ready(tcp): the port:N string form connects to a live listener", async () => {
+    const { procs } = await import("../src/sources");
+    const listener = Bun.listen({
+      hostname: "localhost",
+      port: 0,
+      socket: {
+        data() {},
+        open(s) {
+          s.end();
+        },
+      },
+    });
+    try {
+      const lines = await collectUntil(
+        procs({ db: { cmd: "sleep 5", ready: `port:${listener.port}` } }),
+        (l) => l.stream === "ready" && l.line.startsWith("ready after"),
+      );
+      const ready = lines.find((l) => l.line.startsWith("ready after"));
+      expect(ready).toBeDefined();
+      expect(ready!.line).toContain(`(port:${listener.port})`);
+    } finally {
+      listener.stop(true);
+    }
+  });
+
+  test("after: dependent spawns only once the dependency is ready", async () => {
+    const { procs } = await import("../src/sources");
+    const srv = flipServer(80);
+    try {
+      const lines = await collectUntil(
+        procs({
+          dep: { cmd: "sleep 5", ready: { url: srv.url, intervalMs: 10, timeoutMs: 1000 } },
+          app: { cmd: "echo B", after: "dep" },
+        }),
+        (l) => l.proc === "app" && l.stream === "stdout",
+      );
+      const waitIdx = lines.findIndex((l) => l.proc === "app" && l.line === "waiting for dep");
+      const readyIdx = lines.findIndex(
+        (l) => l.proc === "dep" && l.stream === "ready" && l.line.startsWith("ready after"),
+      );
+      const bIdx = lines.findIndex((l) => l.proc === "app" && l.stream === "stdout");
+      expect(waitIdx).toBeGreaterThanOrEqual(0);
+      expect(readyIdx).toBeGreaterThanOrEqual(0);
+      expect(bIdx).toBeGreaterThan(readyIdx);
+      expect(waitIdx).toBeLessThan(bIdx);
+    } finally {
+      srv.stop();
+    }
+  });
+
+  test("after a dep WITHOUT ready: gates on the dep's spawn", async () => {
+    const { procs } = await import("../src/sources");
+    const lines = await procs({
+      a: "echo A",
+      b: { cmd: "echo B", after: "a" },
+    }).collect();
+    expect(
+      lines.some((l) => l.proc === "b" && l.stream === "ready" && l.line === "waiting for a"),
+    ).toBe(true);
+    expect(lines.some((l) => l.proc === "a" && l.stream === "stdout" && l.line === "A")).toBe(true);
+    expect(lines.some((l) => l.proc === "b" && l.stream === "stdout" && l.line === "B")).toBe(true);
+  });
+
+  test("ready timeout without restart fails the pipeline loudly", async () => {
+    const { procs } = await import("../src/sources");
+    const port = deadPort();
+    await expect(
+      procs({
+        web: { cmd: "sleep 5", ready: { port, timeoutMs: 100, intervalMs: 10 } },
+      }).collect(),
+    ).rejects.toThrow(/not ready after 100ms/);
+  });
+
+  test("ready timeout with restart {max: 1}: not ready -> restarting -> giving up", async () => {
+    const { procs } = await import("../src/sources");
+    const port = deadPort();
+    const lines = await procs({
+      web: {
+        cmd: "sleep 5",
+        ready: { port, timeoutMs: 60, intervalMs: 10 },
+        restart: { max: 1 },
+      },
+    }).collect();
+    const notReadyIdx = lines.findIndex((l) => l.line.startsWith("not ready after"));
+    const restartIdx = lines.findIndex((l) => l.line === "restarting in 250ms");
+    const giveUpIdx = lines.findIndex((l) => l.line === "giving up after 1 restart(s)");
+    expect(notReadyIdx).toBeGreaterThanOrEqual(0);
+    expect(restartIdx).toBeGreaterThan(notReadyIdx);
+    expect(giveUpIdx).toBeGreaterThan(restartIdx);
+  });
+
+  test("restart {max: 1}: exactly two spawns, then the give-up line", async () => {
+    const { procs } = await import("../src/sources");
+    const lines = await procs({
+      flaky: { cmd: "echo ran; exit 1", restart: { max: 1 } },
+    }).collect();
+    const runs = lines.filter((l) => l.stream === "stdout" && l.line === "ran").length;
+    expect(runs).toBe(2);
+    expect(lines.filter((l) => l.line.startsWith("restarting in"))).toHaveLength(1);
+    expect(lines.some((l) => l.line === "giving up after 1 restart(s)")).toBe(true);
+  });
+
+  test("a dep that gives up before becoming ready rejects its dependents", async () => {
+    const { procs } = await import("../src/sources");
+    const port = deadPort();
+    await expect(
+      procs({
+        dep: {
+          cmd: "sleep 5",
+          ready: { port, timeoutMs: 60, intervalMs: 10 },
+          restart: { max: 0 },
+        },
+        app: { cmd: "echo up", after: "dep" },
+      }).collect(),
+    ).rejects.toThrow(/dependency "dep" exited before becoming ready/);
+  });
+
+  test("unknown after name, self-dependency, and cycles throw synchronously", async () => {
+    const { procs } = await import("../src/sources");
+    expect(() => procs({ a: { cmd: "echo hi", after: "nope" } })).toThrow(/unknown proc "nope"/);
+    expect(() => procs({ a: { cmd: "echo hi", after: "a" } })).toThrow(/cannot come after itself/);
+    expect(() =>
+      procs({
+        a: { cmd: "echo a", after: "b" },
+        b: { cmd: "echo b", after: "a" },
+      }),
+    ).toThrow(/dependency cycle/);
+  });
+});
+
 describe("load", () => {
   test("emits paced ticks across phases with monotonic n", async () => {
     const ticks = await load([

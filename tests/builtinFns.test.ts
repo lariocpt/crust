@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { base64 } from "../src/builtinFns/base64";
 import { jwt } from "../src/builtinFns/jwt";
 import { salt } from "../src/builtinFns/salt";
+import { wait } from "../src/builtinFns/wait";
+import { parseDuration } from "../src/readiness";
 import { random } from "../src/testFixture/random";
 
 describe("base64", () => {
@@ -141,6 +143,76 @@ describe("random helpers", () => {
     const shuf = random.shuffle(arr);
     expect(shuf.sort()).toEqual([1, 2, 3, 4, 5]);
     expect(arr).toEqual([1, 2, 3, 4, 5]);
+  });
+});
+
+// Concurrent: every test owns its target server, and the probe timeouts
+// (100ms dead-target, 50ms flip) would otherwise stack serially.
+describe.concurrent("wait", () => {
+  test("resolves once an http target flips healthy (shorthand :port/path)", async () => {
+    let up = false;
+    const timer = setTimeout(() => {
+      up = true;
+    }, 50);
+    const server = Bun.serve({
+      port: 0,
+      fetch: () => new Response(up ? "ok" : "starting", { status: up ? 200 : 503 }),
+    });
+    try {
+      const res = await wait(`:${server.port}/`, "--interval", "10ms", "--timeout", "1s");
+      expect(res.ready).toBe(true);
+      expect(res.target).toBe(`:${server.port}/`);
+      expect(res.attempts).toBeGreaterThan(1);
+      expect(res.ms).toBeGreaterThanOrEqual(30);
+    } finally {
+      clearTimeout(timer);
+      server.stop(true);
+    }
+  });
+
+  test("rejects when the target never comes up within --timeout", async () => {
+    const l = Bun.listen({ hostname: "localhost", port: 0, socket: { data() {} } });
+    const dead = l.port;
+    l.stop(true);
+    await expect(wait(`port:${dead}`, "--timeout", "100ms", "--interval", "10ms")).rejects.toThrow(
+      /not ready after 100ms/,
+    );
+  });
+
+  test("port: form connects to a live tcp listener (--flag=value form)", async () => {
+    const listener = Bun.listen({
+      hostname: "localhost",
+      port: 0,
+      socket: {
+        data() {},
+        open(s) {
+          s.end();
+        },
+      },
+    });
+    try {
+      const res = await wait(`port:${listener.port}`, "--timeout=1s", "--interval=10ms");
+      expect(res.ready).toBe(true);
+      expect(res.attempts).toBeGreaterThanOrEqual(1);
+    } finally {
+      listener.stop(true);
+    }
+  });
+
+  test("bad arguments throw usage-style errors", async () => {
+    await expect(wait()).rejects.toThrow(/missing target/);
+    await expect(wait("port:1", "--timeout", "soon")).rejects.toThrow(/bad duration/);
+    await expect(wait("localhost:80")).rejects.toThrow(/bad target/);
+    await expect(wait("port:1", "--frobnicate", "2")).rejects.toThrow(/unknown flag/);
+  });
+
+  test("parseDuration accepts ms/s/m and bare numbers, rejects junk", () => {
+    expect(parseDuration("300")).toBe(300);
+    expect(parseDuration("300ms")).toBe(300);
+    expect(parseDuration("30s")).toBe(30_000);
+    expect(parseDuration("2m")).toBe(120_000);
+    expect(() => parseDuration("soon")).toThrow(/bad duration/);
+    expect(() => parseDuration("10h")).toThrow(/bad duration/);
   });
 });
 

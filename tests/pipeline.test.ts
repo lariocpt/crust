@@ -152,7 +152,12 @@ describe("load pipeline stages", () => {
   test("parallel N | POST yields timing records — percentiles are real", async () => {
     const server = Bun.serve({
       port: 0,
-      fetch: () => new Response("{}", { status: 201 }),
+      // Measurable latency: sub-0.05ms localhost responses round p50 to 0.0
+      // via toFixed(1), which made this flake on fast machines.
+      fetch: async () => {
+        await Bun.sleep(2);
+        return new Response("{}", { status: 201 });
+      },
     });
     try {
       const { parse } = await import("../src/parser");

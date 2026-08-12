@@ -1,6 +1,7 @@
 import { stat } from "node:fs/promises";
 import { file, Glob } from "bun";
 import { Pipeline } from "./pipeline";
+import { awaitReady, formatReadyTarget, parseReadyTarget, type ReadyTarget } from "./readiness";
 
 export function range(start: number, end: number): Pipeline<number> {
   return Pipeline.of(
@@ -224,16 +225,90 @@ export function GET(url: string, opts?: RequestInit): Pipeline<Response> {
 export interface ProcLine {
   /** Name of the process this line came from (the spec key). */
   proc: string;
-  stream: "stdout" | "stderr" | "exit";
+  stream: "stdout" | "stderr" | "exit" | "ready";
   line: string;
+}
+
+export interface ReadySpec {
+  /** ":3001/api/health" | "http(s)://…" | "port:3001" */
+  url?: string;
+  /** TCP-connect probe on localhost:<port> (alternative to url) */
+  port?: number;
+  /** give up after this long (default 30s) */
+  timeoutMs?: number;
+  /** probe cadence (default 250ms) */
+  intervalMs?: number;
 }
 
 export interface ProcSpec {
   cmd: string;
   /** extra env for THIS process (merged over the inherited environment) */
   env?: Record<string, string>;
-  /** respawn on unexpected exit (backoff 250ms -> 2s); user kill never respawns */
-  restart?: boolean;
+  /**
+   * respawn on unexpected exit (backoff 250ms -> 2s); user kill never
+   * respawns. `{max: N}` gives up after N consecutive restarts (a stretch of
+   * >10s uptime resets the counter).
+   */
+  restart?: boolean | { max?: number };
+  /** readiness probe — the proc counts as "up" only once this answers */
+  ready?: string | ReadySpec;
+  /** spawn only after these procs are READY (their spec keys) */
+  after?: string | string[];
+}
+
+const READY_DEFAULT_TIMEOUT_MS = 30_000;
+const READY_DEFAULT_INTERVAL_MS = 250;
+
+interface NormalizedReady {
+  target: ReadyTarget;
+  timeoutMs: number;
+  intervalMs: number;
+}
+
+function normalizeReady(name: string, r: string | ReadySpec): NormalizedReady {
+  if (typeof r === "string") {
+    return {
+      target: parseReadyTarget(r),
+      timeoutMs: READY_DEFAULT_TIMEOUT_MS,
+      intervalMs: READY_DEFAULT_INTERVAL_MS,
+    };
+  }
+  let target: ReadyTarget;
+  if (r.url != null) {
+    target = parseReadyTarget(r.url);
+  } else if (r.port != null) {
+    target = parseReadyTarget(`port:${r.port}`);
+  } else {
+    throw new Error(`procs: "${name}" ready spec needs a url or port`);
+  }
+  return {
+    target,
+    timeoutMs: r.timeoutMs ?? READY_DEFAULT_TIMEOUT_MS,
+    intervalMs: r.intervalMs ?? READY_DEFAULT_INTERVAL_MS,
+  };
+}
+
+// null = never restart; Infinity = restart forever; N = give up after N
+// consecutive restarts.
+function restartMax(restart: ProcSpec["restart"]): number | null {
+  if (!restart) return null;
+  if (restart === true) return Infinity;
+  return restart.max ?? Infinity;
+}
+
+// SIGTERM/SIGKILL the child's whole process group (children are spawned
+// detached, i.e. setsid group leaders), falling back to a plain child kill
+// when the group is already gone.
+function killGroup(child: ReturnType<typeof Bun.spawn>, signal: "SIGTERM" | "SIGKILL" = "SIGTERM") {
+  try {
+    process.kill(-child.pid, signal);
+  } catch {
+    try {
+      child.kill(signal);
+    } catch {
+      // already gone
+    }
+  }
 }
 
 export function procs(specs: Record<string, string | ProcSpec>): Pipeline<ProcLine> {
@@ -243,6 +318,33 @@ export function procs(specs: Record<string, string | ProcSpec>): Pipeline<ProcLi
   }));
   if (entries.length === 0) throw new Error("procs: no processes given");
 
+  // -- upfront validation: bad wiring should throw before anything spawns ----
+  const names = new Set(entries.map((e) => e.name));
+  const afterOf = new Map<string, string[]>();
+  const readyOf = new Map<string, NormalizedReady>();
+  for (const { name, spec } of entries) {
+    const deps = spec.after == null ? [] : Array.isArray(spec.after) ? spec.after : [spec.after];
+    for (const d of deps) {
+      if (d === name) throw new Error(`procs: "${name}" cannot come after itself`);
+      if (!names.has(d)) throw new Error(`procs: "${name}" comes after unknown proc "${d}"`);
+    }
+    afterOf.set(name, deps);
+    if (spec.ready != null) readyOf.set(name, normalizeReady(name, spec.ready));
+  }
+  // cycle check — tiny DFS with an in-stack color
+  {
+    const state = new Map<string, 1 | 2>(); // 1 = in stack, 2 = done
+    const visit = (n: string, path: string[]) => {
+      const st = state.get(n);
+      if (st === 1) throw new Error(`procs: dependency cycle: ${[...path, n].join(" -> ")}`);
+      if (st === 2) return;
+      state.set(n, 1);
+      for (const d of afterOf.get(n) ?? []) visit(d, [...path, n]);
+      state.set(n, 2);
+    };
+    for (const e of entries) visit(e.name, []);
+  }
+
   return Pipeline.of(
     (async function* () {
       // One mutable slot per proc so kill() always reaches the CURRENT child,
@@ -250,14 +352,23 @@ export function procs(specs: Record<string, string | ProcSpec>): Pipeline<ProcLi
       const current = new Map<string, ReturnType<typeof Bun.spawn>>();
       let killed = false;
 
+      // One readiness latch per proc, created upfront. Resolves when the proc
+      // is ready (or on first spawn when it has no ready:), rejects when the
+      // proc ends for good without ever becoming ready. The no-op .catch keeps
+      // un-awaited latches from tripping the unhandled-rejection reporter.
+      const latches = new Map<string, PromiseWithResolvers<void>>();
+      for (const { name } of entries) {
+        const latch = Promise.withResolvers<void>();
+        latch.promise.catch(() => {});
+        latches.set(name, latch);
+      }
+      const killSignal = Promise.withResolvers<void>();
+
       const kill = () => {
         killed = true;
+        killSignal.resolve();
         for (const child of current.values()) {
-          try {
-            child.kill();
-          } catch {
-            // already gone
-          }
+          killGroup(child, "SIGTERM");
         }
       };
       process.on("SIGINT", kill);
@@ -284,37 +395,120 @@ export function procs(specs: Record<string, string | ProcSpec>): Pipeline<ProcLi
         if (buf.length > 0) yield { proc: name, stream, line: buf };
       }
 
+      // Probe readiness alongside the child's output streams. Every poll
+      // sleep races child.exited so the probe can never outlive the child —
+      // the per-spawn merge only completes when ALL its gens finish, so a
+      // dangling probe would wedge the restart path.
+      async function* readyGen(
+        name: string,
+        ready: NormalizedReady,
+        child: ReturnType<typeof Bun.spawn>,
+        restartable: boolean,
+      ): AsyncGenerator<ProcLine> {
+        let exited = false;
+        const exitedP = child.exited.then(() => {
+          exited = true;
+        });
+        const label = formatReadyTarget(ready.target);
+        const res = await awaitReady(ready.target, {
+          intervalMs: ready.intervalMs,
+          timeoutMs: ready.timeoutMs,
+          abort: () => exited || killed,
+          waitBetween: (ms) => Promise.race([Bun.sleep(ms), exitedP]),
+        });
+        if (res) {
+          latches.get(name)!.resolve();
+          yield { proc: name, stream: "ready", line: `ready after ${res.ms}ms (${label})` };
+          return;
+        }
+        // The child dying (or teardown) aborts the wait quietly — the exit
+        // path owns what happens next.
+        if (exited || killed) return;
+        yield {
+          proc: name,
+          stream: "ready",
+          line: `not ready after ${ready.timeoutMs}ms (${label})`,
+        };
+        if (restartable) {
+          // Put the proc down; exitGen completes the merge and the restart
+          // loop respawns it (readiness is re-awaited after EVERY restart).
+          killGroup(child, "SIGTERM");
+          return;
+        }
+        // Not restartable: fail the whole pipeline loudly — CI semantics.
+        throw new Error(`procs: "${name}" not ready after ${ready.timeoutMs}ms (${label})`);
+      }
+
       // One self-restarting generator per proc: mergeAsync's slot set is
       // fixed at start, so respawning must happen INSIDE a single generator
       // rather than by adding new ones mid-flight.
       async function* runProc(name: string, spec: ProcSpec): AsyncGenerator<ProcLine> {
-        let backoff = 250;
-        for (;;) {
-          const child = Bun.spawn(["sh", "-c", spec.cmd], {
-            stdout: "pipe",
-            stderr: "pipe",
-            env: { ...process.env, FORCE_COLOR: "0", ...(spec.env ?? {}) },
-          });
-          current.set(name, child);
-          const exitGen = (async function* (): AsyncGenerator<ProcLine> {
-            const code = await child.exited;
-            yield { proc: name, stream: "exit", line: `exited with code ${code}` };
-          })();
-          yield* mergeAsync([
-            streamOf(name, "stdout", child.stdout as ReadableStream<Uint8Array>),
-            streamOf(name, "stderr", child.stderr as ReadableStream<Uint8Array>),
-            exitGen,
-          ]);
-          current.delete(name);
-          if (!spec.restart || killed) return;
-          yield {
-            proc: name,
-            stream: "exit",
-            line: `restarting in ${backoff}ms`,
-          };
-          await new Promise((r) => setTimeout(r, backoff));
-          if (killed) return;
-          backoff = Math.min(backoff * 2, 2000);
+        const latch = latches.get(name)!;
+        const ready = readyOf.get(name);
+        const deps = afterOf.get(name) ?? [];
+        const max = restartMax(spec.restart);
+        try {
+          if (deps.length > 0) {
+            yield { proc: name, stream: "ready", line: `waiting for ${deps.join(", ")}` };
+            // A rejected dep latch propagates out of the race → the pipeline
+            // errors → the outer finally tears everything down. Dependents
+            // gate ONCE — a dependency restarting later never re-blocks them.
+            await Promise.race([
+              Promise.all(deps.map((d) => latches.get(d)!.promise)),
+              killSignal.promise,
+            ]);
+            if (killed) return;
+          }
+          let backoff = 250;
+          let restarts = 0;
+          for (;;) {
+            const child = Bun.spawn(["sh", "-c", spec.cmd], {
+              stdout: "pipe",
+              stderr: "pipe",
+              env: { ...process.env, FORCE_COLOR: "0", ...(spec.env ?? {}) },
+              // Own process group (setsid leader) so kills reach grandchildren.
+              detached: true,
+            });
+            current.set(name, child);
+            const spawnedAt = performance.now();
+            if (!ready) latch.resolve();
+            const exitGen = (async function* (): AsyncGenerator<ProcLine> {
+              const code = await child.exited;
+              yield { proc: name, stream: "exit", line: `exited with code ${code}` };
+            })();
+            const gens = [
+              streamOf(name, "stdout", child.stdout as ReadableStream<Uint8Array>),
+              streamOf(name, "stderr", child.stderr as ReadableStream<Uint8Array>),
+              exitGen,
+            ];
+            if (ready) gens.push(readyGen(name, ready, child, max !== null));
+            yield* mergeAsync(gens);
+            current.delete(name);
+            if (max === null || killed) return;
+            // A healthy stretch clears the strike count — {max} guards
+            // against crash LOOPS, not against ever crashing twice.
+            if (performance.now() - spawnedAt > 10_000) {
+              backoff = 250;
+              restarts = 0;
+            }
+            if (restarts >= max) {
+              yield { proc: name, stream: "exit", line: `giving up after ${restarts} restart(s)` };
+              return;
+            }
+            restarts++;
+            yield {
+              proc: name,
+              stream: "exit",
+              line: `restarting in ${backoff}ms`,
+            };
+            await new Promise((r) => setTimeout(r, backoff));
+            if (killed) return;
+            backoff = Math.min(backoff * 2, 2000);
+          }
+        } finally {
+          // Proc is over for good (done, gave up, killed, or errored). If it
+          // never became ready, fail anyone gated on it. No-op when resolved.
+          latch.reject(new Error(`procs: dependency "${name}" exited before becoming ready`));
         }
       }
 
@@ -324,6 +518,24 @@ export function procs(specs: Record<string, string | ProcSpec>): Pipeline<ProcLi
         process.off("SIGINT", kill);
         process.off("SIGTERM", kill);
         kill();
+        // Escalation: give every group 3s to die on SIGTERM, then SIGKILL the
+        // stragglers. The timer is cleared either way — nothing left ticking.
+        const survivors = [...current.values()];
+        if (survivors.length > 0) {
+          const allExited = Promise.all(survivors.map((c) => c.exited.then(() => {})));
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          const timedOut = await Promise.race([
+            allExited.then(() => false),
+            new Promise<boolean>((r) => {
+              timer = setTimeout(() => r(true), 3000);
+            }),
+          ]);
+          clearTimeout(timer);
+          if (timedOut) {
+            for (const c of survivors) killGroup(c, "SIGKILL");
+            await allExited;
+          }
+        }
       }
     })(),
   );
