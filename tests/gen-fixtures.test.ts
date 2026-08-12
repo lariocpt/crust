@@ -572,6 +572,117 @@ export function resolvePath(ctx, template) {
     }
   });
 
+  test("flows setup: MULTIPLE auth headers throw at runtime naming them (never silently drop)", async () => {
+    const MULTI_SETUP = `
+export const JSON_HEADERS = { "content-type": "application/json" };
+export const scopeParam = null;
+let cached = null;
+export function shared() {
+  cached ??= Promise.resolve({});
+  return cached;
+}
+export function headersFor(ctx, role) {
+  return { ...JSON_HEADERS, cookie: "session=abc", "x-csrf-token": "tok-" + role };
+}
+export function resolvePath(ctx, template) {
+  return "http://localhost:9" + template;
+}
+`;
+    await writeFile(join(dir, "multi-setup.ts"), MULTI_SETUP);
+    const result = await generateFixtures({
+      swagger: join(dir, "spec.json"),
+      out: join(dir, "out9"),
+      setup: join(dir, "multi-setup.ts"),
+      log: () => {},
+    });
+    expect(result.flowCount).toBeGreaterThan(0);
+    const prev = process.env.GEN_AUTH_HEADER;
+    delete process.env.GEN_AUTH_HEADER;
+    try {
+      const mod = (await import(join(dir, "out9", "flows", "flows.gen.setup.ts"))) as {
+        default: () => Promise<void>;
+      };
+      // Two non-content-type headers: picking ONE silently would generate
+      // flows that fail mysteriously — the setup must throw, naming both.
+      await expect(mod.default()).rejects.toThrow(/2 auth headers/);
+      await expect(mod.default()).rejects.toThrow(/cookie/);
+      await expect(mod.default()).rejects.toThrow(/x-csrf-token/);
+      expect(process.env.GEN_AUTH_HEADER).toBeUndefined();
+    } finally {
+      if (prev !== undefined) process.env.GEN_AUTH_HEADER = prev;
+    }
+  });
+
+  test("PUT-only update sends a full schema-valid body from the PUT's own schema", async () => {
+    const PUT_SPEC = {
+      openapi: "3.0.0",
+      info: { title: "put", version: "1" },
+      paths: {
+        "/api/gadgets": {
+          post: {
+            tags: ["gadgets"],
+            requestBody: {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    required: ["name"],
+                    properties: { name: { type: "string", minLength: 2 } },
+                  },
+                },
+              },
+            },
+            responses: {
+              "201": {
+                description: "created",
+                content: { "application/json": { example: { id: "g-0", name: "Seed" } } },
+              },
+            },
+          },
+        },
+        "/api/gadgets/{gadgetId}": {
+          get: { tags: ["gadgets"], responses: { "200": { description: "ok" } } },
+          // PUT only — no PATCH. Full-replace semantics: TWO required fields,
+          // so the old single-field body would 400 on any correct server.
+          put: {
+            tags: ["gadgets"],
+            requestBody: {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    required: ["name", "color"],
+                    properties: {
+                      name: { type: "string", minLength: 2 },
+                      color: { type: "string" },
+                    },
+                  },
+                },
+              },
+            },
+            responses: { "200": { description: "ok" } },
+          },
+        },
+      },
+    };
+    await writeFile(join(dir, "put-spec.json"), JSON.stringify(PUT_SPEC));
+    const result = await generateFixtures({
+      swagger: join(dir, "put-spec.json"),
+      out: join(dir, "out10"),
+      setup: join(dir, "setup.ts"),
+      log: () => {},
+    });
+    expect(result.flowCount).toBe(1);
+    const pipes = await Bun.file(result.flowFile!).text();
+    // PUT carries the FULL schema-valid body from the PUT op's own schema
+    // (both required fields), not the POST's one-field base body.
+    expect(pipes).toContain(
+      '{"name":"gen-value-x","color":"gen-value-x"} | PUT $GEN_URL_API_GADGETS/$GEN_ID_API_GADGETS -H "$GEN_AUTH_HEADER" | expect 200',
+    );
+    // The create step still uses the POST schema (name only).
+    expect(pipes).toContain('{"name":"gen-value-x"} | POST $GEN_URL_API_GADGETS');
+  });
+
   test("--no-flows suppresses the flows dir", async () => {
     const result = await generateFixtures({
       swagger: join(dir, "spec.json"),

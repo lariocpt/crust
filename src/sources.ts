@@ -238,6 +238,8 @@ export interface ReadySpec {
   timeoutMs?: number;
   /** probe cadence (default 250ms) */
   intervalMs?: number;
+  /** per-probe cap (default min(intervalMs*4, 2s)) — raise for slow-to-accept targets */
+  probeTimeoutMs?: number;
 }
 
 export interface ProcSpec {
@@ -247,7 +249,8 @@ export interface ProcSpec {
   /**
    * respawn on unexpected exit (backoff 250ms -> 2s); user kill never
    * respawns. `{max: N}` gives up after N consecutive restarts (a stretch of
-   * >10s uptime resets the counter).
+   * >10s uptime WHILE READY resets the counter; procs without ready: count
+   * as ready at spawn).
    */
   restart?: boolean | { max?: number };
   /** readiness probe — the proc counts as "up" only once this answers */
@@ -258,11 +261,18 @@ export interface ProcSpec {
 
 const READY_DEFAULT_TIMEOUT_MS = 30_000;
 const READY_DEFAULT_INTERVAL_MS = 250;
+// SIGTERM -> SIGKILL escalation grace, shared by teardown, Ctrl-C and the
+// ready-timeout restart path.
+const KILL_GRACE_MS = 3000;
+// A restarted proc that stayed READY at least this long counts as a healthy
+// stretch and clears the restart strike counter.
+const RESTART_HEALTHY_UPTIME_MS = 10_000;
 
 interface NormalizedReady {
   target: ReadyTarget;
   timeoutMs: number;
   intervalMs: number;
+  probeTimeoutMs?: number;
 }
 
 function normalizeReady(name: string, r: string | ReadySpec): NormalizedReady {
@@ -285,6 +295,7 @@ function normalizeReady(name: string, r: string | ReadySpec): NormalizedReady {
     target,
     timeoutMs: r.timeoutMs ?? READY_DEFAULT_TIMEOUT_MS,
     intervalMs: r.intervalMs ?? READY_DEFAULT_INTERVAL_MS,
+    probeTimeoutMs: r.probeTimeoutMs,
   };
 }
 
@@ -311,7 +322,19 @@ function killGroup(child: ReturnType<typeof Bun.spawn>, signal: "SIGTERM" | "SIG
   }
 }
 
-export function procs(specs: Record<string, string | ProcSpec>): Pipeline<ProcLine> {
+export interface ProcsOpts {
+  /** SIGTERM -> SIGKILL escalation grace in ms (default 3s) — injectable for tests */
+  killGraceMs?: number;
+  /** ready uptime that clears the restart strike counter (default 10s) — injectable for tests */
+  healthyUptimeMs?: number;
+}
+
+export function procs(
+  specs: Record<string, string | ProcSpec>,
+  opts: ProcsOpts = {},
+): Pipeline<ProcLine> {
+  const killGraceMs = opts.killGraceMs ?? KILL_GRACE_MS;
+  const healthyUptimeMs = opts.healthyUptimeMs ?? RESTART_HEALTHY_UPTIME_MS;
   const entries = Object.entries(specs).map(([name, v]) => ({
     name,
     spec: typeof v === "string" ? { cmd: v } : v,
@@ -364,12 +387,41 @@ export function procs(specs: Record<string, string | ProcSpec>): Pipeline<ProcLi
       }
       const killSignal = Promise.withResolvers<void>();
 
-      const kill = () => {
+      // SIGTERM the given groups, give them killGraceMs to die, then SIGKILL
+      // the stragglers. The grace timer is always cleared — nothing dangling.
+      const terminate = async (children: ReturnType<typeof Bun.spawn>[]) => {
+        if (children.length === 0) return;
+        for (const c of children) killGroup(c, "SIGTERM");
+        const allExited = Promise.all(children.map((c) => c.exited.then(() => {})));
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          const timedOut = await Promise.race([
+            allExited.then(() => false),
+            new Promise<boolean>((r) => {
+              timer = setTimeout(() => r(true), killGraceMs);
+            }),
+          ]);
+          if (timedOut) {
+            for (const c of children) killGroup(c, "SIGKILL");
+            await allExited;
+          }
+        } finally {
+          clearTimeout(timer);
+        }
+      };
+
+      // kill() OWNS the whole escalation: the generator's finally never runs
+      // while a SIGTERM-ignoring child keeps the merged stream wedged, so the
+      // Ctrl-C path can't rely on it for the SIGKILL. Idempotent — a second
+      // Ctrl-C (or the teardown finally after one) reuses the in-flight
+      // escalation instead of stacking timers.
+      let killEscalation: Promise<void> | null = null;
+      const kill = (): Promise<void> => {
+        if (killEscalation) return killEscalation;
         killed = true;
         killSignal.resolve();
-        for (const child of current.values()) {
-          killGroup(child, "SIGTERM");
-        }
+        killEscalation = terminate([...current.values()]);
+        return killEscalation;
       };
       process.on("SIGINT", kill);
       process.on("SIGTERM", kill);
@@ -404,6 +456,7 @@ export function procs(specs: Record<string, string | ProcSpec>): Pipeline<ProcLi
         ready: NormalizedReady,
         child: ReturnType<typeof Bun.spawn>,
         restartable: boolean,
+        onReady: () => void,
       ): AsyncGenerator<ProcLine> {
         let exited = false;
         const exitedP = child.exited.then(() => {
@@ -413,10 +466,12 @@ export function procs(specs: Record<string, string | ProcSpec>): Pipeline<ProcLi
         const res = await awaitReady(ready.target, {
           intervalMs: ready.intervalMs,
           timeoutMs: ready.timeoutMs,
+          probeTimeoutMs: ready.probeTimeoutMs,
           abort: () => exited || killed,
           waitBetween: (ms) => Promise.race([Bun.sleep(ms), exitedP]),
         });
         if (res) {
+          onReady();
           latches.get(name)!.resolve();
           yield { proc: name, stream: "ready", line: `ready after ${res.ms}ms (${label})` };
           return;
@@ -432,7 +487,9 @@ export function procs(specs: Record<string, string | ProcSpec>): Pipeline<ProcLi
         if (restartable) {
           // Put the proc down; exitGen completes the merge and the restart
           // loop respawns it (readiness is re-awaited after EVERY restart).
-          killGroup(child, "SIGTERM");
+          // Full escalation, same as teardown: a child that ignores SIGTERM
+          // must not wedge the restart loop.
+          await terminate([child]);
           return;
         }
         // Not restartable: fail the whole pipeline loudly — CI semantics.
@@ -471,6 +528,11 @@ export function procs(specs: Record<string, string | ProcSpec>): Pipeline<ProcLi
             });
             current.set(name, child);
             const spawnedAt = performance.now();
+            // Procs without ready: count as ready at spawn. With ready:, only
+            // a successful probe THIS spawn marks it — wall-clock uptime alone
+            // would count a proc that hung un-ready until the ready-timeout
+            // kill as "healthy", and {max} would never trip.
+            let becameReady = !ready;
             if (!ready) latch.resolve();
             const exitGen = (async function* (): AsyncGenerator<ProcLine> {
               const code = await child.exited;
@@ -481,13 +543,18 @@ export function procs(specs: Record<string, string | ProcSpec>): Pipeline<ProcLi
               streamOf(name, "stderr", child.stderr as ReadableStream<Uint8Array>),
               exitGen,
             ];
-            if (ready) gens.push(readyGen(name, ready, child, max !== null));
+            if (ready)
+              gens.push(
+                readyGen(name, ready, child, max !== null, () => {
+                  becameReady = true;
+                }),
+              );
             yield* mergeAsync(gens);
             current.delete(name);
             if (max === null || killed) return;
             // A healthy stretch clears the strike count — {max} guards
             // against crash LOOPS, not against ever crashing twice.
-            if (performance.now() - spawnedAt > 10_000) {
+            if (becameReady && performance.now() - spawnedAt > healthyUptimeMs) {
               backoff = 250;
               restarts = 0;
             }
@@ -517,25 +584,10 @@ export function procs(specs: Record<string, string | ProcSpec>): Pipeline<ProcLi
       } finally {
         process.off("SIGINT", kill);
         process.off("SIGTERM", kill);
-        kill();
-        // Escalation: give every group 3s to die on SIGTERM, then SIGKILL the
-        // stragglers. The timer is cleared either way — nothing left ticking.
-        const survivors = [...current.values()];
-        if (survivors.length > 0) {
-          const allExited = Promise.all(survivors.map((c) => c.exited.then(() => {})));
-          let timer: ReturnType<typeof setTimeout> | undefined;
-          const timedOut = await Promise.race([
-            allExited.then(() => false),
-            new Promise<boolean>((r) => {
-              timer = setTimeout(() => r(true), 3000);
-            }),
-          ]);
-          clearTimeout(timer);
-          if (timedOut) {
-            for (const c of survivors) killGroup(c, "SIGKILL");
-            await allExited;
-          }
-        }
+        // kill() carries the full SIGTERM -> grace -> SIGKILL escalation (or,
+        // after a Ctrl-C, is already carrying it) — await it so teardown only
+        // returns once every group is gone.
+        await kill();
       }
     })(),
   );
