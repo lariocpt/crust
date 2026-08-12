@@ -34,7 +34,7 @@ Biome, husky + lint-staged.
 
 ## Tests
 
-`bun test` — the whole suite runs in ~3s; keep it that way. Every feature
+`bun test` — the whole suite runs in ~5s; keep it that way. Every feature
 lands with tests (see `tests/test-fixture.test.ts` and
 `tests/pipeline.test.ts` for the harness patterns — throwaway Bun.serve +
 tmpdir fixtures). Pre-commit runs lint-staged (biome) but NOT the suite —

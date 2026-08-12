@@ -1,9 +1,11 @@
 // Agent-facing skills, embedded into the binary via static text imports
 // (compiled-binary-safe: no runtime fs dependency on the repo checkout).
 // `skills install` writes them into a project's .claude/skills/ directory.
+import crustApiTesting from "../skills/crust-api-testing/SKILL.md" with { type: "text" };
 import crustLoadTesting from "../skills/crust-load-testing/SKILL.md" with { type: "text" };
 import crustMockServer from "../skills/crust-mock-server/SKILL.md" with { type: "text" };
 import crustPipelines from "../skills/crust-pipelines/SKILL.md" with { type: "text" };
+import crustProcs from "../skills/crust-procs/SKILL.md" with { type: "text" };
 
 export interface EmbeddedSkill {
   name: string;
@@ -11,9 +13,11 @@ export interface EmbeddedSkill {
 }
 
 export const EMBEDDED_SKILLS: EmbeddedSkill[] = [
+  { name: "crust-api-testing", content: crustApiTesting },
   { name: "crust-load-testing", content: crustLoadTesting },
   { name: "crust-mock-server", content: crustMockServer },
   { name: "crust-pipelines", content: crustPipelines },
+  { name: "crust-procs", content: crustProcs },
 ];
 
 // One-line description from the SKILL.md frontmatter, for `skills list`.
