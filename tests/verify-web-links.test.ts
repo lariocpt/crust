@@ -233,6 +233,33 @@ describe("verify-web-links CLI", () => {
     }
   });
 
+  test("--exclude skips redirecting subtree; sitemap seeds excluded too", async () => {
+    // /redirect-old 301s to /about — a failure without the flag (proven above),
+    // clean with it. Also excluded as a link target: /anchor-bad links /about.
+    const r1 = await runCli([
+      "--site-map-url",
+      `${base}/sitemap-redirect.xml`,
+      "--exclude",
+      "/redirect-old",
+    ]);
+    expect(r1.code).toBe(0);
+    expect(r1.stdout).toContain("0 failure(s)");
+
+    const r2 = await runCli([
+      "--site-map-url",
+      `${base}/sitemap-broken.xml`,
+      "--exclude",
+      "/does-not-exist",
+    ]);
+    expect(r2.code).toBe(0);
+  });
+
+  test("--exclude without a value exits 2", async () => {
+    const r = await runCli(["--site-map-url", `${base}/sitemap-good.xml`, "--exclude"]);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toContain("--exclude requires a value");
+  });
+
   test("--json emits machine-readable output", async () => {
     const r = await runCli(["--site-map-url", `${base}/sitemap-good.xml`, "--json"]);
     expect(r.code).toBe(0);

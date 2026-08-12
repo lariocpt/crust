@@ -55,6 +55,7 @@ export interface VerifyOpts {
   checkAnchors: boolean;
   redirectWarnings: boolean;
   includeExternal: boolean;
+  exclude: string[];
   json: boolean;
 }
 

@@ -29,6 +29,8 @@ optionally diff Open Graph / meta tags against .crust.ts fixtures.
   --no-redirect-warnings   treat 3xx redirect chains as informational, not failures.
   --include-external       also queue external (different-origin) links for
                            status checking. Never recursed.
+  --exclude <substring>    skip URLs containing <substring> (repeatable). Use for
+                           subtrees that redirect by design, e.g. --exclude /checkout/.
   --json                   emit a machine-readable JSON report on stdout.
   -h, --help               show this message.
 
@@ -195,6 +197,7 @@ function parseArgs(args: string[]): VerifyOpts | number {
   let checkAnchors = true;
   let redirectWarnings = true;
   let includeExternal = false;
+  const exclude: string[] = [];
   let json = false;
 
   function intFlag(value: string | undefined, name: string): number | null {
@@ -270,6 +273,15 @@ function parseArgs(args: string[]): VerifyOpts | number {
       case "--include-external":
         includeExternal = true;
         break;
+      case "--exclude": {
+        const v = consume();
+        if (!v) {
+          process.stderr.write("verify-web-links: --exclude requires a value\n");
+          return 2;
+        }
+        exclude.push(v);
+        break;
+      }
       case "--json":
         json = true;
         break;
@@ -304,6 +316,7 @@ function parseArgs(args: string[]): VerifyOpts | number {
     checkAnchors,
     redirectWarnings,
     includeExternal,
+    exclude,
     json,
   };
 }

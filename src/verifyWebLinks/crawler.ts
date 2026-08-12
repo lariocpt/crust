@@ -18,7 +18,9 @@ export async function crawl(
   const queue: QueueItem[] = [];
 
   for (const s of seeds) {
-    queue.push({ url: stripFragment(s), depth: 0, asPage: true });
+    const url = stripFragment(s);
+    if (isExcluded(url, opts.exclude)) continue;
+    queue.push({ url, depth: 0, asPage: true });
   }
 
   const inFlight = new Set<Promise<void>>();
@@ -104,6 +106,7 @@ async function process(
         for (const ref of refs) {
           const target = stripFragment(ref.resolved);
           if (visited.has(target)) continue;
+          if (isExcluded(target, opts.exclude)) continue;
           const targetInternal = sameOrigin(target, origin);
           const isPageLink = ref.kind === "a" || ref.kind === "iframe";
           if (isPageLink && targetInternal) {
@@ -116,6 +119,7 @@ async function process(
         for (const ref of refs) {
           const target = stripFragment(ref.resolved);
           if (visited.has(target)) continue;
+          if (isExcluded(target, opts.exclude)) continue;
           const targetInternal = sameOrigin(target, origin);
           if (targetInternal || opts.includeExternal) {
             queue.push({ url: target, depth: item.depth + 1, asPage: false });
@@ -181,6 +185,14 @@ async function fetchFollowing(url: string, opts: VerifyOpts): Promise<FetchResul
     };
   }
   return { status: 0, finalUrl: current, chain, contentType: "", response: null };
+}
+
+// Substring match on purpose: excludes are for whole subtrees ("/checkout/",
+// "/wp-admin/") where WP/Woo redirect by design, and a substring covers the
+// subtree without asking users to write regex.
+export function isExcluded(url: string, patterns: string[]): boolean {
+  if (patterns.length === 0) return false;
+  return patterns.some((p) => url.includes(p));
 }
 
 function sameOrigin(url: string, origin: URL): boolean {
