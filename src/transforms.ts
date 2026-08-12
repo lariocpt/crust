@@ -198,40 +198,69 @@ export function expectStatus<T extends { status: number }>(expected: number): Pi
   );
 }
 
-// Terminal aggregation: consumes the stream, yields ONE summary object with
-// real latency percentiles (from TimedHit.ms) and a status histogram.
-export function statsStage(): PipelineStage<{ status: number; ms?: number }, unknown> {
+interface StatsAcc {
+  latencies: number[];
+  status: Record<string, number>;
+  count: number;
+}
+
+function summarize(acc: StatsAcc, wallMs: number): Record<string, unknown> {
+  const sorted = [...acc.latencies].sort((a, b) => a - b);
+  const pct = (p: number): number =>
+    sorted.length === 0
+      ? 0
+      : (sorted[Math.min(sorted.length - 1, Math.floor((p / 100) * sorted.length))] ?? 0);
+  const mean = sorted.length ? sorted.reduce((a, b) => a + b, 0) / sorted.length : 0;
+  return {
+    count: acc.count,
+    wallMs: Math.round(wallMs),
+    rps: wallMs > 0 ? Math.round((acc.count / wallMs) * 1000) : 0,
+    status: acc.status,
+    p50: Number(pct(50).toFixed(1)),
+    p95: Number(pct(95).toFixed(1)),
+    p99: Number(pct(99).toFixed(1)),
+    meanMs: Number(mean.toFixed(1)),
+  };
+}
+
+// Terminal aggregation: consumes the stream and yields ONE summary (or, with
+// everySec, a per-window delta summary every N seconds PLUS a final
+// cumulative one tagged {final: true}). Windows are emitted on the item path
+// — a fully stalled upstream delays the flush until the next item arrives.
+export function statsStage(
+  everySec?: number,
+): PipelineStage<{ status: number; ms?: number }, unknown> {
   return pipelineStage((input) =>
     Pipeline.of(
       (async function* () {
         const t0 = performance.now();
-        const latencies: number[] = [];
-        const status: Record<string, number> = {};
-        let count = 0;
+        const total: StatsAcc = { latencies: [], status: {}, count: 0 };
+        let win: StatsAcc = { latencies: [], status: {}, count: 0 };
+        let winStart = t0;
+        let winNo = 0;
         for await (const item of input.lines()) {
-          count++;
-          status[item.status] = (status[item.status] ?? 0) + 1;
-          if (typeof item.ms === "number") latencies.push(item.ms);
+          for (const acc of [total, win]) {
+            acc.count++;
+            acc.status[item.status] = (acc.status[item.status] ?? 0) + 1;
+            if (typeof item.ms === "number") acc.latencies.push(item.ms);
+          }
+          if (everySec && performance.now() - winStart >= everySec * 1000) {
+            winNo++;
+            yield { window: winNo, ...summarize(win, performance.now() - winStart) };
+            win = { latencies: [], status: {}, count: 0 };
+            winStart = performance.now();
+          }
         }
         const wallMs = performance.now() - t0;
-        latencies.sort((a, b) => a - b);
-        const pct = (p: number): number =>
-          latencies.length === 0
-            ? 0
-            : (latencies[
-                Math.min(latencies.length - 1, Math.floor((p / 100) * latencies.length))
-              ] ?? 0);
-        const mean = latencies.length ? latencies.reduce((a, b) => a + b, 0) / latencies.length : 0;
-        yield {
-          count,
-          wallMs: Math.round(wallMs),
-          rps: wallMs > 0 ? Math.round((count / wallMs) * 1000) : 0,
-          status,
-          p50: Number(pct(50).toFixed(1)),
-          p95: Number(pct(95).toFixed(1)),
-          p99: Number(pct(99).toFixed(1)),
-          meanMs: Number(mean.toFixed(1)),
-        };
+        if (everySec) {
+          if (win.count > 0) {
+            winNo++;
+            yield { window: winNo, ...summarize(win, performance.now() - winStart) };
+          }
+          yield { final: true, ...summarize(total, wallMs) };
+        } else {
+          yield summarize(total, wallMs);
+        }
       })(),
     ),
   );

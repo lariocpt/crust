@@ -114,8 +114,12 @@ export function classify(text: string): StageKind {
     return { kind: "expect", status: parseInt(expectMatch[1]!, 10) };
   }
 
-  if (t === "stats") {
-    return { kind: "stats" };
+  const statsMatch = t.match(/^stats(?:\s+--every[= ](\d+)s?)?$/);
+  if (statsMatch) {
+    return {
+      kind: "stats",
+      everySec: statsMatch[1] ? parseInt(statsMatch[1], 10) : undefined,
+    };
   }
 
   const rangeMatch = t.match(/^range\(\s*(-?\d+)\s*,\s*(-?\d+)\s*\)$/);

@@ -199,7 +199,7 @@ function applyStage(
       });
     }
     case "stats":
-      return input.pipe(transforms.statsStage() as never) as Pipeline<unknown>;
+      return input.pipe(transforms.statsStage(kind.everySec) as never) as Pipeline<unknown>;
     case "range":
     case "glob":
     case "tail":

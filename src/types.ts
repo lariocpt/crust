@@ -23,7 +23,7 @@ export type StageKind =
   | { kind: "readsrc"; pattern: string }
   | { kind: "parallel"; n: number }
   | { kind: "expect"; status: number }
-  | { kind: "stats" }
+  | { kind: "stats"; everySec?: number }
   | { kind: "shell"; text: string };
 
 export interface DotenvLoadRecord {

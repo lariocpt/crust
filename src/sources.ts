@@ -228,23 +228,31 @@ export interface ProcLine {
   line: string;
 }
 
-export function procs(specs: Record<string, string>): Pipeline<ProcLine> {
-  const entries = Object.entries(specs);
+export interface ProcSpec {
+  cmd: string;
+  /** extra env for THIS process (merged over the inherited environment) */
+  env?: Record<string, string>;
+  /** respawn on unexpected exit (backoff 250ms -> 2s); user kill never respawns */
+  restart?: boolean;
+}
+
+export function procs(specs: Record<string, string | ProcSpec>): Pipeline<ProcLine> {
+  const entries = Object.entries(specs).map(([name, v]) => ({
+    name,
+    spec: typeof v === "string" ? { cmd: v } : v,
+  }));
   if (entries.length === 0) throw new Error("procs: no processes given");
 
   return Pipeline.of(
     (async function* () {
-      const children = entries.map(([name, cmd]) => ({
-        name,
-        child: Bun.spawn(["sh", "-c", cmd], {
-          stdout: "pipe",
-          stderr: "pipe",
-          env: { ...process.env, FORCE_COLOR: "0" },
-        }),
-      }));
+      // One mutable slot per proc so kill() always reaches the CURRENT child,
+      // including one spawned by a restart.
+      const current = new Map<string, ReturnType<typeof Bun.spawn>>();
+      let killed = false;
 
       const kill = () => {
-        for (const { child } of children) {
+        killed = true;
+        for (const child of current.values()) {
           try {
             child.kill();
           } catch {
@@ -276,23 +284,42 @@ export function procs(specs: Record<string, string>): Pipeline<ProcLine> {
         if (buf.length > 0) yield { proc: name, stream, line: buf };
       }
 
-      async function* exitOf(
-        name: string,
-        child: ReturnType<typeof Bun.spawn>,
-      ): AsyncGenerator<ProcLine> {
-        const code = await child.exited;
-        yield { proc: name, stream: "exit", line: `exited with code ${code}` };
-      }
-
-      const gens: AsyncGenerator<ProcLine>[] = [];
-      for (const { name, child } of children) {
-        gens.push(streamOf(name, "stdout", child.stdout as ReadableStream<Uint8Array>));
-        gens.push(streamOf(name, "stderr", child.stderr as ReadableStream<Uint8Array>));
-        gens.push(exitOf(name, child));
+      // One self-restarting generator per proc: mergeAsync's slot set is
+      // fixed at start, so respawning must happen INSIDE a single generator
+      // rather than by adding new ones mid-flight.
+      async function* runProc(name: string, spec: ProcSpec): AsyncGenerator<ProcLine> {
+        let backoff = 250;
+        for (;;) {
+          const child = Bun.spawn(["sh", "-c", spec.cmd], {
+            stdout: "pipe",
+            stderr: "pipe",
+            env: { ...process.env, FORCE_COLOR: "0", ...(spec.env ?? {}) },
+          });
+          current.set(name, child);
+          const exitGen = (async function* (): AsyncGenerator<ProcLine> {
+            const code = await child.exited;
+            yield { proc: name, stream: "exit", line: `exited with code ${code}` };
+          })();
+          yield* mergeAsync([
+            streamOf(name, "stdout", child.stdout as ReadableStream<Uint8Array>),
+            streamOf(name, "stderr", child.stderr as ReadableStream<Uint8Array>),
+            exitGen,
+          ]);
+          current.delete(name);
+          if (!spec.restart || killed) return;
+          yield {
+            proc: name,
+            stream: "exit",
+            line: `restarting in ${backoff}ms`,
+          };
+          await new Promise((r) => setTimeout(r, backoff));
+          if (killed) return;
+          backoff = Math.min(backoff * 2, 2000);
+        }
       }
 
       try {
-        yield* mergeAsync(gens);
+        yield* mergeAsync(entries.map(({ name, spec }) => runProc(name, spec)));
       } finally {
         process.off("SIGINT", kill);
         process.off("SIGTERM", kill);

@@ -333,3 +333,40 @@ describe("procs", () => {
     expect(code).toBe(0);
   });
 });
+
+describe("procs object specs", () => {
+  test("per-proc env is visible to the child", async () => {
+    const { procs } = await import("../src/sources");
+    const lines = await procs({
+      envy: { cmd: 'echo "V=$PROC_TEST_VALUE"', env: { PROC_TEST_VALUE: "injected" } },
+    }).collect();
+    expect(lines.some((l) => l.stream === "stdout" && l.line === "V=injected")).toBe(true);
+  });
+
+  test("restart respawns a crashing process (bounded)", async () => {
+    const { procs } = await import("../src/sources");
+    const lines: Array<{ proc: string; stream: string; line: string }> = [];
+    const pipeline = procs({
+      flaky: { cmd: "echo ran; exit 1", restart: true },
+    });
+    // Collect until we've seen two runs, then close the pipeline.
+    const iter = pipeline.lines();
+    let runs = 0;
+    for await (const l of iter) {
+      lines.push(l);
+      if (l.stream === "stdout" && l.line === "ran") runs++;
+      if (runs >= 2) break;
+    }
+    await iter.return?.(undefined as never);
+    expect(runs).toBeGreaterThanOrEqual(2);
+    expect(lines.some((l) => l.line.startsWith("restarting in"))).toBe(true);
+  });
+
+  test("no restart without the flag", async () => {
+    const { procs } = await import("../src/sources");
+    const lines = await procs({ once: { cmd: "echo once; exit 1" } }).collect();
+    const runs = lines.filter((l) => l.stream === "stdout" && l.line === "once").length;
+    expect(runs).toBe(1);
+    expect(lines.some((l) => l.line.startsWith("restarting"))).toBe(false);
+  });
+});
