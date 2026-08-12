@@ -821,3 +821,84 @@ describe("$ref dereferencing", () => {
     expect(text).toContain("missing required 'name' -> 400");
   });
 });
+
+describe("flowOverrides", () => {
+  test("skip drops a flow; body merges over the derived base", async () => {
+    const spec = {
+      openapi: "3.1.0",
+      info: { title: "o", version: "1" },
+      paths: {
+        "/api/levies": {
+          post: {
+            tags: ["levies"],
+            requestBody: {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    required: ["title", "issueDate"],
+                    properties: {
+                      title: { type: "string" },
+                      issueDate: { type: "string", format: "date" },
+                    },
+                  },
+                },
+              },
+            },
+            responses: {
+              "201": {
+                description: "ok",
+                content: { "application/json": { example: { id: "x" } } },
+              },
+            },
+          },
+        },
+        "/api/levies/{levyId}": {
+          get: { tags: ["levies"], responses: { "200": { description: "ok" } } },
+        },
+        "/api/tasks": {
+          post: {
+            tags: ["tasks"],
+            requestBody: {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    required: ["title"],
+                    properties: { title: { type: "string" } },
+                  },
+                },
+              },
+            },
+            responses: {
+              "201": {
+                description: "ok",
+                content: { "application/json": { example: { id: "x" } } },
+              },
+            },
+          },
+        },
+        "/api/tasks/{taskId}": {
+          get: { tags: ["tasks"], responses: { "200": { description: "ok" } } },
+        },
+      },
+    };
+    await writeFile(join(dir, "ov-spec.json"), JSON.stringify(spec));
+    await writeFile(
+      join(dir, "ov-setup.ts"),
+      `${SETUP}\nexport const flowOverrides = { "/api/tasks": { skip: true }, "/api/levies": { body: { issueDate: "2026-01-01" } } };\n`,
+    );
+    const logs: string[] = [];
+    const result = await generateFixtures({
+      swagger: join(dir, "ov-spec.json"),
+      out: join(dir, "ov-out"),
+      setup: join(dir, "ov-setup.ts"),
+      log: (l: string) => logs.push(l),
+    });
+    expect(result.flowCount).toBe(1);
+    const flow = await Bun.file(result.flowFile!).text();
+    expect(flow).toContain('"issueDate":"2026-01-01"');
+    expect(flow).not.toContain("GEN_ID_API_TASKS");
+    expect(logs.join("\n")).toContain("flowOverrides.skip");
+  });
+});

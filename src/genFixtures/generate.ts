@@ -56,6 +56,11 @@
  *     when it has a different name (`/api/buildings/{id}`).
  *   - `JSON_HEADERS: Record<string, string>` — plain unauthenticated JSON
  *     headers, used for role "none".
+ *   - `flowOverrides?: Record<template, { body?: object; skip?: boolean }>`
+ *     — optional per-collection flow tuning: `body` merges over the derived
+ *     schema-valid create body (business date rules etc.); `skip` drops the
+ *     flow (e.g. a required FK no static value can satisfy). Read at
+ *     generation time.
  */
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
@@ -116,9 +121,19 @@ export interface GenerateResult {
   flowCount: number;
 }
 
+// Optional per-collection-template flow tuning from the setup module: some
+// creates need values a spec can't express — business date rules, foreign
+// keys to live rows. `body` merges over the derived schema-valid base;
+// `skip` drops the flow (e.g. a required FK no static value can satisfy).
+export interface FlowOverride {
+  body?: Record<string, unknown>;
+  skip?: boolean;
+}
+
 interface ScopeConfig {
   scopeParam: string | null;
   scopeRoots: string[];
+  flowOverrides: Record<string, FlowOverride>;
 }
 
 // ---------------------------------------------------------------------------
@@ -530,6 +545,7 @@ interface FlowPlan {
   itemOps: ItemOps;
   idPath: string[];
   envName: string;
+  bodyOverride?: Record<string, unknown>;
 }
 
 interface SkippedFlow {
@@ -549,6 +565,11 @@ function deriveFlows(
     const post = paths[template]?.post;
     const bodySchema = post?.requestBody?.content?.["application/json"]?.schema;
     if (!post || !bodySchema || lowest2xx(post) === null) continue;
+    const override = scope.flowOverrides[template];
+    if (override?.skip) {
+      skipped.push({ template, reason: "flowOverrides.skip in the setup module" });
+      continue;
+    }
 
     // Item template: `<template>/{param}` with at least one of GET/PUT/PATCH/
     // DELETE. First match in JSON key order — deterministic.
@@ -580,7 +601,7 @@ function deriveFlows(
       continue;
     }
 
-    flows.push({ template, post, itemOps, idPath, envName: "" });
+    flows.push({ template, post, itemOps, idPath, envName: "", bodyOverride: override?.body });
   }
 
   flows.sort((a, b) => (a.template < b.template ? -1 : 1));
@@ -609,7 +630,7 @@ function emitFlow(f: FlowPlan): string {
   const itemUrl = `$GEN_URL_${T}/$GEN_ID_${T}`;
   const H = `-H "$GEN_AUTH_HEADER"`;
   const bodySchema = f.post.requestBody!.content!["application/json"]!.schema!;
-  const base = baseBody(bodySchema);
+  const base = { ...baseBody(bodySchema), ...f.bodyOverride };
   const lines: string[] = [];
   const steps: string[] = ["create"];
 
@@ -752,6 +773,8 @@ export async function generateFixtures(opts: GenerateOpts): Promise<GenerateResu
   const scope: ScopeConfig = {
     scopeParam: setupMod.scopeParam ?? null,
     scopeRoots: setupMod.scopeRoots ?? [],
+    flowOverrides:
+      (setupMod as { flowOverrides?: Record<string, FlowOverride> }).flowOverrides ?? {},
   };
 
   const byTag = new Map<string, GenCase[]>();

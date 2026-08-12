@@ -837,6 +837,13 @@ generated setup module adapts the standard setup contract: it calls
 derivable from a spec, so none are emitted — add DB-level checks in a
 hand-written `.pipes` file.
 
+Some creates need values a spec can't express — business date rules,
+foreign keys to live rows. The setup module may export
+`flowOverrides: Record<template, { body?: object; skip?: boolean }>`:
+`body` merges over the derived schema-valid create body, `skip` drops the
+flow entirely (a required FK no static value can satisfy). Skips are
+reported at generation time.
+
 #### The setup-module contract
 
 Generated files are app-agnostic: they import ONLY from the `--setup` module

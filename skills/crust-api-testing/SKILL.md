@@ -89,7 +89,10 @@ the `git diff`):
 
 Setup-module contract (imported lazily): `shared()` promise-cached context,
 `headersFor(ctx, "none"|"member"|"outsider")`, `resolvePath(ctx, template)`,
-`scopeParam`, `scopeRoots?`, `JSON_HEADERS`.
+`scopeParam`, `scopeRoots?`, `JSON_HEADERS`, and optional
+`flowOverrides: { "<template>": { body?: {...}, skip?: true } }` for creates
+whose values a spec can't express (business date rules → `body` merge;
+required foreign keys → `skip`).
 
 The `--out` dir is DELETED and recreated every run — never hand-edit
 generated files.
