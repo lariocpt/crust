@@ -79,11 +79,23 @@ export function paramNames(template: string): string[] {
   return [...template.matchAll(/\{([^/}]+)\}/g)].map((m) => m[1]!);
 }
 
+/** Percent-decode a path segment; malformed sequences fall back to the raw text. */
+function safeDecode(raw: string): string {
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
+}
+
 function extractParams(route: Route, m: RegExpExecArray): Record<string, string> {
   const params: Record<string, string> = {};
   const names = paramNames(route.template);
   for (let i = 0; i < names.length; i++) {
-    params[names[i]!] = m[i + 1] ?? "";
+    // Decode before validation/stateful lookups — query params arrive decoded
+    // via URLSearchParams, and path params must match that (an encoded id like
+    // %C3%A9 would otherwise fail enum/pattern checks and miss store entries).
+    params[names[i]!] = safeDecode(m[i + 1] ?? "");
   }
   return params;
 }

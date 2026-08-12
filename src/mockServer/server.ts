@@ -239,7 +239,7 @@ export function startServer(opts: ServerOptions): RunningServer {
                 {
                   status: result.response.status,
                   contentType: respCt,
-                  hasBody: result.bodyText !== null,
+                  hasBody: result.hasBody,
                   body: respBody,
                 },
                 lookup.matched,

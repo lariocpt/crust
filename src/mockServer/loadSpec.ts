@@ -20,6 +20,8 @@ export interface ParameterObject {
   in?: string; // "path" | "query" | "header" | "cookie"
   required?: boolean;
   schema?: unknown;
+  style?: string; // "form" (query default) | "spaceDelimited" | "pipeDelimited" | …
+  explode?: boolean;
   $ref?: string;
   [k: string]: unknown;
 }
