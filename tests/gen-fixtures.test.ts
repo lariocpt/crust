@@ -711,3 +711,113 @@ export function resolvePath(ctx, template) {
     expect(existsSync(join(dir, "out8", "flows"))).toBe(false);
   });
 });
+
+describe("$ref dereferencing", () => {
+  test("a requestBody behind $ref still yields the full 400 + boundary matrix and a flow", async () => {
+    const refSpec = {
+      openapi: "3.1.0",
+      info: { title: "r", version: "1" },
+      components: {
+        schemas: {
+          Gizmo: {
+            type: "object",
+            required: ["name"],
+            properties: {
+              name: { type: "string", minLength: 2, maxLength: 10 },
+              kind: { $ref: "#/components/schemas/Kind" },
+            },
+          },
+          Kind: { type: "string", enum: ["a", "b"] },
+          GizmoOut: {
+            type: "object",
+            properties: { id: { type: "string" }, name: { type: "string" } },
+          },
+        },
+      },
+      paths: {
+        "/api/gizmos": {
+          post: {
+            tags: ["gizmos"],
+            requestBody: {
+              content: { "application/json": { schema: { $ref: "#/components/schemas/Gizmo" } } },
+            },
+            responses: {
+              "201": {
+                description: "created",
+                content: {
+                  "application/json": { schema: { $ref: "#/components/schemas/GizmoOut" } },
+                },
+              },
+              "400": { description: "bad" },
+            },
+          },
+        },
+        "/api/gizmos/{gizmoId}": {
+          get: {
+            tags: ["gizmos"],
+            responses: { "200": { description: "ok" }, "404": { description: "nope" } },
+          },
+          delete: {
+            tags: ["gizmos"],
+            responses: { "204": { description: "gone" } },
+          },
+        },
+      },
+    };
+    await writeFile(join(dir, "ref-spec.json"), JSON.stringify(refSpec));
+    const result = await generateFixtures({
+      swagger: join(dir, "ref-spec.json"),
+      out: join(dir, "ref-out"),
+      setup: join(dir, "setup.ts"),
+      log: () => {},
+    });
+    const text = await Bun.file(result.files.find((f) => f.includes("gizmos"))!).text();
+    expect(text).toContain("missing required 'name' -> 400");
+    expect(text).toContain("too short 'name' -> 400");
+    expect(text).toContain("too long 'name' -> 400");
+    expect(text).toContain("invalid enum for 'kind' -> 400");
+    // Flow derivation works through the $ref'd 201 response schema.
+    expect(result.flowCount).toBe(1);
+    const flow = await Bun.file(result.flowFile!).text();
+    expect(flow).toContain("capture GEN_ID_API_GIZMOS");
+  });
+
+  test("a cyclic $ref is cut, not an infinite loop", async () => {
+    const cyclic = {
+      openapi: "3.1.0",
+      info: { title: "c", version: "1" },
+      components: {
+        schemas: {
+          Node: {
+            type: "object",
+            required: ["name"],
+            properties: {
+              name: { type: "string" },
+              next: { $ref: "#/components/schemas/Node" },
+            },
+          },
+        },
+      },
+      paths: {
+        "/api/nodes": {
+          post: {
+            tags: ["nodes"],
+            requestBody: {
+              content: { "application/json": { schema: { $ref: "#/components/schemas/Node" } } },
+            },
+            responses: { "201": { description: "ok" }, "400": { description: "bad" } },
+          },
+        },
+      },
+    };
+    await writeFile(join(dir, "cyclic-spec.json"), JSON.stringify(cyclic));
+    const result = await generateFixtures({
+      swagger: join(dir, "cyclic-spec.json"),
+      out: join(dir, "cyclic-out"),
+      setup: join(dir, "setup.ts"),
+      log: () => {},
+    });
+    const text = await Bun.file(result.files.find((f) => f.includes("nodes"))!).text();
+    expect(text).toContain("missing required 'name' -> 400");
+  });
+});

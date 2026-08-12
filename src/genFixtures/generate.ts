@@ -59,7 +59,8 @@
  */
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
-import { loadSpec } from "../mockServer/loadSpec";
+import { loadSpec, type OpenApiSpec } from "../mockServer/loadSpec";
+import { resolveRef } from "../mockServer/mockResponse";
 
 type Schema = {
   type?: string;
@@ -708,8 +709,33 @@ ${urlLines}
 `;
 }
 
+// Deep-inline every $ref before derivation: most real-world specs put their
+// request/response schemas behind components refs, and every consumer below
+// (baseBody, boundary matrix, idPathFor) reads properties structurally. A
+// cyclic ref is cut to {} — a cyclic request body can't be instantiated as a
+// finite valid example anyway, and missing coverage beats wrong output.
+// OpenAPI 3.1 $ref siblings are merged over the resolved target.
+export function derefSchemas(node: unknown, spec: OpenApiSpec, stack: string[] = []): unknown {
+  if (Array.isArray(node)) return node.map((n) => derefSchemas(n, spec, stack));
+  if (!node || typeof node !== "object") return node;
+  const obj = node as Record<string, unknown>;
+  const ref = obj.$ref;
+  if (typeof ref === "string") {
+    if (stack.includes(ref)) return {};
+    const target = resolveRef(ref, spec);
+    if (!target || typeof target !== "object") return {};
+    const { $ref: _drop, ...siblings } = obj;
+    const resolved = derefSchemas(target, spec, [...stack, ref]) as Record<string, unknown>;
+    return { ...resolved, ...(derefSchemas(siblings, spec, stack) as Record<string, unknown>) };
+  }
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(obj)) out[k] = derefSchemas(v, spec, stack);
+  return out;
+}
+
 export async function generateFixtures(opts: GenerateOpts): Promise<GenerateResult> {
-  const { spec } = await loadSpec(opts.swagger);
+  const { spec: rawSpec } = await loadSpec(opts.swagger);
+  const spec = derefSchemas(rawSpec, rawSpec as OpenApiSpec) as typeof rawSpec;
   const outDir = resolve(opts.out);
 
   // The setup module is imported at generation time only to read the scope
