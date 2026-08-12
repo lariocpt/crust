@@ -21,6 +21,7 @@ whose stages are all ordinary commands is handed to `sh -c` untouched.
 | `{"name": "x"}` | JSON-literal source — ONE parsed item (the request body). Invalid JSON is a hard error |
 | `GET :3000/path` | HTTP. First stage: one `Response`. Mid-pipeline: per-item timed `{status, ms, url}` |
 | `POST/PUT/PATCH/DELETE url` | per-item request; upstream item = body (objects auto-JSON) |
+| `GET url --timeout 2s` | per-request timeout on any http stage (`ms`/`s`/`m`); timed paths yield `{status: 0, timedOut: true}`, plain verbs fail the pipeline; unknown `--flags` are errors |
 | `(x => x * 2)` | TypeScript lambda, per item, async ok |
 | `assert (r => r.ok)` | falsy FAILS the pipeline; empty upstream also fails |
 | `capture NAME (r => r.id)` | write value to `process.env.NAME` for later lines |

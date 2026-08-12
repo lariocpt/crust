@@ -67,6 +67,12 @@ export default {
 ```
 
 Run: `test-fixture --target 'tests/*.crust.ts' --threads 8 [--count N] [--timeout ms] [--bail]`.
+
+`output.schema` is a RESERVED key: give it an inline JSON Schema and the
+response body must conform — violations fail with per-field pointer paths.
+Unknown schema keywords pass (never-invent-a-violation). gen-fixtures emits
+this automatically when the spec documents a response schema for a case's
+expected status.
 Fixtures may run CONCURRENTLY under --threads — share state only via a
 module-scope promise-cached factory. Fixture files may import ONLY relative
 modules and Bun builtins (the binary can't resolve npm at runtime) —
