@@ -11,6 +11,14 @@ export function tokenize(line: string): Token[] {
     const c = line[i]!;
 
     if (quote) {
+      // Inside double quotes a backslash escapes the next char, so JSON
+      // bodies with embedded escaped quotes ({"size":"6\" nominal"}) stay
+      // one stage. Single quotes stay sh-like: no escapes.
+      if (quote === '"' && c === "\\" && i + 1 < line.length) {
+        buf += c + line[i + 1]!;
+        i++;
+        continue;
+      }
       buf += c;
       if (c === quote) quote = null;
       continue;
@@ -113,7 +121,9 @@ export function classify(text: string): StageKind {
 
   const parallelMatch = t.match(/^parallel\s+(\d+)$/);
   if (parallelMatch) {
-    return { kind: "parallel", n: parseInt(parallelMatch[1]!, 10) };
+    const n = parseInt(parallelMatch[1]!, 10);
+    if (n < 1) throw new Error(`parallel: N must be >= 1 — got ${n}`);
+    return { kind: "parallel", n };
   }
 
   const expectMatch = t.match(/^expect\s+(\d{3}|[1-5]xx)$/);

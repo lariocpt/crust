@@ -215,6 +215,26 @@ describe("load pipeline stages", () => {
       expect(msg).toContain("assert: item 1 failed (s => s.p95 < 0)");
       expect(await Bun.file(failFile).exists()).toBe(true);
 
+      // A WINDOW-level gate abandons statsStage mid-stream — the artifact
+      // must still exist (cumulative-so-far summary).
+      const winFile = join(dir, "win.json");
+      const winGate = parse(
+        `load 300ms 40/s | (t => ({status: 200, ms: 1})) | stats --every 1 --out ${winFile} | assert (s => !s.window || s.p50 < 0)`,
+      )();
+      let winMsg = "";
+      try {
+        for await (const _ of winGate.lines()) {
+          // drain
+        }
+      } catch (err) {
+        winMsg = (err as Error).message;
+      }
+      // The trailing partial window trips the gate before the final summary.
+      expect(winMsg).toContain("assert");
+      expect(await Bun.file(winFile).exists()).toBe(true);
+      const winDoc = (await Bun.file(winFile).json()) as { crustStats: number };
+      expect(winDoc.crustStats).toBe(1);
+
       // Async baseline predicate: the mechanized ">2x p95 is a finding" gate.
       const gate = parse(
         `range(0, 4) | GET ${base} | stats | assert (async s => { const b = await Bun.file("${okFile}").json(); return s.p95 < 2000 * (b.summary.p95 + 1) })`,

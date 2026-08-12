@@ -289,6 +289,8 @@ function shellSource(cmd: string): Pipeline<unknown> {
       const proc = Bun.spawn(["sh", "-c", cmd], {
         stdout: "pipe",
         stderr: "inherit",
+        // Live env so `capture`d $VARs from earlier lines reach sh.
+        env: { ...process.env },
       });
       const decoder = new TextDecoder();
       let buf = "";
@@ -313,6 +315,8 @@ function shellTransform(input: Pipeline<unknown>, cmd: string): Pipeline<unknown
         stdin: "pipe",
         stdout: "pipe",
         stderr: "inherit",
+        // Live env so `capture`d $VARs from earlier lines reach sh.
+        env: { ...process.env },
       });
 
       const writePromise = (async () => {

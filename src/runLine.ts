@@ -40,6 +40,9 @@ export async function runLine(line: string, ctx: Context): Promise<number> {
     if (isPureShell) {
       const proc = Bun.spawn(["sh", "-c", expanded], {
         stdio: ["inherit", "inherit", "inherit"],
+        // Live env, not the startup snapshot — `capture` writes process.env
+        // at run time and later shell lines must see $NAME.
+        env: { ...process.env },
       });
       await proc.exited;
       return proc.exitCode ?? 0;

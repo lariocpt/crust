@@ -281,3 +281,15 @@ describe("stats flags", () => {
     expect(classify("stats --out").kind).toBe("shell");
   });
 });
+
+describe("review fixes — grammar", () => {
+  test("backslash-escaped quotes inside double quotes stay one stage", () => {
+    const tokens = tokenize('{"size":"6\\" nominal"} | POST :3000/x');
+    expect(tokens).toHaveLength(2);
+    expect(classify(tokens[0]!.text).kind).toBe("json");
+  });
+
+  test("parallel 0 is a loud error, not a hang", () => {
+    expect(() => classify("parallel 0")).toThrow("parallel: N must be >= 1");
+  });
+});

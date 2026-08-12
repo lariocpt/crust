@@ -116,6 +116,16 @@ describe("shorthand pipelines end-to-end", () => {
     delete process.env.CAP_METHOD;
   });
 
+  test("captured env reaches shell stages (live env at spawn)", async () => {
+    delete process.env.CAP_SHELL;
+    await drain(`{"id": 42} | capture CAP_SHELL (o => o.id)`);
+    const out = await drain(`echo "got=$CAP_SHELL"`);
+    expect(out[0]).toBe("got=42");
+    const piped = await drain(`{"v": "x"} | (o => o.v) | sed "s/x/$CAP_SHELL/"`);
+    expect(piped[0]).toBe("42");
+    delete process.env.CAP_SHELL;
+  });
+
   test("expect 2xx class works in shorthand", async () => {
     const out = await drain(`{"a":1} | POST ${base}/echo | expect 2xx`);
     expect(out).toHaveLength(1);

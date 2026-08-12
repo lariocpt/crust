@@ -122,6 +122,8 @@ export function time<T>(
 // previous barrier variant buffered everything and made windowed soak stats
 // meaningless — every item arrived in the final millisecond.
 export function parallel<T, U>(n: number, fn: (x: T) => U | Promise<U>): PipelineStage<T, U> {
+  // n=0 would make the pool loop below spin forever without ever awaiting.
+  if (n < 1) throw new Error(`parallel: N must be >= 1 — got ${n}`);
   return pipelineStage<T, U>((input) =>
     Pipeline.of(
       (async function* () {
@@ -337,6 +339,21 @@ export function statsStage(
         let win: StatsAcc = { latencies: [], status: {}, count: 0 };
         let winStart = t0;
         let winNo = 0;
+        // Written after EVERY window flush, not only at the end: a window-
+        // level threshold assert abandons this generator mid-stream, and the
+        // artifact must still exist for CI upload (summary = cumulative so
+        // far in that case).
+        const flush = async () => {
+          if (!out) return;
+          const doc: Record<string, unknown> = {
+            crustStats: 1,
+            startedAt,
+            urls: [...urls].sort(),
+            summary: summarize(total, performance.now() - t0),
+          };
+          if (everySec) doc.windows = windows;
+          await Bun.write(out, `${JSON.stringify(doc, null, 2)}\n`);
+        };
         for await (const item of input.lines()) {
           const u = (item as { url?: unknown }).url;
           if (typeof u === "string") urls.add(u);
@@ -349,29 +366,21 @@ export function statsStage(
             winNo++;
             const w = { window: winNo, ...summarize(win, performance.now() - winStart) };
             windows.push(w);
+            await flush();
             yield w;
             win = { latencies: [], status: {}, count: 0 };
             winStart = performance.now();
           }
         }
-        const wallMs = performance.now() - t0;
         if (everySec && win.count > 0) {
           winNo++;
           const w = { window: winNo, ...summarize(win, performance.now() - winStart) };
           windows.push(w);
+          await flush();
           yield w;
         }
-        const summary = summarize(total, wallMs);
-        if (out) {
-          const doc: Record<string, unknown> = {
-            crustStats: 1,
-            startedAt,
-            urls: [...urls].sort(),
-            summary,
-          };
-          if (everySec) doc.windows = windows;
-          await Bun.write(out, `${JSON.stringify(doc, null, 2)}\n`);
-        }
+        const summary = summarize(total, performance.now() - t0);
+        await flush();
         yield everySec ? { final: true, ...summary } : summary;
       })(),
     ),

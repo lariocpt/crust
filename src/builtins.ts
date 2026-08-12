@@ -91,7 +91,10 @@ const sourceBuiltin: Builtin = async (rawArgs, _ctx) => {
       const resolved = path.startsWith("/") ? path : `${process.cwd()}/${path}`;
       await import(resolved);
     } else {
-      const proc = Bun.spawn(["sh", path], { stdio: ["inherit", "inherit", "inherit"] });
+      const proc = Bun.spawn(["sh", path], {
+        stdio: ["inherit", "inherit", "inherit"],
+        env: { ...process.env },
+      });
       await proc.exited;
       return proc.exitCode ?? 0;
     }
