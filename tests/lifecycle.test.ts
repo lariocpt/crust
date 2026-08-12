@@ -46,6 +46,29 @@ async function runCli(args: string[], configPath: string): Promise<RunResult> {
   return { code: proc.exitCode ?? -1, stdout, stderr, proc };
 }
 
+// The signal tests must not fire a signal before the spawned crust has run
+// its config (crust.onSignal installs process.on listeners synchronously
+// during config evaluation). Each config prints "hooks-ready" once it has
+// finished; poll the child's accumulated stdout for that marker instead of
+// sleeping a fixed 400ms.
+function collectStdout(proc: ReturnType<typeof Bun.spawn>): { text: string } {
+  const acc = { text: "" };
+  const decoder = new TextDecoder();
+  (async () => {
+    for await (const chunk of proc.stdout as ReadableStream<Uint8Array>) {
+      acc.text += decoder.decode(chunk, { stream: true });
+    }
+  })();
+  return acc;
+}
+
+async function pollUntil(cond: () => boolean, capMs = 1000): Promise<void> {
+  const deadline = Date.now() + capMs;
+  while (!cond() && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 20));
+  }
+}
+
 describe("lifecycle hooks", () => {
   test("onExit fires with the exit code from `exit N`", async () => {
     const cfg = await writeConfig(
@@ -115,7 +138,8 @@ describe("lifecycle hooks", () => {
        crust.onSignal("SIGUSR1", () => {
          writeFileSync(${JSON.stringify(marker)}, "got-it");
          process.exit(42);
-       });`,
+       });
+       process.stdout.write("hooks-ready\\n");`,
     );
     // Spawn a long-running -c line so the process stays alive until we signal it.
     const proc = Bun.spawn(["bun", ENTRY, "-c", "sleep 5"], {
@@ -127,8 +151,9 @@ describe("lifecycle hooks", () => {
         CRUST_GLOBAL_PREFIX: "/tmp/crust-lifecycle-no-globals",
       },
     });
-    // Give the process time to register the signal handler.
-    await new Promise((r) => setTimeout(r, 400));
+    // Wait until the config has run (and thus the handler is registered).
+    const out = collectStdout(proc);
+    await pollUntil(() => out.text.includes("hooks-ready"));
     process.kill(proc.pid, "SIGUSR1");
     await proc.exited;
     expect(proc.exitCode).toBe(42);
@@ -146,7 +171,8 @@ describe("lifecycle hooks", () => {
        crust.onSignal("SIGUSR2", () => {
          writeFileSync(${JSON.stringify(m2)}, "2");
          process.exit(0);
-       });`,
+       });
+       process.stdout.write("hooks-ready\\n");`,
     );
     const proc = Bun.spawn(["bun", ENTRY, "-c", "sleep 5"], {
       stdout: "pipe",
@@ -157,7 +183,8 @@ describe("lifecycle hooks", () => {
         CRUST_GLOBAL_PREFIX: "/tmp/crust-lifecycle-no-globals",
       },
     });
-    await new Promise((r) => setTimeout(r, 400));
+    const out = collectStdout(proc);
+    await pollUntil(() => out.text.includes("hooks-ready"));
     process.kill(proc.pid, "SIGUSR2");
     await proc.exited;
     expect(await Bun.file(m1).text()).toBe("1");
@@ -168,7 +195,12 @@ describe("lifecycle hooks", () => {
     // If no onSignal is called, SIGUSR1 should kill the process with default
     // semantics (exit code reflecting the signal). This verifies we don't
     // claim signals the user didn't opt into.
-    const cfg = await writeConfig("no-signals.ts", `// nothing`);
+    const cfg = await writeConfig(
+      "no-signals.ts",
+      // No onSignal calls — only a marker proving the config has been
+      // evaluated (i.e. crust had its chance to claim signals, and didn't).
+      `process.stdout.write("hooks-ready\\n");`,
+    );
     const proc = Bun.spawn(["bun", ENTRY, "-c", "sleep 5"], {
       stdout: "pipe",
       stderr: "pipe",
@@ -178,7 +210,8 @@ describe("lifecycle hooks", () => {
         CRUST_GLOBAL_PREFIX: "/tmp/crust-lifecycle-no-globals",
       },
     });
-    await new Promise((r) => setTimeout(r, 400));
+    const out = collectStdout(proc);
+    await pollUntil(() => out.text.includes("hooks-ready"));
     process.kill(proc.pid, "SIGUSR1");
     await proc.exited;
     // Default SIGUSR1 disposition on the parent process kills it; Bun's
