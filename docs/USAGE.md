@@ -1091,8 +1091,11 @@ const summary = await load([{ durMs: 10_000, rps: 100 }])
 ### Log mining
 
 ```bash
-**/*.log | grep ERROR | wc -l
+read **/*.log | grep ERROR | wc -l
 ```
+
+(`read` streams file **contents** into `grep` — a bare `**/*.log` glob
+yields *paths*, so `grep` would match against the filenames and count 0.)
 
 ### Build artifacts (using a globally-installed bundler via init.ts)
 

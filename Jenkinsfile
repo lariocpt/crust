@@ -129,6 +129,8 @@ pipeline {
                         . ./version.env
 
                         rm -rf npmstage && cp -r npm npmstage
+                        # Agent skills ride along in the tarball (package.json "files" lists skills/).
+                        cp -r skills npmstage/skills
                         sed -i '0,/"version"/s|"version"[[:space:]]*:[[:space:]]*"[^"]*"|"version": "'"$NPM_VERSION"'"|' npmstage/package.json
 
                         # The token never appears in argv (visible in `ps` on the host) and never

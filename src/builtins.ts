@@ -284,7 +284,13 @@ const verifyWebLinksBuiltin: Builtin = async (rawArgs, _ctx) => {
   return await runCli(args);
 };
 
+const skillsBuiltin: Builtin = async (rawArgs, _ctx) => {
+  const { runSkills } = await import("./skillsCli");
+  return await runSkills(splitArgs(rawArgs.trim()));
+};
+
 export const builtins: Record<string, Builtin> = {
+  skills: skillsBuiltin,
   cd: cdBuiltin,
   export: exportBuiltin,
   alias: aliasBuiltin,
