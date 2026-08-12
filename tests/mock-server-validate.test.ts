@@ -301,7 +301,7 @@ const VALIDATE_SPEC = {
 
 describe("--validate mock mode e2e", () => {
   test("invalid body -> 422 with violations; valid body -> mock response", async () => {
-    const server = startServer({
+    const server = await startServer({
       port: 0,
       hostname: "127.0.0.1",
       spec: VALIDATE_SPEC,
@@ -354,7 +354,7 @@ describe("--validate mock mode e2e", () => {
   });
 
   test("path (path-item-level) and query params are coerced and validated", async () => {
-    const server = startServer({
+    const server = await startServer({
       port: 0,
       hostname: "127.0.0.1",
       spec: VALIDATE_SPEC,
@@ -393,7 +393,7 @@ describe("--validate mock mode e2e", () => {
   });
 
   test("stateful + validate: an invalid POST returns 422 and creates NOTHING", async () => {
-    const server = startServer({
+    const server = await startServer({
       port: 0,
       hostname: "127.0.0.1",
       spec: VALIDATE_SPEC,
@@ -470,7 +470,7 @@ describe("--proxy validation-proxy e2e", () => {
   let dir: string;
   let reportPath: string;
   let upstream: ReturnType<typeof Bun.serve>;
-  let proxy: ReturnType<typeof startServer>;
+  let proxy: Awaited<ReturnType<typeof startServer>>;
   let base: string;
 
   beforeAll(async () => {
@@ -496,7 +496,7 @@ describe("--proxy validation-proxy e2e", () => {
         return new Response("mystery", { status: 200, headers: { "content-type": "text/plain" } });
       },
     });
-    proxy = startServer({
+    proxy = await startServer({
       port: 0,
       hostname: "127.0.0.1",
       spec: PROXY_SPEC,
@@ -591,7 +591,7 @@ describe("--proxy validation-proxy e2e", () => {
     const doomed = Bun.serve({ port: 0, fetch: () => new Response("x") });
     const deadPort = doomed.port;
     doomed.stop();
-    const orphan = startServer({
+    const orphan = await startServer({
       port: 0,
       hostname: "127.0.0.1",
       spec: PROXY_SPEC,
@@ -650,7 +650,7 @@ const DECODE_SPEC = {
 
 describe("path param percent-decoding", () => {
   test("encoded path params validate against the DECODED value", async () => {
-    const server = startServer({
+    const server = await startServer({
       port: 0,
       hostname: "127.0.0.1",
       spec: DECODE_SPEC,
@@ -682,7 +682,7 @@ describe("path param percent-decoding", () => {
   });
 
   test("stateful store lookups use the decoded id", async () => {
-    const server = startServer({
+    const server = await startServer({
       port: 0,
       hostname: "127.0.0.1",
       spec: DECODE_SPEC,
@@ -743,7 +743,7 @@ const EXPLODE_SPEC = {
 
 describe("query array explode:false (comma form)", () => {
   test("comma-joined values validate per item; bad items are still caught", async () => {
-    const server = startServer({
+    const server = await startServer({
       port: 0,
       hostname: "127.0.0.1",
       spec: EXPLODE_SPEC,
@@ -789,10 +789,10 @@ describe("proxy binary passthrough and upstream base path", () => {
 
   const seenPaths: string[] = [];
   let upstream: ReturnType<typeof Bun.serve>;
-  let proxy: ReturnType<typeof startServer>;
+  let proxy: Awaited<ReturnType<typeof startServer>>;
   let base: string;
 
-  beforeAll(() => {
+  beforeAll(async () => {
     upstream = Bun.serve({
       port: 0,
       fetch(req) {
@@ -808,7 +808,7 @@ describe("proxy binary passthrough and upstream base path", () => {
         });
       },
     });
-    proxy = startServer({
+    proxy = await startServer({
       port: 0,
       hostname: "127.0.0.1",
       spec: { openapi: "3.0.0", paths: {} } as OpenApiSpec,

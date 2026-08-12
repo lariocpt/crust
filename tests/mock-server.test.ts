@@ -302,7 +302,7 @@ describe("response synthesis", () => {
 describe("startServer end-to-end", () => {
   test("serves synthesised JSON, 405, 404, and 204 correctly", async () => {
     const logs: string[] = [];
-    const server = startServer({
+    const server = await startServer({
       port: 0,
       hostname: "127.0.0.1",
       spec: minimalSpec as unknown as OpenApiSpec,
@@ -413,7 +413,7 @@ describe("stateful mode", () => {
 
   test("POST -> GET -> PATCH -> DELETE round-trip", async () => {
     const { startServer } = await import("../src/mockServer/server");
-    const server = startServer({
+    const server = await startServer({
       port: 0,
       hostname: "127.0.0.1",
       spec: SPEC as never,
@@ -431,6 +431,10 @@ describe("stateful mode", () => {
       const item = (await created.json()) as { id: string; name: string };
       expect(item.name).toBe("Crusty");
       expect(item.id).toBeTruthy();
+
+      // the memory backend wraps the SAME Map exposed as server.state
+      expect(server.state.get("/things")?.size).toBe(1);
+      expect(await server.backend.get("/things", item.id)).toMatchObject({ name: "Crusty" });
 
       const got = await fetch(`${base}/things/${item.id}`);
       expect(got.status).toBe(200);
@@ -464,7 +468,7 @@ describe("stateful mode", () => {
 
   test("non-stateful mode ignores writes (regression)", async () => {
     const { startServer } = await import("../src/mockServer/server");
-    const server = startServer({
+    const server = await startServer({
       port: 0,
       hostname: "127.0.0.1",
       spec: SPEC as never,

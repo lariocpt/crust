@@ -478,9 +478,8 @@ describe("gen-fixtures", () => {
   });
 
   test("generated flow round-trips create->read->update->delete->404 on the stateful mock", async () => {
-    // Top-level id in the 201 example ON PURPOSE: the stateful mock stores
-    // ids top-level, so a wrapped-response spec would mis-capture against
-    // the MOCK (fine against real servers — documented mock limitation).
+    // Flat 201 example (top-level id) — the wrapped-envelope variant is the
+    // next test; the mock now handles both.
     const CRUD_SPEC = {
       openapi: "3.0.0",
       info: { title: "crud", version: "1" },
@@ -547,7 +546,7 @@ export function resolvePath(ctx, template) {
 `;
     await writeFile(join(dir, "crud-spec.json"), JSON.stringify(CRUD_SPEC));
     await writeFile(join(dir, "crud-setup.ts"), CRUD_SETUP);
-    const srv = startServer({
+    const srv = await startServer({
       port: 0,
       hostname: "127.0.0.1",
       spec: CRUD_SPEC as OpenApiSpec,
@@ -569,6 +568,103 @@ export function resolvePath(ctx, template) {
     } finally {
       await srv.stop();
       delete process.env.CRUST_GENFX_BASE;
+    }
+  });
+
+  test("wrapped-response spec: the generated flow passes against the envelope-aware stateful mock", async () => {
+    // The 201 example wraps the entity — the capture is b.gadget.id. Before
+    // envelope-aware CRUD this mis-captured the stale example id against the
+    // mock (the documented limitation); it must round-trip now.
+    const WRAPPED_CRUD_SPEC = {
+      openapi: "3.0.0",
+      info: { title: "wrapped-crud", version: "1" },
+      paths: {
+        "/api/gadgets": {
+          post: {
+            tags: ["gadgets"],
+            requestBody: {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    required: ["name"],
+                    properties: { name: { type: "string", minLength: 2 } },
+                  },
+                },
+              },
+            },
+            responses: {
+              "201": {
+                description: "created",
+                content: { "application/json": { example: { gadget: { id: "x" } } } },
+              },
+            },
+          },
+        },
+        "/api/gadgets/{gadgetId}": {
+          get: {
+            tags: ["gadgets"],
+            responses: { "200": { description: "ok" }, "404": { description: "gone" } },
+          },
+          patch: {
+            tags: ["gadgets"],
+            requestBody: {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: { name: { type: "string", minLength: 2 } },
+                  },
+                },
+              },
+            },
+            responses: { "200": { description: "ok" } },
+          },
+          delete: { tags: ["gadgets"], responses: { "204": { description: "deleted" } } },
+        },
+      },
+    };
+    const WRAPPED_SETUP = `
+export const JSON_HEADERS = { "content-type": "application/json" };
+export const scopeParam = null;
+let cached = null;
+export function shared() {
+  cached ??= Promise.resolve({ base: process.env.CRUST_GENFX_WRAP_BASE });
+  return cached;
+}
+export function headersFor(ctx, role) {
+  return { ...JSON_HEADERS, authorization: "Bearer gen-" + role };
+}
+export function resolvePath(ctx, template) {
+  return ctx.base + template;
+}
+`;
+    await writeFile(join(dir, "wrapped-crud-spec.json"), JSON.stringify(WRAPPED_CRUD_SPEC));
+    await writeFile(join(dir, "wrapped-crud-setup.ts"), WRAPPED_SETUP);
+    const srv = await startServer({
+      port: 0,
+      hostname: "127.0.0.1",
+      spec: WRAPPED_CRUD_SPEC as OpenApiSpec,
+      stateful: true,
+      log: () => {},
+    });
+    process.env.CRUST_GENFX_WRAP_BASE = `http://127.0.0.1:${srv.port}`;
+    try {
+      const result = await generateFixtures({
+        swagger: join(dir, "wrapped-crud-spec.json"),
+        out: join(dir, "out-wrapped"),
+        setup: join(dir, "wrapped-crud-setup.ts"),
+        log: () => {},
+      });
+      expect(result.flowCount).toBe(1);
+      const pipes = await Bun.file(result.flowFile!).text();
+      expect(pipes).toContain("capture GEN_ID_API_GADGETS (b => b.gadget.id)");
+      const report = await runPipes({ target: result.flowFile! });
+      expect(report.results.filter((r) => r.status === "fail")).toEqual([]);
+      expect(report.totals).toEqual({ pass: 5, fail: 0, files: 1 });
+    } finally {
+      await srv.stop();
+      delete process.env.CRUST_GENFX_WRAP_BASE;
     }
   });
 
