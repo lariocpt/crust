@@ -154,3 +154,31 @@ describe("-c fail-fast", () => {
     expect(out).not.toContain("NOPE");
   });
 });
+
+describe("fn-arg env expansion", () => {
+  test("args expand $VARS but keep SQL positional params", async () => {
+    process.env.FN_ARG_VAL = "expanded";
+    const c = ctx();
+    const seen: unknown[] = [];
+    c.functions.set("capture2", (...args: unknown[]) => {
+      seen.push(args);
+      return [];
+    });
+    for await (const _ of parse('capture2 "WHERE x = $1" "val-$FN_ARG_VAL"')(c).lines()) {
+      // drain
+    }
+    expect(seen[0]).toEqual(["WHERE x = $1", "val-expanded"]);
+  });
+});
+
+describe("assert on empty upstream", () => {
+  test("fails instead of passing vacuously", async () => {
+    let msg = "";
+    try {
+      await drain("range(0, -1) | assert (x => true)");
+    } catch (err) {
+      msg = (err as Error).message;
+    }
+    expect(msg).toContain("no items reached");
+  });
+});

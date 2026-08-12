@@ -68,7 +68,10 @@ function resolveKind(text: string, ctx?: Context): StageKind {
     const parts = splitArgs(text.trim());
     const head = parts[0]!;
     if (ctx.functions.has(head)) {
-      return { kind: "function", name: head, args: parts.slice(1) };
+      // Env-expand fn args so `sql "..." "prefix $RUN_ID"` works in .pipes
+      // files. SQL positional params ($1, $2) survive — a digit can't start
+      // an env var name.
+      return { kind: "function", name: head, args: parts.slice(1).map(expandEnv) };
     }
   }
   return kind;
@@ -185,18 +188,29 @@ function applyStage(
     case "assert": {
       // A predicate that FAILS the pipeline on falsy — unlike a plain lambda,
       // which maps. `| sql "SELECT ..." | assert (r => r[0].c === 1)`.
+      // A full stage (not a per-item pipe) so an EMPTY upstream also fails:
+      // an assertion nothing reached is a silent false positive — the
+      // sql-returned-zero-rows trap.
       const fn = new Function("x", `return (${kind.source})(x);`) as (x: unknown) => unknown;
-      let idx = 0;
-      return input.pipe(async (item: unknown) => {
-        idx++;
-        const ok = await fn(item);
-        if (!ok) {
-          throw new Error(
-            `assert: item ${idx} failed ${kind.source} — got ${JSON.stringify(item)?.slice(0, 200)}`,
-          );
-        }
-        return item;
-      });
+      const upstream = input;
+      return Pipeline.of(
+        (async function* () {
+          let idx = 0;
+          for await (const item of upstream.lines()) {
+            idx++;
+            const ok = await fn(item);
+            if (!ok) {
+              throw new Error(
+                `assert: item ${idx} failed ${kind.source} — got ${JSON.stringify(item)?.slice(0, 200)}`,
+              );
+            }
+            yield item;
+          }
+          if (idx === 0) {
+            throw new Error(`assert: no items reached ${kind.source} — upstream was empty`);
+          }
+        })(),
+      );
     }
     case "stats":
       return input.pipe(transforms.statsStage(kind.everySec) as never) as Pipeline<unknown>;
