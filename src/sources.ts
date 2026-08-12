@@ -628,6 +628,8 @@ export interface LoadTick {
 export interface LoadOpts {
   /** shortfall report sink — injectable for tests (default stderr) */
   warn?: (s: string) => void;
+  /** drop a due slot only when consumer backpressure made it older than this (default 1000) */
+  maxLagMs?: number;
 }
 
 export function load(
@@ -642,6 +644,7 @@ export function load(
       let n = 0;
       let target = 0;
       let dropped = 0;
+      const maxLagMs = opts.maxLagMs ?? 1000;
       for (let p = 0; p < phases.length; p++) {
         const { durMs, rps } = phases[p]!;
         const interval = 1000 / rps;
@@ -649,9 +652,10 @@ export function load(
         target += phaseTarget;
         const phaseStart = performance.now();
         const phaseEnd = phaseStart + durMs;
-        for (let k = 0; k < phaseTarget; k++) {
+        let k = 0;
+        while (k < phaseTarget) {
           const ideal = phaseStart + k * interval;
-          const now = performance.now();
+          let now = performance.now();
           if (now >= phaseEnd) {
             // Phase clock ran out with slots left — all of them are drops.
             dropped += phaseTarget - k;
@@ -659,17 +663,32 @@ export function load(
           }
           if (now < ideal) {
             await Bun.sleep(ideal - now);
-          } else if (now - ideal > interval) {
-            // Slot went stale while downstream was busy: skip, don't burst.
-            dropped++;
-            continue;
+            now = performance.now();
           }
-          yield {
-            n: n++,
-            phase: p,
-            scheduledAt: ideal,
-            lagMs: Math.max(0, performance.now() - ideal),
-          };
+          // Emit EVERY due slot before sleeping again — one ~1ms wakeup can
+          // carry many ticks, so the generator no longer caps the rate. A due
+          // slot is dropped only when CONSUMER backpressure let it go stale
+          // beyond maxLagMs (emitting due slots is the schedule, not a burst;
+          // `now` is re-read after each yield because the consumer's pull
+          // time is exactly where honest lag accrues).
+          while (k < phaseTarget) {
+            const slot = phaseStart + k * interval;
+            if (slot > now) break;
+            if (now - slot > maxLagMs) {
+              dropped++;
+              k++;
+              continue;
+            }
+            yield {
+              n: n++,
+              phase: p,
+              scheduledAt: slot,
+              lagMs: Math.max(0, now - slot),
+            };
+            k++;
+            now = performance.now();
+            if (now >= phaseEnd) break;
+          }
         }
       }
       if (dropped > 0) {

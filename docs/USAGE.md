@@ -173,9 +173,16 @@ load: target 3000 ticks — emitted 2868, dropped 132 (downstream saturated; rai
 report a target rate it didn't sustain (the classic coordinated-omission
 trap). Ticks are `{n, phase, scheduledAt, lagMs}` objects, so a body-builder
 lambda gets real material: `load 10s 20/s | (t => ({name: "user" + t.n})) |
-parallel 8 | POST :3000/users`. Bun's ~1ms sleep floor makes roughly
-500–1000/s per process the honest ceiling — this is CI smoke-load and soak
-tooling, not a distributed load rig.
+parallel 8 | POST :3000/users`.
+
+Each wakeup emits **every due slot** (a batch), so the generator itself no
+longer caps the rate — 5000/s tick emission is verified in the suite; the
+sustained request rate is bounded by downstream (`parallel` pool size ×
+service time), not by pacing. A due slot is dropped only when consumer
+backpressure let it go stale beyond `maxLagMs` (default 1s; TS API
+`load(phases, {maxLagMs})`) or the phase clock ran out — catch-up of due
+slots is the schedule, never a burst beyond it. Still single-process CI
+smoke-load and soak tooling, not a distributed load rig.
 
 `procs({name: "command", …})` spawns each command and streams
 `{ proc, stream, line }` for every stdout/stderr line (plus an `exit`

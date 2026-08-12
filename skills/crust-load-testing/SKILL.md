@@ -6,8 +6,10 @@ description: Load-test and soak-test HTTP services with crust — the load rate 
 # crust load testing
 
 One line gives you a paced load run with real percentiles and a CI-ready
-exit code. This is smoke-load and soak tooling (honest ceiling ~500–1000
-requests/s per process) — not a distributed rig.
+exit code. Tick pacing batches due slots per wakeup, so the generator
+sustains 5000+ ticks/s — your real ceiling is downstream (`parallel` pool ×
+service time). Single-process smoke-load and soak tooling, not a
+distributed rig.
 
 ## The shapes
 

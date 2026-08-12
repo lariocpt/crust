@@ -781,3 +781,30 @@ describe("load", () => {
     expect(() => load([])).toThrow("load: needs at least one phase");
   });
 });
+
+describe("load batch emission", () => {
+  test("high-rate: 5000/s emits far beyond the 1ms sleep floor", async () => {
+    const ticks = await load([{ durMs: 100, rps: 5000 }]).collect();
+    expect(ticks.length).toBeGreaterThanOrEqual(300);
+    expect(ticks.length).toBeLessThanOrEqual(500);
+    const ns = ticks.map((t) => t.n);
+    expect(ns).toEqual([...ns].sort((a, b) => a - b));
+  });
+
+  test("maxLagMs drops consumer-stale slots (and only those)", async () => {
+    let msg = "";
+    const src = load([{ durMs: 120, rps: 100 }], {
+      warn: (s) => {
+        msg += s;
+      },
+      maxLagMs: 30,
+    });
+    const seen: unknown[] = [];
+    for await (const t of src.lines()) {
+      seen.push(t);
+      await Bun.sleep(35); // every pull stalls past maxLagMs
+    }
+    expect(seen.length).toBeLessThan(12);
+    expect(msg).toContain("dropped");
+  });
+});
