@@ -47,7 +47,7 @@ pipeline {
             steps {
                 sh '''
                     set -eu
-                    BASE=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' package.json | head -1) ; BASE=${BASE%-dev}
+                    BASE=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\\([^"]*\\)".*/\\1/p' package.json | head -1) ; BASE=${BASE%-dev}
                     SHA=$(git rev-parse --short HEAD)
 
                     # The two planes version the same build differently, on purpose — see the
