@@ -438,7 +438,8 @@ describe.concurrent("procs readiness and ordering", () => {
 
   test("ready(http): probes until the target answers 2xx, then emits the ready line", async () => {
     const { procs } = await import("../src/sources");
-    const srv = flipServer(70);
+    // 40ms flip with 10ms probes: several probes still hit the 503 window.
+    const srv = flipServer(40);
     try {
       const lines = await collectUntil(
         procs({
@@ -483,7 +484,9 @@ describe.concurrent("procs readiness and ordering", () => {
 
   test("after: dependent spawns only once the dependency is ready", async () => {
     const { procs } = await import("../src/sources");
-    const srv = flipServer(80);
+    // 40ms flip with 10ms probes: the dep is reliably not-yet-ready when
+    // the dependent starts waiting.
+    const srv = flipServer(40);
     try {
       const lines = await collectUntil(
         procs({
@@ -614,17 +617,17 @@ describe.concurrent("procs readiness and ordering", () => {
     const server = Bun.serve({
       port: 0,
       fetch: async () => {
-        await Bun.sleep(80);
+        await Bun.sleep(40);
         return new Response("ok");
       },
     });
     try {
       const target = parseReadyTarget(`http://localhost:${server.port}/health`);
-      // Default per-probe cap is min(intervalMs*4, 2000) = 40ms — an 80ms
+      // Default per-probe cap is min(intervalMs*4, 2000) = 20ms — a 40ms
       // TTFB can never answer in time, no matter how generous timeoutMs is.
-      expect(await awaitReady(target, { intervalMs: 10, timeoutMs: 160 })).toBeNull();
+      expect(await awaitReady(target, { intervalMs: 5, timeoutMs: 80 })).toBeNull();
       const res = await awaitReady(target, {
-        intervalMs: 10,
+        intervalMs: 5,
         timeoutMs: 1000,
         probeTimeoutMs: 500,
       });
@@ -640,7 +643,7 @@ describe.concurrent("procs readiness and ordering", () => {
     const server = Bun.serve({
       port: 0,
       fetch: async () => {
-        await Bun.sleep(80);
+        await Bun.sleep(40);
         return new Response("ok");
       },
     });
@@ -651,7 +654,10 @@ describe.concurrent("procs readiness and ordering", () => {
             cmd: "sleep 5",
             ready: {
               url: `http://localhost:${server.port}/`,
-              intervalMs: 10,
+              // intervalMs 5 keeps the default cap (20ms) safely under the
+              // 40ms TTFB — without the probeTimeoutMs plumb-through this
+              // test must fail, not race.
+              intervalMs: 5,
               timeoutMs: 1000,
               probeTimeoutMs: 500,
             },
