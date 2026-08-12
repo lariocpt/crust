@@ -2,6 +2,7 @@
 // (compiled-binary-safe: no runtime fs dependency on the repo checkout).
 // `skills install` writes them into a project's .claude/skills/ directory.
 import crustLoadTesting from "../skills/crust-load-testing/SKILL.md" with { type: "text" };
+import crustMockServer from "../skills/crust-mock-server/SKILL.md" with { type: "text" };
 import crustPipelines from "../skills/crust-pipelines/SKILL.md" with { type: "text" };
 
 export interface EmbeddedSkill {
@@ -11,6 +12,7 @@ export interface EmbeddedSkill {
 
 export const EMBEDDED_SKILLS: EmbeddedSkill[] = [
   { name: "crust-load-testing", content: crustLoadTesting },
+  { name: "crust-mock-server", content: crustMockServer },
   { name: "crust-pipelines", content: crustPipelines },
 ];
 
