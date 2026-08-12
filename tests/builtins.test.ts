@@ -120,6 +120,35 @@ describe("export", () => {
     delete process.env.CRUST_A;
     delete process.env.CRUST_B;
   });
+
+  test("quoted value with spaces stays one var", async () => {
+    const ctx = mkCtx();
+    await builtins.export!('CRUST_Q="a b" CRUST_R=2', ctx);
+    expect(process.env.CRUST_Q).toBe("a b");
+    expect(process.env.CRUST_R).toBe("2");
+    delete process.env.CRUST_Q;
+    delete process.env.CRUST_R;
+  });
+
+  test("a value that is itself quote-wrapped keeps its quotes", async () => {
+    const ctx = mkCtx();
+    await builtins.export!("CRUST_QQ='\"quoted\"'", ctx);
+    expect(process.env.CRUST_QQ).toBe('"quoted"');
+    delete process.env.CRUST_QQ;
+  });
+});
+
+describe("tool builtins strip quotes from --target globs", () => {
+  test("test-pipes matches a single-quoted glob", async () => {
+    const dir = await realpath(await mkdtemp(join(tmpdir(), "crust-glob-")));
+    try {
+      await Bun.write(join(dir, "ok.pipes"), "range(0, 1) | assert (n => n >= 0)\n");
+      const code = await builtins["test-pipes"]!(`--target '${dir}/*.pipes'`, mkCtx());
+      expect(code).toBe(0);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("exit", () => {

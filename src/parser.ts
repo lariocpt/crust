@@ -5,6 +5,7 @@
 // user typed. Not a code-injection risk; it's the design.
 
 import { expandEnv, splitArgs } from "./args";
+import { formatItem } from "./format";
 import { classify, tokenize } from "./lexer";
 import { Pipeline } from "./pipeline";
 import * as sources from "./sources";
@@ -277,7 +278,7 @@ function shellTransform(input: Pipeline<unknown>, cmd: string): Pipeline<unknown
       const writePromise = (async () => {
         const writer = proc.stdin as FileSink;
         for await (const item of input.lines()) {
-          writer.write(String(item) + "\n");
+          writer.write(formatItem(item) + "\n");
         }
         await writer.end();
       })();

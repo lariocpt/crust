@@ -40,6 +40,11 @@ describe("parser — transforms", () => {
     const out = await p.collect();
     expect(out).toContain("HI");
   });
+
+  test("objects reach shell stages as JSON lines, not [object Object]", async () => {
+    const p = parse('{"a": 1} | cat')();
+    expect(await p.collect()).toEqual(['{"a":1}']);
+  });
 });
 
 describe("parser — registered functions (crust.fn)", () => {

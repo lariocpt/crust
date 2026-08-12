@@ -1,4 +1,5 @@
 import { builtins, isBuiltin } from "./builtins";
+import { formatItem } from "./format";
 import { classify, tokenize } from "./lexer";
 import { parse } from "./parser";
 import type { Context } from "./types";
@@ -52,18 +53,5 @@ export async function runLine(line: string, ctx: Context): Promise<number> {
   } catch (err) {
     process.stderr.write(`crust: ${(err as Error).message}\n`);
     return 1;
-  }
-}
-
-function formatItem(x: unknown): string {
-  if (x instanceof Response) {
-    return `${x.status} ${x.statusText} ${x.url}`;
-  }
-  if (typeof x === "string") return x;
-  if (typeof x === "number" || typeof x === "boolean") return String(x);
-  try {
-    return JSON.stringify(x);
-  } catch {
-    return String(x);
   }
 }

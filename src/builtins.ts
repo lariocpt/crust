@@ -1,3 +1,4 @@
+import { splitArgs } from "./args";
 import type { Context } from "./types";
 
 export type Builtin = (rawArgs: string, ctx: Context) => Promise<number> | number;
@@ -39,19 +40,12 @@ const exportBuiltin: Builtin = (rawArgs, _ctx) => {
     }
     return 0;
   }
-  const parts = splitArgsRespectingQuotes(arg);
+  // splitArgs strips quotes, so `export FOO="a b"` arrives as one part `FOO=a b`.
+  const parts = splitArgs(arg);
   for (const part of parts) {
     const eq = part.indexOf("=");
     if (eq === -1) continue;
-    const key = part.slice(0, eq);
-    let value = part.slice(eq + 1);
-    if (
-      (value.startsWith("'") && value.endsWith("'")) ||
-      (value.startsWith('"') && value.endsWith('"'))
-    ) {
-      value = value.slice(1, -1);
-    }
-    process.env[key] = value;
+    process.env[part.slice(0, eq)] = part.slice(eq + 1);
   }
   return 0;
 };
@@ -132,7 +126,7 @@ const helpBuiltin: Builtin = () => {
 };
 
 const dotenvBuiltin: Builtin = async (rawArgs, ctx) => {
-  const parts = splitArgsRespectingQuotes(rawArgs.trim());
+  const parts = splitArgs(rawArgs.trim());
   if (parts[0] === "status" || parts[0] === "list") return dotenvStatus(ctx);
   if (parts[0] === "clear") return dotenvClear(ctx);
 
@@ -253,7 +247,7 @@ function parseDotenv(text: string): Array<[string, string]> {
 }
 
 const testFixtureBuiltin: Builtin = async (rawArgs, _ctx) => {
-  const args = splitArgsRespectingQuotes(rawArgs);
+  const args = splitArgs(rawArgs);
   const binPath = `${process.env.HOME}/.crust/bin/crust-test-fixture`;
   if (await Bun.file(binPath).exists()) {
     const proc = Bun.spawn([binPath, ...args], {
@@ -267,25 +261,25 @@ const testFixtureBuiltin: Builtin = async (rawArgs, _ctx) => {
 };
 
 const testPipesBuiltin: Builtin = async (rawArgs, _ctx) => {
-  const args = splitArgsRespectingQuotes(rawArgs);
+  const args = splitArgs(rawArgs);
   const { runCli } = await import("./testPipes/cli");
   return await runCli(args);
 };
 
 const genFixturesBuiltin: Builtin = async (rawArgs, _ctx) => {
-  const args = splitArgsRespectingQuotes(rawArgs);
+  const args = splitArgs(rawArgs);
   const { runCli } = await import("./genFixtures/cli");
   return await runCli(args);
 };
 
 const mockServerBuiltin: Builtin = async (rawArgs, _ctx) => {
-  const args = splitArgsRespectingQuotes(rawArgs);
+  const args = splitArgs(rawArgs);
   const { runCli } = await import("./mockServer/cli");
   return await runCli(args);
 };
 
 const verifyWebLinksBuiltin: Builtin = async (rawArgs, _ctx) => {
-  const args = splitArgsRespectingQuotes(rawArgs);
+  const args = splitArgs(rawArgs);
   const { runCli } = await import("./verifyWebLinks/cli");
   return await runCli(args);
 };
@@ -309,31 +303,4 @@ export const builtins: Record<string, Builtin> = {
 
 export function isBuiltin(name: string): boolean {
   return name in builtins;
-}
-
-function splitArgsRespectingQuotes(input: string): string[] {
-  const out: string[] = [];
-  let buf = "";
-  let quote: '"' | "'" | null = null;
-  for (let i = 0; i < input.length; i++) {
-    const c = input[i]!;
-    if (quote) {
-      buf += c;
-      if (c === quote) quote = null;
-      continue;
-    }
-    if (c === '"' || c === "'") {
-      quote = c;
-      buf += c;
-      continue;
-    }
-    if (c === " ") {
-      if (buf) out.push(buf);
-      buf = "";
-      continue;
-    }
-    buf += c;
-  }
-  if (buf) out.push(buf);
-  return out;
 }
