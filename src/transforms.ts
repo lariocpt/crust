@@ -39,6 +39,15 @@ function makeHttp(method: "POST" | "PUT" | "PATCH" | "DELETE") {
     );
 }
 
+// Per-item request fn — lets the parser wrap any verb in parallel(n, fn).
+export function httpItem(
+  method: string,
+  url: string,
+  opts?: RequestInit,
+): (item: unknown) => Promise<Response> {
+  return (item) => httpRequest(url, method, item, opts);
+}
+
 export const POST = makeHttp("POST");
 export const PUT = makeHttp("PUT");
 export const PATCH = makeHttp("PATCH");
@@ -154,11 +163,11 @@ export interface TimedHit {
 // Per-item GET against a fixed URL: the incoming item is only a trigger.
 // Returns a lightweight timing record instead of a Response so `stats` can
 // report real latency percentiles without holding bodies alive.
-export function timedGet(url: string): (x: unknown) => Promise<TimedHit> {
+export function timedGet(url: string, opts?: RequestInit): (x: unknown) => Promise<TimedHit> {
   return async (_x: unknown) => {
     const t0 = performance.now();
     try {
-      const r = await fetch(url);
+      const r = await fetch(url, opts);
       // Drain so keep-alive sockets recycle and timing includes the body.
       await r.arrayBuffer();
       return { status: r.status, ms: performance.now() - t0, url };

@@ -4,6 +4,7 @@
 // terminal session — same trust boundary as bash sourcing a script the
 // user typed. Not a code-injection risk; it's the design.
 
+import { expandEnv, splitArgs } from "./args";
 import { classify, tokenize } from "./lexer";
 import { Pipeline } from "./pipeline";
 import * as sources from "./sources";
@@ -62,13 +63,26 @@ export function parse(line: string): (ctx?: Context) => Pipeline<unknown> {
 function resolveKind(text: string, ctx?: Context): StageKind {
   const kind = classify(text);
   if (kind.kind === "shell" && ctx) {
-    const parts = text.trim().split(/\s+/);
+    // Quote-aware and quote-stripping: `sql "SELECT count(*) FROM x" 42`
+    // must reach the fn as ONE query string + one param.
+    const parts = splitArgs(text.trim());
     const head = parts[0]!;
     if (ctx.functions.has(head)) {
       return { kind: "function", name: head, args: parts.slice(1) };
     }
   }
   return kind;
+}
+
+function httpOpts(headers: string[]): RequestInit | undefined {
+  if (headers.length === 0) return undefined;
+  const h = new Headers();
+  for (const raw of headers) {
+    const idx = raw.indexOf(":");
+    if (idx === -1) throw new Error(`-H expects "Key: value", got "${raw}"`);
+    h.set(raw.slice(0, idx).trim(), expandEnv(raw.slice(idx + 1).trim()));
+  }
+  return { headers: h };
 }
 
 function buildSource(kind: StageKind, ctx?: Context): Pipeline<unknown> {
@@ -83,10 +97,23 @@ function buildSource(kind: StageKind, ctx?: Context): Pipeline<unknown> {
         follow: kind.follow,
       }) as Pipeline<unknown>;
     case "http":
-      if (kind.verb === "GET") return sources.GET(kind.url) as Pipeline<unknown>;
+      if (kind.verb === "GET") {
+        return sources.GET(
+          normalizeUrl(expandEnv(kind.url)),
+          httpOpts(kind.headers),
+        ) as Pipeline<unknown>;
+      }
       throw new Error(`${kind.verb} cannot be a source — needs upstream items`);
     case "shell":
       return shellSource(kind.text);
+    case "json": {
+      // One item: the parsed JSON literal (env vars expanded first, so
+      // {"token":"$TOKEN"} works in shorthand fixtures).
+      const parsed = JSON.parse(expandEnv(kind.source)) as unknown;
+      return Pipeline.of([parsed]);
+    }
+    case "readsrc":
+      return sources.readAll(kind.pattern) as Pipeline<unknown>;
     case "procs": {
       // Evaluate the full `procs({...})` expression with the real source in
       // scope — same trusted-eval stance as evalLambda below.
@@ -100,6 +127,7 @@ function buildSource(kind: StageKind, ctx?: Context): Pipeline<unknown> {
     case "parallel":
     case "expect":
     case "stats":
+    case "assert":
       throw new Error(`${kind.kind} cannot be a source — needs upstream items`);
     case "time":
       throw new Error("time: only allowed as the first stage of a pipeline");
@@ -136,17 +164,40 @@ function applyStage(
     case "shell":
       return shellTransform(input, kind.text);
     case "http": {
+      const url = normalizeUrl(expandEnv(kind.url));
+      const opts = httpOpts(kind.headers);
       if (kind.verb === "GET") {
         // Per-item timed GET — each upstream item triggers one request.
         // `parallel N` upstream sets the fan-out.
-        const fn = transforms.timedGet(normalizeUrl(kind.url));
+        const fn = transforms.timedGet(url, opts);
         const n = concurrency ?? 1;
         return input.pipe(transforms.parallel(n, fn) as never) as Pipeline<unknown>;
       }
-      return input.pipe(transforms[kind.verb](kind.url) as never) as Pipeline<unknown>;
+      if (concurrency && concurrency > 1) {
+        return input.pipe(
+          transforms.parallel(concurrency, transforms.httpItem(kind.verb, url, opts)) as never,
+        ) as Pipeline<unknown>;
+      }
+      return input.pipe(transforms[kind.verb](url, opts) as never) as Pipeline<unknown>;
     }
     case "expect":
       return input.pipe(transforms.expectStatus(kind.status) as never) as Pipeline<unknown>;
+    case "assert": {
+      // A predicate that FAILS the pipeline on falsy — unlike a plain lambda,
+      // which maps. `| sql "SELECT ..." | assert (r => r[0].c === 1)`.
+      const fn = new Function("x", `return (${kind.source})(x);`) as (x: unknown) => unknown;
+      let idx = 0;
+      return input.pipe(async (item: unknown) => {
+        idx++;
+        const ok = await fn(item);
+        if (!ok) {
+          throw new Error(
+            `assert: item ${idx} failed ${kind.source} — got ${JSON.stringify(item)?.slice(0, 200)}`,
+          );
+        }
+        return item;
+      });
+    }
     case "stats":
       return input.pipe(transforms.statsStage() as never) as Pipeline<unknown>;
     case "range":
@@ -154,6 +205,8 @@ function applyStage(
     case "tail":
     case "procs":
     case "parallel":
+    case "json":
+    case "readsrc":
       throw new Error(`${kind.kind} cannot appear as a non-first stage`);
     case "time":
       throw new Error("time: only allowed as the first stage of a pipeline");

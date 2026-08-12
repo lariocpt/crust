@@ -32,6 +32,31 @@ export function read(path: string): Pipeline<string> {
   );
 }
 
+// Whole-file contents, one item per matched file (vs read(), which streams
+// lines of a single file). `read fixtures/*.json | POST …` posts each file's
+// full text as a request body.
+export function readAll(pattern: string): Pipeline<string> {
+  return Pipeline.of(
+    (async function* () {
+      const looksGlob = /[*?[\]{}]/.test(pattern);
+      const paths: string[] = [];
+      if (looksGlob) {
+        const g = new Glob(pattern);
+        for await (const f of g.scan({ cwd: process.cwd(), absolute: false })) {
+          paths.push(f);
+        }
+        paths.sort();
+      } else {
+        paths.push(pattern);
+      }
+      if (paths.length === 0) throw new Error(`read: no files matched ${pattern}`);
+      for (const p of paths) {
+        yield await Bun.file(p).text();
+      }
+    })(),
+  );
+}
+
 export interface TailOptions {
   lines?: number;
   follow?: boolean;

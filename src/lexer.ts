@@ -1,3 +1,4 @@
+import { splitArgs } from "./args";
 import type { StageKind, Token } from "./types";
 
 export function tokenize(line: string): Token[] {
@@ -60,12 +61,39 @@ export function classify(text: string): StageKind {
 
   const httpMatch = t.match(/^(GET|POST|PUT|PATCH|DELETE)\s+(.+)$/);
   if (httpMatch) {
+    // Tail is `<url> [-H "Key: value"]...` — split quote-aware so header
+    // values may contain spaces and colons.
+    const parts = splitArgs(httpMatch[2]!);
+    const url = parts[0] ?? "";
+    const headers: string[] = [];
+    for (let i = 1; i < parts.length; i++) {
+      if (parts[i] === "-H" && i + 1 < parts.length) {
+        headers.push(parts[++i]!);
+      }
+    }
     return {
       kind: "http",
       verb: httpMatch[1] as "GET" | "POST" | "PUT" | "PATCH" | "DELETE",
-      url: httpMatch[2]!,
-      flags: [],
+      url,
+      headers,
     };
+  }
+
+  // JSON-literal source: the whole stage is a JSON object/array — the request
+  // body in shorthand fixtures. Never falls back to shell (a typo'd JSON
+  // stage exec'ing as a command would be baffling).
+  if (t.startsWith("{") || t.startsWith("[")) {
+    return { kind: "json", source: t };
+  }
+
+  const assertMatch = t.match(/^assert\s+(\(.+)$/);
+  if (assertMatch) {
+    return { kind: "assert", source: assertMatch[1]! };
+  }
+
+  const readMatch = t.match(/^read\s+(.+)$/);
+  if (readMatch) {
+    return { kind: "readsrc", pattern: readMatch[1]!.trim() };
   }
 
   if (t.startsWith("(") && t.includes("=>")) {

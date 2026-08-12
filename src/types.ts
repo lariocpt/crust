@@ -11,12 +11,16 @@ export type StageKind =
       kind: "http";
       verb: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
       url: string;
-      flags: string[];
+      /** raw "Key: value" strings from -H flags (env-expanded at parse time) */
+      headers: string[];
     }
   | { kind: "function"; name: string; args: string[] }
   | { kind: "time"; label: string }
   | { kind: "tail"; paths: string[]; lines: number; follow: boolean }
   | { kind: "procs"; source: string }
+  | { kind: "json"; source: string }
+  | { kind: "assert"; source: string }
+  | { kind: "readsrc"; pattern: string }
   | { kind: "parallel"; n: number }
   | { kind: "expect"; status: number }
   | { kind: "stats" }

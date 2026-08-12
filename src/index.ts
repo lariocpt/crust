@@ -73,9 +73,13 @@ async function main(): Promise<void> {
       }
       const source = argv[1]!;
       const lines = source.split("\n");
+      // Fail fast: stop at the first failing line and exit with ITS code —
+      // previously a later success masked an earlier failure.
       let last = 0;
       for (const l of lines) {
-        if (l.trim()) last = await runLine(l, ctx);
+        if (!l.trim()) continue;
+        last = await runLine(l, ctx);
+        if (last !== 0) break;
       }
       await shutdown(last);
     }
