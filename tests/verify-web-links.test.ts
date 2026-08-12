@@ -241,3 +241,22 @@ describe("verify-web-links CLI", () => {
     expect(parsed.totals.pages).toBeGreaterThan(0);
   });
 });
+
+describe("entity decoding in extracted URLs", () => {
+  test("&#038; and &amp; decode to & — no phantom fragments or trailing &", async () => {
+    const { extractFromHtml } = await import("../src/verifyWebLinks/extractors");
+    const html = `<html><body>
+      <a href="/shop?filter=60&#038;type=or">wp-style</a>
+      <a href="/shop?a=1&amp;b=2">amp-style</a>
+      <link rel="alternate" href="/wp-json/oembed?url=x&#038;format=xml" />
+    </body></html>`;
+    const res = new Response(html, { headers: { "content-type": "text/html" } });
+    const { links } = await extractFromHtml(res);
+    const hrefs = links.map((l) => l.href);
+    expect(hrefs).toContain("/shop?filter=60&type=or");
+    expect(hrefs).toContain("/shop?a=1&b=2");
+    expect(hrefs).toContain("/wp-json/oembed?url=x&format=xml");
+    expect(hrefs.some((h) => h.includes("#038;"))).toBe(false);
+    expect(hrefs.some((h) => h.endsWith("&"))).toBe(false);
+  });
+});

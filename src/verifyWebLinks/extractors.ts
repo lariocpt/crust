@@ -6,6 +6,22 @@ export interface ExtractResult {
   ids: Set<string>;
 }
 
+// HTMLRewriter's getAttribute returns the RAW attribute value — HTML
+// entities are NOT decoded. WordPress/WooCommerce emit hrefs like
+// `?a=1&#038;b=2` (&#038; is `&`); without decoding, URL parsing splits at
+// the `#` and produces both phantom fragments and trailing-`&` URLs — 1400+
+// false failures on one WooCommerce site.
+function decodeEntities(s: string): string {
+  return s
+    .replace(/&#(\d+);/g, (_m, code) => String.fromCodePoint(Number(code)))
+    .replace(/&#x([0-9a-fA-F]+);/g, (_m, hex) => String.fromCodePoint(Number.parseInt(hex, 16)))
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'");
+}
+
 export async function extractFromHtml(response: Response): Promise<ExtractResult> {
   const links: Array<{ href: string; tag: LinkRef["kind"] }> = [];
   const meta: MetaTags = { byKey: {} };
@@ -16,31 +32,31 @@ export async function extractFromHtml(response: Response): Promise<ExtractResult
   rewriter.on("a[href]", {
     element(el) {
       const h = el.getAttribute("href");
-      if (h) links.push({ href: h, tag: "a" });
+      if (h) links.push({ href: decodeEntities(h), tag: "a" });
     },
   });
   rewriter.on("img[src]", {
     element(el) {
       const h = el.getAttribute("src");
-      if (h) links.push({ href: h, tag: "img" });
+      if (h) links.push({ href: decodeEntities(h), tag: "img" });
     },
   });
   rewriter.on("script[src]", {
     element(el) {
       const h = el.getAttribute("src");
-      if (h) links.push({ href: h, tag: "script" });
+      if (h) links.push({ href: decodeEntities(h), tag: "script" });
     },
   });
   rewriter.on("link[href]", {
     element(el) {
       const h = el.getAttribute("href");
-      if (h) links.push({ href: h, tag: "link" });
+      if (h) links.push({ href: decodeEntities(h), tag: "link" });
     },
   });
   rewriter.on("iframe[src]", {
     element(el) {
       const h = el.getAttribute("src");
-      if (h) links.push({ href: h, tag: "iframe" });
+      if (h) links.push({ href: decodeEntities(h), tag: "iframe" });
     },
   });
   rewriter.on("[id]", {
