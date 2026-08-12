@@ -72,6 +72,10 @@ export function classify(text: string): StageKind {
     return { kind: "lambda", source: t };
   }
 
+  if (/^procs\s*\(/.test(t)) {
+    return { kind: "procs", source: t };
+  }
+
   const rangeMatch = t.match(/^range\(\s*(-?\d+)\s*,\s*(-?\d+)\s*\)$/);
   if (rangeMatch) {
     return {

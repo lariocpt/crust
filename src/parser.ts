@@ -74,6 +74,14 @@ function buildSource(kind: StageKind, ctx?: Context): Pipeline<unknown> {
       throw new Error(`${kind.verb} cannot be a source — needs upstream items`);
     case "shell":
       return shellSource(kind.text);
+    case "procs": {
+      // Evaluate the full `procs({...})` expression with the real source in
+      // scope — same trusted-eval stance as evalLambda below.
+      const build = new Function("procs", `return (${kind.source});`) as (
+        p: typeof sources.procs,
+      ) => Pipeline<unknown>;
+      return build(sources.procs);
+    }
     case "lambda":
       throw new Error("lambda cannot be a source — needs upstream items");
     case "time":
@@ -114,6 +122,7 @@ function applyStage(input: Pipeline<unknown>, kind: StageKind, ctx?: Context): P
     case "range":
     case "glob":
     case "tail":
+    case "procs":
       throw new Error(`${kind.kind} cannot appear as a non-first stage`);
     case "time":
       throw new Error("time: only allowed as the first stage of a pipeline");

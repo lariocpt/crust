@@ -307,3 +307,29 @@ describe("GET", () => {
     }
   });
 });
+
+describe("procs", () => {
+  test("merges tagged stdout/stderr/exit lines from multiple processes", async () => {
+    const { procs } = await import("../src/sources");
+    const lines = await procs({
+      one: "echo hello",
+      two: "echo oops 1>&2; exit 3",
+    }).collect();
+    const byProc = (p: string) => lines.filter((l) => l.proc === p);
+    expect(byProc("one").some((l) => l.stream === "stdout" && l.line === "hello")).toBe(true);
+    expect(byProc("one").some((l) => l.stream === "exit" && l.line.includes("0"))).toBe(true);
+    expect(byProc("two").some((l) => l.stream === "stderr" && l.line === "oops")).toBe(true);
+    expect(byProc("two").some((l) => l.stream === "exit" && l.line.includes("3"))).toBe(true);
+  });
+
+  test("is a shell-line source", async () => {
+    const { runLine } = await import("../src/runLine");
+    // smoke: parses and runs as the first stage (echo exits immediately)
+    const code = await runLine('procs({x: "echo parsed"}) | (l => l.line)', {
+      aliases: new Map(),
+      functions: new Map(),
+      history: [],
+    } as never);
+    expect(code).toBe(0);
+  });
+});

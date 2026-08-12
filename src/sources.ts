@@ -188,3 +188,91 @@ export function GET(url: string, opts?: RequestInit): Pipeline<Response> {
     })(),
   );
 }
+
+// ---------------------------------------------------------------------------
+// procs — run several long-lived commands and merge their output into one
+// tagged stream. Built for the "one dev tail" use case: spawn the web app,
+// the mobile bundler and a tsc watch, and pipe every line (labelled with its
+// process name) through a single formatter.
+// ---------------------------------------------------------------------------
+
+export interface ProcLine {
+  /** Name of the process this line came from (the spec key). */
+  proc: string;
+  stream: "stdout" | "stderr" | "exit";
+  line: string;
+}
+
+export function procs(specs: Record<string, string>): Pipeline<ProcLine> {
+  const entries = Object.entries(specs);
+  if (entries.length === 0) throw new Error("procs: no processes given");
+
+  return Pipeline.of(
+    (async function* () {
+      const children = entries.map(([name, cmd]) => ({
+        name,
+        child: Bun.spawn(["sh", "-c", cmd], {
+          stdout: "pipe",
+          stderr: "pipe",
+          env: { ...process.env, FORCE_COLOR: "0" },
+        }),
+      }));
+
+      const kill = () => {
+        for (const { child } of children) {
+          try {
+            child.kill();
+          } catch {
+            // already gone
+          }
+        }
+      };
+      process.on("SIGINT", kill);
+      process.on("SIGTERM", kill);
+
+      async function* streamOf(
+        name: string,
+        stream: "stdout" | "stderr",
+        readable: ReadableStream<Uint8Array>,
+      ): AsyncGenerator<ProcLine> {
+        const decoder = new TextDecoder();
+        let buf = "";
+        // biome-ignore lint/suspicious/noExplicitAny: ReadableStream async iteration
+        for await (const chunk of readable as any) {
+          buf += decoder.decode(chunk, { stream: true });
+          let nl = buf.indexOf("\n");
+          while (nl !== -1) {
+            const line = buf.slice(0, nl).replace(/\r$/, "");
+            buf = buf.slice(nl + 1);
+            if (line.length > 0) yield { proc: name, stream, line };
+            nl = buf.indexOf("\n");
+          }
+        }
+        if (buf.length > 0) yield { proc: name, stream, line: buf };
+      }
+
+      async function* exitOf(
+        name: string,
+        child: ReturnType<typeof Bun.spawn>,
+      ): AsyncGenerator<ProcLine> {
+        const code = await child.exited;
+        yield { proc: name, stream: "exit", line: `exited with code ${code}` };
+      }
+
+      const gens: AsyncGenerator<ProcLine>[] = [];
+      for (const { name, child } of children) {
+        gens.push(streamOf(name, "stdout", child.stdout as ReadableStream<Uint8Array>));
+        gens.push(streamOf(name, "stderr", child.stderr as ReadableStream<Uint8Array>));
+        gens.push(exitOf(name, child));
+      }
+
+      try {
+        yield* mergeAsync(gens);
+      } finally {
+        process.off("SIGINT", kill);
+        process.off("SIGTERM", kill);
+        kill();
+      }
+    })(),
+  );
+}
