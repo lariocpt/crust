@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import type { OpenApiSpec } from "./loadSpec";
-import { isSwagger2, swagger2to3 } from "./swagger2to3";
 import { pickResponse, synthesizeBody } from "./mockResponse";
 import { buildRoutes, matchRoute } from "./router";
+import { isSwagger2, swagger2to3 } from "./swagger2to3";
 
 function sampleV2(): OpenApiSpec {
   return {

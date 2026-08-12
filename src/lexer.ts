@@ -76,6 +76,20 @@ export function classify(text: string): StageKind {
     return { kind: "procs", source: t };
   }
 
+  const parallelMatch = t.match(/^parallel\s+(\d+)$/);
+  if (parallelMatch) {
+    return { kind: "parallel", n: parseInt(parallelMatch[1]!, 10) };
+  }
+
+  const expectMatch = t.match(/^expect\s+(\d{3})$/);
+  if (expectMatch) {
+    return { kind: "expect", status: parseInt(expectMatch[1]!, 10) };
+  }
+
+  if (t === "stats") {
+    return { kind: "stats" };
+  }
+
   const rangeMatch = t.match(/^range\(\s*(-?\d+)\s*,\s*(-?\d+)\s*\)$/);
   if (rangeMatch) {
     return {

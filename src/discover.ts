@@ -1,4 +1,4 @@
-import { stat, mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import type { Context } from "./types";
 
 const DEBUG = process.env.CRUST_DEBUG === "1";
@@ -19,13 +19,11 @@ interface Cache {
 }
 
 function globalPrefix(): string {
-  return process.env.CRUST_GLOBAL_PREFIX
-    ?? `${process.env.HOME}/.bun/install/global`;
+  return process.env.CRUST_GLOBAL_PREFIX ?? `${process.env.HOME}/.bun/install/global`;
 }
 
 function cacheDir(): string {
-  return process.env.CRUST_CACHE_DIR
-    ?? `${process.env.HOME}/.cache/crust`;
+  return process.env.CRUST_CACHE_DIR ?? `${process.env.HOME}/.cache/crust`;
 }
 
 function cachePath(): string {
@@ -59,10 +57,7 @@ export async function discoverGlobals(ctx: Context): Promise<void> {
 
   for (const entry of cache.entries) {
     if (ctx.functions.has(entry.exposedAs)) continue;
-    ctx.functions.set(
-      entry.exposedAs,
-      lazyDispatch(entry.name, entry.stageHint),
-    );
+    ctx.functions.set(entry.exposedAs, lazyDispatch(entry.name, entry.stageHint));
   }
 }
 
@@ -106,9 +101,7 @@ async function inspectPackage(name: string): Promise<CacheEntry | null> {
       dbg(`skipping "${name}" — has bin field`);
       return null;
     }
-    const exposedAs = name.startsWith("@")
-      ? name.split("/")[1] ?? name
-      : name;
+    const exposedAs = name.startsWith("@") ? (name.split("/")[1] ?? name) : name;
     return { name, exposedAs, stageHint: pkg.crust?.stage };
   } catch (err) {
     dbg(`failed to inspect "${name}": ${(err as Error).message}`);
@@ -143,7 +136,7 @@ function lazyDispatch(
       if (typeof fn !== "function") {
         throw new Error(
           `package "${packageName}" has no callable export — ` +
-          `wrap it explicitly with crust.fn() in init.ts`,
+            `wrap it explicitly with crust.fn() in init.ts`,
         );
       }
       resolved = fn as (...args: unknown[]) => unknown;

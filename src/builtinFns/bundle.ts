@@ -17,7 +17,8 @@ export async function bundle(...args: unknown[]): Promise<unknown> {
     else if (a.startsWith("--target=")) target = a.slice("--target=".length) as typeof target;
     else if (a === "--minify") minify = true;
     else if (a === "--sourcemap") sourcemap = "linked";
-    else if (a.startsWith("--sourcemap=")) sourcemap = a.slice("--sourcemap=".length) as typeof sourcemap;
+    else if (a.startsWith("--sourcemap="))
+      sourcemap = a.slice("--sourcemap=".length) as typeof sourcemap;
     else if (a.startsWith("--")) throw new Error(`bundle: unknown flag '${a}'`);
     else positionals.push(a);
   }

@@ -1,13 +1,7 @@
-import { test, expect, describe, beforeAll, afterAll } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { Pipeline } from "../src/pipeline";
-import { range, GET } from "../src/sources";
-import {
-  POST,
-  DELETE,
-  expect as expectStage,
-  parallel,
-  ExpectError,
-} from "../src/transforms";
+import { GET, range } from "../src/sources";
+import { DELETE, ExpectError, expect as expectStage, POST, parallel } from "../src/transforms";
 
 let server: ReturnType<typeof Bun.serve>;
 let baseUrl: string;
@@ -67,23 +61,17 @@ describe("DELETE", () => {
 
 describe("expect", () => {
   test("passes when all responses match exact status", async () => {
-    const out = await GET(`${baseUrl}/health`)
-      .pipe(expectStage<Response>(200))
-      .collect();
+    const out = await GET(`${baseUrl}/health`).pipe(expectStage<Response>(200)).collect();
     expect(out).toHaveLength(1);
   });
 
   test("rejects on status mismatch", async () => {
-    const p = GET(`${baseUrl}/nonexistent`)
-      .pipe(expectStage<Response>(200))
-      .collect();
+    const p = GET(`${baseUrl}/nonexistent`).pipe(expectStage<Response>(200)).collect();
     await expect(p).rejects.toBeInstanceOf(ExpectError);
   });
 
   test("supports 2xx shorthand", async () => {
-    const out = await GET(`${baseUrl}/health`)
-      .pipe(expectStage<Response>("2xx"))
-      .collect();
+    const out = await GET(`${baseUrl}/health`).pipe(expectStage<Response>("2xx")).collect();
     expect(out).toHaveLength(1);
   });
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { extname } from "node:path";
-import { runFixtures } from "./runner";
 import { renderJson, renderMarkdown, renderText } from "./report";
+import { runFixtures } from "./runner";
 
 const USAGE = `test-fixture --target <file|glob> [--out <path>] [--threads N] [--count N]
 
@@ -75,7 +75,7 @@ export async function runCli(args: string[]): Promise<number> {
     return 2;
   }
 
-  let report;
+  let report: Awaited<ReturnType<typeof runFixtures>>;
   try {
     report = await runFixtures({ target, threads, count });
   } catch (err) {

@@ -1,4 +1,7 @@
-type BunSqlTemplate = ((strings: TemplateStringsArray, ...values: unknown[]) => Promise<unknown[]>) & {
+type BunSqlTemplate = ((
+  strings: TemplateStringsArray,
+  ...values: unknown[]
+) => Promise<unknown[]>) & {
   unsafe?: (query: string, params?: unknown[]) => Promise<unknown[]>;
 };
 type BunSqlCtor = new (url: string) => BunSqlTemplate;

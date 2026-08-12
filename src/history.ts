@@ -1,4 +1,4 @@
-import { mkdir, readFile, appendFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 const XDG_DATA = process.env.XDG_DATA_HOME ?? `${process.env.HOME}/.local/share`;

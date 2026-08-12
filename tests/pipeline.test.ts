@@ -1,4 +1,4 @@
-import { test, expect, describe } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { Pipeline } from "../src/pipeline";
 
 describe("Pipeline.of — construction", () => {
@@ -47,12 +47,18 @@ describe("Pipeline.pipe — TS lambda stages", () => {
 
 describe("Pipeline.map / filter / reduce", () => {
   test("map", async () => {
-    expect(await Pipeline.of([1, 2, 3]).map((x) => x * 2).collect()).toEqual([2, 4, 6]);
+    expect(
+      await Pipeline.of([1, 2, 3])
+        .map((x) => x * 2)
+        .collect(),
+    ).toEqual([2, 4, 6]);
   });
 
   test("filter", async () => {
     expect(
-      await Pipeline.of([1, 2, 3, 4]).filter((x) => x % 2 === 0).collect(),
+      await Pipeline.of([1, 2, 3, 4])
+        .filter((x) => x % 2 === 0)
+        .collect(),
     ).toEqual([2, 4]);
   });
 
@@ -89,5 +95,54 @@ describe("Pipeline — laziness", () => {
     expect(called).toBe(0);
     await p.collect();
     expect(called).toBe(3);
+  });
+});
+
+describe("load pipeline stages", () => {
+  test("range | parallel | GET | expect | stats end-to-end", async () => {
+    const server = Bun.serve({
+      port: 0,
+      fetch: () => new Response(JSON.stringify({ ok: true }), { status: 200 }),
+    });
+    try {
+      const { runLine } = await import("../src/runLine");
+      const { parse } = await import("../src/parser");
+      const pipeline = parse(
+        `range(0, 49) | parallel 10 | GET http://localhost:${server.port}/x | expect 200 | stats`,
+      )();
+      const out: unknown[] = [];
+      for await (const item of pipeline.lines()) out.push(item);
+      expect(out.length).toBe(1);
+      const s = out[0] as { count: number; status: Record<string, number>; p50: number };
+      expect(s.count).toBe(50);
+      expect(s.status["200"]).toBe(50);
+      expect(s.p50).toBeGreaterThan(0);
+      void runLine;
+    } finally {
+      server.stop();
+    }
+  });
+
+  test("expect fails the pipeline on status mismatch", async () => {
+    const server = Bun.serve({
+      port: 0,
+      fetch: () => new Response("nope", { status: 503 }),
+    });
+    try {
+      const { parse } = await import("../src/parser");
+      const pipeline = parse(`range(0, 4) | GET http://localhost:${server.port}/x | expect 200`)();
+      let threw = "";
+      try {
+        for await (const _ of pipeline.lines()) {
+          // drain
+        }
+      } catch (err) {
+        threw = (err as Error).message;
+      }
+      expect(threw).toContain("expect 200");
+      expect(threw).toContain("5/5");
+    } finally {
+      server.stop();
+    }
   });
 });

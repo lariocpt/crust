@@ -63,7 +63,7 @@ export async function runCli(args: string[]): Promise<number> {
     return 2;
   }
 
-  let loaded;
+  let loaded: Awaited<ReturnType<typeof loadSpec>>;
   try {
     loaded = await loadSpec(swagger);
   } catch (err) {
@@ -72,9 +72,7 @@ export async function runCli(args: string[]): Promise<number> {
   }
 
   const server = startServer({ port, hostname: host, spec: loaded.spec });
-  process.stdout.write(
-    `mock-server: ${server.routes.length} route(s) from ${loaded.origin}\n`,
-  );
+  process.stdout.write(`mock-server: ${server.routes.length} route(s) from ${loaded.origin}\n`);
   process.stdout.write(`mock-server: listening on http://${host}:${server.port}\n`);
 
   return await new Promise<number>((resolve) => {

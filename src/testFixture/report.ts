@@ -1,4 +1,4 @@
-import { dirname, basename, relative } from "node:path";
+import { basename, dirname, relative } from "node:path";
 import type { FixtureFailure, RunReport } from "./types";
 
 export function renderText(report: RunReport, useColor: boolean): string {
@@ -17,9 +17,11 @@ export function renderText(report: RunReport, useColor: boolean): string {
     out.push(`${rel}/`);
     for (const r of results) {
       const tag =
-        r.status === "pass" ? c.green("PASS") :
-        r.status === "fail" ? c.red("FAIL") :
-        c.yellow("ERR ");
+        r.status === "pass"
+          ? c.green("PASS")
+          : r.status === "fail"
+            ? c.red("FAIL")
+            : c.yellow("ERR ");
       const ms = `(${r.durationMs.toFixed(1)}ms)`;
       out.push(`  ${tag}  ${basename(r.file)}  ${r.name}  ${c.dim(ms)}`);
       if (r.status === "fail") {

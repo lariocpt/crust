@@ -27,10 +27,11 @@ export function gitBranch(): string | null {
   if (cwd === lastCwd) return cachedBranch;
   lastCwd = cwd;
   try {
-    const { stdout, exitCode } = Bun.spawnSync(
-      ["git", "symbolic-ref", "--short", "HEAD"],
-      { cwd, stdout: "pipe", stderr: "ignore" },
-    );
+    const { stdout, exitCode } = Bun.spawnSync(["git", "symbolic-ref", "--short", "HEAD"], {
+      cwd,
+      stdout: "pipe",
+      stderr: "ignore",
+    });
     if (exitCode !== 0) {
       cachedBranch = null;
     } else {

@@ -1,5 +1,5 @@
-import { readdirSync, statSync, existsSync } from "node:fs";
-import { join, basename, dirname } from "node:path";
+import { existsSync, readdirSync, statSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 
 let pathCache: Set<string> | null = null;
 
@@ -39,8 +39,7 @@ export function complete(buf: string, cursor: number): CompletionResult {
 
   if (candidates.length === 0) return { replace: [start, cursor], with: token };
   if (candidates.length === 1) {
-    const isDir =
-      !atStartOfStage && existsSync(candidates[0]!) && safeIsDir(candidates[0]!);
+    const isDir = !atStartOfStage && existsSync(candidates[0]!) && safeIsDir(candidates[0]!);
     return { replace: [start, cursor], with: candidates[0]! + (isDir ? "/" : "") };
   }
   const cp = commonPrefix(candidates);

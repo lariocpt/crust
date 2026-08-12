@@ -46,7 +46,9 @@ export function stats(): (input: Pipeline<Response>) => Promise<Stats> {
     const durationMs = Date.now() - start;
     const sorted = latencies.slice().sort((a, b) => a - b);
     const pct = (p: number): number =>
-      sorted.length === 0 ? 0 : (sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * p))] ?? 0);
+      sorted.length === 0
+        ? 0
+        : (sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * p))] ?? 0);
     return {
       count,
       durationMs,

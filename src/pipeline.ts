@@ -5,9 +5,7 @@ export interface PipelineStage<T, U> {
   [PIPELINE_STAGE_SYMBOL]: true;
 }
 
-export function pipelineStage<T, U>(
-  fn: (input: Pipeline<T>) => Pipeline<U>,
-): PipelineStage<T, U> {
+export function pipelineStage<T, U>(fn: (input: Pipeline<T>) => Pipeline<U>): PipelineStage<T, U> {
   (fn as { [PIPELINE_STAGE_SYMBOL]?: true })[PIPELINE_STAGE_SYMBOL] = true;
   return fn as PipelineStage<T, U>;
 }

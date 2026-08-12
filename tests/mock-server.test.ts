@@ -1,10 +1,10 @@
-import { test, expect, describe, beforeAll, afterAll } from "bun:test";
-import { mkdtemp, rm, realpath } from "node:fs/promises";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadSpec, type OpenApiSpec } from "../src/mockServer/loadSpec";
-import { buildRoutes, matchRoute } from "../src/mockServer/router";
 import { pickResponse, synthesizeBody } from "../src/mockServer/mockResponse";
+import { buildRoutes, matchRoute } from "../src/mockServer/router";
 import { startServer } from "../src/mockServer/server";
 
 const minimalSpec = {
@@ -126,9 +126,10 @@ describe("loadSpec", () => {
   test("loads from a URL", async () => {
     const server = Bun.serve({
       port: 0,
-      fetch: () => new Response(JSON.stringify(minimalSpec), {
-        headers: { "content-type": "application/json" },
-      }),
+      fetch: () =>
+        new Response(JSON.stringify(minimalSpec), {
+          headers: { "content-type": "application/json" },
+        }),
     });
     try {
       const { spec } = await loadSpec(`http://localhost:${server.port}/spec.json`);

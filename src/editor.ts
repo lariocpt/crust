@@ -236,5 +236,6 @@ export async function readLine(opts: EditorOpts): Promise<string | null> {
 }
 
 function stripAnsi(s: string): string {
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: ESC is the point — this strips ANSI sequences
   return s.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "");
 }

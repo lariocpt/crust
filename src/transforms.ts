@@ -138,3 +138,92 @@ export function parallel<T, U>(n: number, fn: (x: T) => U | Promise<U>): Pipelin
     ),
   );
 }
+
+// ---------------------------------------------------------------------------
+// Load-pipeline stages: per-item timed HTTP, expect, stats. These are what
+// make `range(0, 999) | parallel 50 | GET :3001/health | expect 200 | stats`
+// work as documented.
+// ---------------------------------------------------------------------------
+
+export interface TimedHit {
+  status: number;
+  ms: number;
+  url: string;
+}
+
+// Per-item GET against a fixed URL: the incoming item is only a trigger.
+// Returns a lightweight timing record instead of a Response so `stats` can
+// report real latency percentiles without holding bodies alive.
+export function timedGet(url: string): (x: unknown) => Promise<TimedHit> {
+  return async (_x: unknown) => {
+    const t0 = performance.now();
+    try {
+      const r = await fetch(url);
+      // Drain so keep-alive sockets recycle and timing includes the body.
+      await r.arrayBuffer();
+      return { status: r.status, ms: performance.now() - t0, url };
+    } catch {
+      return { status: 0, ms: performance.now() - t0, url };
+    }
+  };
+}
+
+// Pass items through; on drain, fail the pipeline if any item's status
+// didn't match. Works on TimedHit records and Response objects.
+export function expectStatus<T extends { status: number }>(expected: number): PipelineStage<T, T> {
+  return pipelineStage<T, T>((input) =>
+    Pipeline.of(
+      (async function* () {
+        let mismatches = 0;
+        let total = 0;
+        for await (const item of input.lines()) {
+          total++;
+          if (item.status !== expected) mismatches++;
+          yield item;
+        }
+        if (mismatches > 0) {
+          throw new Error(`expect ${expected}: ${mismatches}/${total} responses did not match`);
+        }
+      })(),
+    ),
+  );
+}
+
+// Terminal aggregation: consumes the stream, yields ONE summary object with
+// real latency percentiles (from TimedHit.ms) and a status histogram.
+export function statsStage(): PipelineStage<{ status: number; ms?: number }, unknown> {
+  return pipelineStage((input) =>
+    Pipeline.of(
+      (async function* () {
+        const t0 = performance.now();
+        const latencies: number[] = [];
+        const status: Record<string, number> = {};
+        let count = 0;
+        for await (const item of input.lines()) {
+          count++;
+          status[item.status] = (status[item.status] ?? 0) + 1;
+          if (typeof item.ms === "number") latencies.push(item.ms);
+        }
+        const wallMs = performance.now() - t0;
+        latencies.sort((a, b) => a - b);
+        const pct = (p: number): number =>
+          latencies.length === 0
+            ? 0
+            : (latencies[
+                Math.min(latencies.length - 1, Math.floor((p / 100) * latencies.length))
+              ] ?? 0);
+        const mean = latencies.length ? latencies.reduce((a, b) => a + b, 0) / latencies.length : 0;
+        yield {
+          count,
+          wallMs: Math.round(wallMs),
+          rps: wallMs > 0 ? Math.round((count / wallMs) * 1000) : 0,
+          status,
+          p50: Number(pct(50).toFixed(1)),
+          p95: Number(pct(95).toFixed(1)),
+          p99: Number(pct(99).toFixed(1)),
+          meanMs: Number(mean.toFixed(1)),
+        };
+      })(),
+    ),
+  );
+}

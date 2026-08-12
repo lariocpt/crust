@@ -1,6 +1,6 @@
 import type { OpenApiSpec } from "./loadSpec";
-import { buildRoutes, matchRoute, type Route } from "./router";
 import { pickResponse, synthesizeBody } from "./mockResponse";
+import { buildRoutes, matchRoute, type Route } from "./router";
 
 export interface ServerOptions {
   port: number;
@@ -32,7 +32,9 @@ export function startServer(opts: ServerOptions): RunningServer {
       try {
         if (!lookup.matched) {
           const status = lookup.pathExists ? 405 : 404;
-          response = jsonResponse(status, { error: lookup.pathExists ? "method not allowed" : "not found" });
+          response = jsonResponse(status, {
+            error: lookup.pathExists ? "method not allowed" : "not found",
+          });
         } else {
           const picked = pickResponse(lookup.matched.operation);
           const body = synthesizeBody(picked.media, opts.spec);

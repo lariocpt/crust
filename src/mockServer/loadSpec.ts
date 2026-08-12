@@ -27,9 +27,7 @@ export interface MediaTypeObject {
 }
 
 export async function loadSpec(source: string): Promise<{ spec: OpenApiSpec; origin: string }> {
-  const text = source.includes("://")
-    ? await fetchText(source)
-    : await readText(source);
+  const text = source.includes("://") ? await fetchText(source) : await readText(source);
   const trimmed = text.trimStart();
   const looksJson = trimmed.startsWith("{") || trimmed.startsWith("[");
   let parsed: unknown;

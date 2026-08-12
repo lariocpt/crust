@@ -1,9 +1,9 @@
-import { test, expect, describe, beforeAll, afterAll } from "bun:test";
-import { mkdtemp, rm, readFile, readdir } from "node:fs/promises";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Pipeline } from "../src/pipeline";
-import { write, dest, stats } from "../src/sinks";
+import { dest, stats, write } from "../src/sinks";
 
 describe("write", () => {
   let dir: string;

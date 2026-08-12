@@ -1,10 +1,6 @@
 export function base64(...args: unknown[]): string {
-  const decode = args.some(
-    (a) => a === "-d" || a === "decode" || a === "--decode",
-  );
-  const real = args.filter(
-    (a) => a !== "-d" && a !== "decode" && a !== "--decode",
-  );
+  const decode = args.some((a) => a === "-d" || a === "decode" || a === "--decode");
+  const real = args.filter((a) => a !== "-d" && a !== "decode" && a !== "--decode");
   const value = real[0];
   if (value === undefined || value === null) {
     throw new Error("base64: missing input");

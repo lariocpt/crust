@@ -45,10 +45,7 @@ function compileTemplate(template: string): RegExp {
 }
 
 function countLiteralSegments(template: string): number {
-  return template
-    .split("/")
-    .filter((seg) => seg.length > 0 && !/^\{[^/}]+\}$/.test(seg))
-    .length;
+  return template.split("/").filter((seg) => seg.length > 0 && !/^\{[^/}]+\}$/.test(seg)).length;
 }
 
 export interface RouteLookup {

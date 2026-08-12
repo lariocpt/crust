@@ -28,12 +28,25 @@ export function parse(line: string): (ctx?: Context) => Pipeline<unknown> {
     }
 
     let pipeline: Pipeline<unknown> | null = null;
+    // `parallel N` is a modifier for the NEXT http stage, not a stage of its
+    // own — it sets the fan-out for the per-item requests that follow.
+    let pendingParallel: number | null = null;
     for (let i = startIdx; i < tokens.length; i++) {
       const kind = resolveKind(tokens[i]!.text, ctx);
       if (kind.kind === "time") {
         throw new Error("time: only allowed as the first stage of a pipeline");
       }
-      pipeline = i === startIdx ? buildSource(kind, ctx) : applyStage(pipeline!, kind, ctx);
+      if (kind.kind === "parallel") {
+        if (pipeline === null) throw new Error("parallel: needs an upstream stage");
+        pendingParallel = kind.n;
+        continue;
+      }
+      if (pipeline === null) {
+        pipeline = buildSource(kind, ctx);
+      } else {
+        pipeline = applyStage(pipeline, kind, ctx, pendingParallel);
+        pendingParallel = null;
+      }
     }
     if (!pipeline) throw new Error("parser: empty pipeline");
     if (timeLabel !== null) {
@@ -84,6 +97,10 @@ function buildSource(kind: StageKind, ctx?: Context): Pipeline<unknown> {
     }
     case "lambda":
       throw new Error("lambda cannot be a source — needs upstream items");
+    case "parallel":
+    case "expect":
+    case "stats":
+      throw new Error(`${kind.kind} cannot be a source — needs upstream items`);
     case "time":
       throw new Error("time: only allowed as the first stage of a pipeline");
     case "function": {
@@ -107,7 +124,12 @@ function buildSource(kind: StageKind, ctx?: Context): Pipeline<unknown> {
   }
 }
 
-function applyStage(input: Pipeline<unknown>, kind: StageKind, ctx?: Context): Pipeline<unknown> {
+function applyStage(
+  input: Pipeline<unknown>,
+  kind: StageKind,
+  ctx?: Context,
+  concurrency?: number | null,
+): Pipeline<unknown> {
   switch (kind.kind) {
     case "lambda":
       return input.pipe(evalLambda(kind.source));
@@ -115,14 +137,23 @@ function applyStage(input: Pipeline<unknown>, kind: StageKind, ctx?: Context): P
       return shellTransform(input, kind.text);
     case "http": {
       if (kind.verb === "GET") {
-        throw new Error("GET cannot be a transform — use POST/PUT/PATCH/DELETE for per-item HTTP");
+        // Per-item timed GET — each upstream item triggers one request.
+        // `parallel N` upstream sets the fan-out.
+        const fn = transforms.timedGet(normalizeUrl(kind.url));
+        const n = concurrency ?? 1;
+        return input.pipe(transforms.parallel(n, fn) as never) as Pipeline<unknown>;
       }
       return input.pipe(transforms[kind.verb](kind.url) as never) as Pipeline<unknown>;
     }
+    case "expect":
+      return input.pipe(transforms.expectStatus(kind.status) as never) as Pipeline<unknown>;
+    case "stats":
+      return input.pipe(transforms.statsStage() as never) as Pipeline<unknown>;
     case "range":
     case "glob":
     case "tail":
     case "procs":
+    case "parallel":
       throw new Error(`${kind.kind} cannot appear as a non-first stage`);
     case "time":
       throw new Error("time: only allowed as the first stage of a pipeline");
@@ -132,6 +163,11 @@ function applyStage(input: Pipeline<unknown>, kind: StageKind, ctx?: Context): P
       return input.pipe((item: unknown) => fn(item, ...kind.args));
     }
   }
+}
+
+// The docs' `:3000/health` shorthand — a bare port-path expands to localhost.
+function normalizeUrl(url: string): string {
+  return url.startsWith(":") ? `http://localhost${url}` : url;
 }
 
 function evalLambda(source: string): (x: unknown) => unknown {

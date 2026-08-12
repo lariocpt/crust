@@ -1,6 +1,6 @@
 import { builtins, isBuiltin } from "./builtins";
+import { classify, tokenize } from "./lexer";
 import { parse } from "./parser";
-import { tokenize, classify } from "./lexer";
 import type { Context } from "./types";
 
 export async function runLine(line: string, ctx: Context): Promise<number> {

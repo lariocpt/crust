@@ -141,7 +141,9 @@ function resolveRef(ref: string, spec: OpenApiSpec): unknown {
   let cur: unknown = spec;
   for (const p of parts) {
     if (!cur || typeof cur !== "object") return null;
-    cur = (cur as Record<string, unknown>)[decodeURIComponent(p.replace(/~1/g, "/").replace(/~0/g, "~"))];
+    cur = (cur as Record<string, unknown>)[
+      decodeURIComponent(p.replace(/~1/g, "/").replace(/~0/g, "~"))
+    ];
   }
   return cur ?? null;
 }

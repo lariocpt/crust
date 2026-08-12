@@ -1,8 +1,8 @@
 import type { Context } from "../types";
 import { base64 } from "./base64";
-import { salt } from "./salt";
-import { jwt } from "./jwt";
 import { bundle } from "./bundle";
+import { jwt } from "./jwt";
+import { salt } from "./salt";
 import { sql } from "./sql";
 
 export function registerBuiltinFns(ctx: Context): void {
