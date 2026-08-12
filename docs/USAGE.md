@@ -156,12 +156,13 @@ yielding `{ status, ms, url }` records (load pipelines). See
 marker), merged as lines arrive — the "one dev tail" source. Children are
 killed when the pipeline ends or crust gets SIGINT/SIGTERM.
 
-A spec value can also be an object — `{cmd, env?, restart?}`:
+A spec value can also be an object — `{cmd, env?, restart?, ready?, after?}`:
 
 ```bash
 procs({
-  web: {cmd: "bun run dev", env: {PORT: "3001"}},
-  api: {cmd: "bun api.ts", restart: true}
+  db:  {cmd: "docker compose up pg", ready: "port:5432"},
+  api: {cmd: "bun api.ts", after: "db", ready: ":3001/health", restart: {max: 3}},
+  web: {cmd: "bun run dev", after: "api", env: {PORT: "3001"}}
 })
 ```
 
@@ -169,6 +170,26 @@ procs({
 - `restart: true` — respawn on unexpected exit, with backoff starting at
   250ms and doubling to a 2s cap (a `restarting in Nms` line is emitted on
   the `exit` stream). A **user kill** (Ctrl-C / SIGTERM) never respawns.
+  `restart: {max: N}` gives up after N consecutive restarts with a
+  `giving up after N restart(s)` line; a stretch of >10s uptime resets the
+  counter (it guards against crash *loops*, not against ever crashing twice).
+- `ready` — a readiness probe: `":3001/health"` / `"http(s)://…"` (ready =
+  any 2xx) or `"port:5432"` (ready = TCP connect succeeds). Long form
+  `{url?, port?, timeoutMs?, intervalMs?}` (defaults 30s / 250ms). Probe
+  progress is reported on a `ready` stream (`ready after 120ms (…)`). On
+  timeout, a restartable proc is killed and respawned (readiness is
+  re-awaited after every restart); a non-restartable one fails the whole
+  pipeline — CI semantics.
+- `after` — a name or list of names that must be **ready** before this proc
+  spawns (procs without `ready:` count as ready once spawned). Gating is
+  one-shot: a dependency restarting later never re-blocks a dependent, but a
+  dependency that dies or gives up before ever becoming ready fails the
+  pipeline with `dependency "<name>" exited before becoming ready`. Unknown
+  names, self-dependencies, and cycles throw before anything spawns.
+
+Children are spawned in their own process group and the whole group is
+SIGTERM'd on teardown, escalating to SIGKILL after 3s — grandchildren
+(a dev server spawned by `sh -c`, say) don't outlive the pipeline.
 
 ### Transforms
 
@@ -787,6 +808,7 @@ Crust ships a small set of `crust.fn`-registered helpers. They work as both pipe
 | `jwt sign \| verify \| decode --secret <s>` | HS256 JWT. Reads `$JWT_SECRET` if `--secret` omitted. Item can be a JSON string (sign) or a token (verify/decode). |
 | `bundle <entry> [--outdir \| --outfile \| --minify \| --sourcemap \| --target=bun\|browser\|node]` | Wraps `Bun.build` for one-shot bundling. With `--outfile`, writes the first artifact and returns `{outfile, bytes}`. |
 | `sql "<query>" [params…]` | Runs a SQL query via Bun's SQL client using `$DATABASE_URL`. As a source, **streams one item per row** (the parser flattens Array results from function-as-source). |
+| `wait <target> [--timeout <dur>] [--interval <dur>]` | Blocks until a target answers, then emits `{target, ready, ms, attempts}`. Target: `:3001/health` / `http(s)://…` (ready = any 2xx) or `port:5432` (TCP connect). Durations like `300ms`/`30s`/`2m` (defaults 30s / 500ms). Not ready in time → error, exit 1 — CI-friendly. |
 
 Examples:
 
@@ -801,6 +823,9 @@ echo eyJhbGciOiJIUzI1Ni… | jwt verify --secret k     # { sub: "42" }
 
 # SQL as a streaming source — pipe rows downstream
 sql "select id, email from users limit 5" | (r => r.email)
+
+# Block a CI step until the app is up (exit 1 if it never is)
+wait :3001/health --timeout 30s
 
 # Bundle in one shot
 bundle src/index.ts --outfile dist/app.js --minify
