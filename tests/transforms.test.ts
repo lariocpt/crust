@@ -110,7 +110,10 @@ describe("parallel", () => {
     expect(Date.now() - start).toBeLessThan(500);
   });
 
-  test("preserves input order in output", async () => {
+  test("streams every result in completion order", async () => {
+    // Deliberate contract since the windowed-stats work: results surface the
+    // moment they settle (order NOT preserved) so downstream stages see a
+    // live stream, not an end-of-run dump.
     const out = await range(0, 4)
       .pipe(
         parallel(5, async (i: number) => {
@@ -119,7 +122,7 @@ describe("parallel", () => {
         }),
       )
       .collect();
-    expect(out).toEqual([0, 2, 4, 6, 8]);
+    expect([...out].sort((a, b) => (a as number) - (b as number))).toEqual([0, 2, 4, 6, 8]);
   });
 
   test("respects concurrency limit", async () => {

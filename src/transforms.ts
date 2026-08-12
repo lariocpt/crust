@@ -117,32 +117,53 @@ export function time<T>(
   );
 }
 
+// Streams results in COMPLETION order, not input order: downstream stages
+// (stats --every windows, expect) see each result the moment it settles. The
+// previous barrier variant buffered everything and made windowed soak stats
+// meaningless — every item arrived in the final millisecond.
 export function parallel<T, U>(n: number, fn: (x: T) => U | Promise<U>): PipelineStage<T, U> {
   return pipelineStage<T, U>((input) =>
     Pipeline.of(
       (async function* () {
-        const items: T[] = [];
-        for await (const item of input.lines()) items.push(item);
-
-        const results: U[] = new Array(items.length);
+        const settled: U[] = [];
         const inFlight = new Set<Promise<void>>();
+        let notify: (() => void) | null = null;
 
-        for (let i = 0; i < items.length; i++) {
-          while (inFlight.size >= n) {
-            await Promise.race(inFlight);
-          }
-          const idx = i;
+        const start = (item: T) => {
           let task!: Promise<void>;
           task = (async () => {
-            results[idx] = await fn(items[idx]!);
+            const r = await fn(item);
+            settled.push(r);
+            notify?.();
           })().finally(() => {
             inFlight.delete(task);
           });
           inFlight.add(task);
-        }
-        await Promise.all(inFlight);
+        };
 
-        for (const r of results) yield r;
+        const iter = input.lines()[Symbol.asyncIterator]();
+        let sourceDone = false;
+        while (!sourceDone || inFlight.size > 0 || settled.length > 0) {
+          // Drain finished results first — this is what streams them.
+          while (settled.length > 0) {
+            yield settled.shift()!;
+          }
+          // Top up the in-flight pool from the source.
+          while (!sourceDone && inFlight.size < n) {
+            const next = await iter.next();
+            if (next.done) {
+              sourceDone = true;
+              break;
+            }
+            start(next.value);
+          }
+          if (inFlight.size > 0 && settled.length === 0) {
+            await new Promise<void>((r) => {
+              notify = r;
+            });
+            notify = null;
+          }
+        }
       })(),
     ),
   );
