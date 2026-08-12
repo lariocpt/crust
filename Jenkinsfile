@@ -142,7 +142,11 @@ pipeline {
                         # No --registry flag: the staged .npmrc carries both the registry and
                         # the auth line, so the URL cannot drift between the two and the token
                         # stays out of the container's argv.
-                        CID=$(docker create -w /w node:22-bookworm-slim sh -c 'set -eu; cd /w; npm publish')
+                        # --add-host: npm.in.drlario.org is LAN-only DNS (dnsmasq); a
+                        # sibling container on the default bridge falls back to public
+                        # resolvers and gets ENOTFOUND. Caddy publishes 443 on the host,
+                        # so the host-gateway IP terminates TLS for the wildcard cert.
+                        CID=$(docker create -w /w --add-host npm.in.drlario.org:host-gateway node:22-bookworm-slim sh -c 'set -eu; cd /w; npm publish')
                         trap 'docker rm -f "$CID" >/dev/null 2>&1 || true; rm -f npmstage/.npmrc' EXIT
                         docker cp "$PWD/npmstage/." "$CID:/w" >/dev/null
                         docker start -a "$CID" || {
@@ -165,7 +169,7 @@ pipeline {
                         || { echo "FAIL: crust is not listed by install.sh"; exit 1; }
 
                     # The npm channel can see it, and the tarball really is a thin launcher.
-                    docker run --rm node:22-bookworm-slim \
+                    docker run --rm --add-host npm.in.drlario.org:host-gateway node:22-bookworm-slim \
                         npm view "crust@$NPM_VERSION" dist.unpackedSize --registry "$REGISTRY"
                     echo "published crust $NPM_VERSION (npm) / $APPS_VERSION (apps)"
                 '''
