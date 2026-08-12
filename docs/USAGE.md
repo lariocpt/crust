@@ -575,8 +575,27 @@ The TS-test ecosystem owns the name `expect`. Crust exports the API name as `exp
 | `test-pipes --target g [--bail] [--timeout ms] [--setup m]` | Runs `.pipes` files — one shorthand fixture pipeline per line. See [test-pipes](#test-pipes). |
 | `gen-fixtures --swagger s --out d --setup m` | Generates negative-case `.crust.ts` fixtures from an OpenAPI spec. See [gen-fixtures](#gen-fixtures). |
 | `mock-server --swagger <url-or-path> [--port N] [--host addr] [--stateful] [--validate] [--proxy <upstream>]` | Boots a `Bun.serve` instance that mocks every operation in an OpenAPI 3.x spec; `--stateful` adds an in-memory CRUD layer, `--validate` rejects spec-violating requests with 422, `--proxy` turns it into a validation proxy in front of a real upstream. See [mock-server](#mock-server). |
+| `skills <list\|install> [--global] [--force]` | Claude agent skills shipped in the binary. See [Agent skills](#agent-skills). |
 | `exit [code]` | Exits crust with optional code (default 0). |
 | `help` | Lists builtins. |
+
+### Agent skills
+
+Crust ships Claude-agent skills — SKILL.md guides that teach a coding agent
+how to drive crust's pipelines, tests, mocks, load runs, and process
+tooling. They're embedded in the binary and installed per project:
+
+```bash
+skills list                 # what's embedded, with descriptions
+skills install              # write to ./.claude/skills/<name>/SKILL.md
+skills install --global     # write to ~/.claude/skills/ instead
+skills install --force      # overwrite locally-edited copies
+```
+
+Install is idempotent; a file you've edited locally is refused without
+`--force`. Every example line inside the skills is checked against the live
+grammar by the test suite, so they can't silently rot. Exit codes: `0` ok,
+`1` refused overwrites, `2` bad args.
 
 ### dotenv
 
