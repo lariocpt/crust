@@ -206,11 +206,21 @@ async function* mergeAsync<T>(gens: AsyncGenerator<T>[]): AsyncGenerator<T> {
   }
 }
 
-export function GET(url: string, opts?: RequestInit): Pipeline<Response> {
+export function GET(url: string, opts?: RequestInit, timeoutMs?: number): Pipeline<Response> {
   return Pipeline.of(
     (async function* () {
-      const res = await fetch(url, { ...opts, method: "GET" });
-      yield res;
+      const init: RequestInit = { ...opts, method: "GET" };
+      // Minted at generator start (one request per source), caller signal wins.
+      if (timeoutMs !== undefined && !opts?.signal) init.signal = AbortSignal.timeout(timeoutMs);
+      try {
+        yield await fetch(url, init);
+      } catch (err) {
+        const name = (err as { name?: string }).name;
+        if (timeoutMs !== undefined && (name === "TimeoutError" || name === "AbortError")) {
+          throw new Error(`GET ${url}: timed out after ${timeoutMs}ms`);
+        }
+        throw err;
+      }
     })(),
   );
 }

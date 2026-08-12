@@ -1,4 +1,5 @@
 import { splitArgs } from "./args";
+import { parseDuration } from "./readiness";
 import type { StageKind, Token } from "./types";
 
 export function tokenize(line: string): Token[] {
@@ -69,14 +70,28 @@ export function classify(text: string): StageKind {
 
   const httpMatch = t.match(/^(GET|POST|PUT|PATCH|DELETE)\s+(.+)$/);
   if (httpMatch) {
-    // Tail is `<url> [-H "Key: value"]...` — split quote-aware so header
-    // values may contain spaces and colons.
+    // Tail is `<url> [-H "Key: value"]... [--timeout <dur>]` — split
+    // quote-aware so header values may contain spaces and colons.
     const parts = splitArgs(httpMatch[2]!);
     const url = parts[0] ?? "";
     const headers: string[] = [];
+    let timeoutMs: number | undefined;
     for (let i = 1; i < parts.length; i++) {
-      if (parts[i] === "-H" && i + 1 < parts.length) {
+      const p = parts[i]!;
+      if (p === "-H" && i + 1 < parts.length) {
         headers.push(parts[++i]!);
+        continue;
+      }
+      if (p === "--timeout" || p.startsWith("--timeout=")) {
+        const raw = p.startsWith("--timeout=") ? p.slice("--timeout=".length) : parts[++i];
+        if (raw === undefined) throw new Error("http: --timeout requires a duration (e.g. 5s)");
+        timeoutMs = parseDuration(raw); // throws on malformed values
+        continue;
+      }
+      // An http stage can't fall back to shell (the verb regex already
+      // committed), so a typo'd flag must be loud, not silently dropped.
+      if (p.startsWith("--")) {
+        throw new Error(`http: unknown flag "${p}" — supported: -H, --timeout`);
       }
     }
     return {
@@ -84,6 +99,7 @@ export function classify(text: string): StageKind {
       verb: httpMatch[1] as "GET" | "POST" | "PUT" | "PATCH" | "DELETE",
       url,
       headers,
+      timeoutMs,
     };
   }
 

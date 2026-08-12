@@ -120,6 +120,7 @@ function buildSource(kind: StageKind, ctx?: Context): Pipeline<unknown> {
         return sources.GET(
           normalizeUrl(expandEnv(kind.url)),
           httpOpts(kind.headers),
+          kind.timeoutMs,
         ) as Pipeline<unknown>;
       }
       throw new Error(`${kind.verb} cannot be a source — needs upstream items`);
@@ -196,7 +197,7 @@ function applyStage(
       if (kind.verb === "GET") {
         // Per-item timed GET — each upstream item triggers one request.
         // `parallel N` upstream sets the fan-out.
-        const fn = transforms.timedGet(url, opts);
+        const fn = transforms.timedGet(url, opts, kind.timeoutMs);
         const n = concurrency ?? 1;
         return input.pipe(transforms.parallel(n, fn) as never) as Pipeline<unknown>;
       }
@@ -204,10 +205,15 @@ function applyStage(
         // The `parallel` modifier (any N, including 1) puts a verb in load
         // mode: {status, ms, url} timing records, bodies drained.
         return input.pipe(
-          transforms.parallel(concurrency, transforms.timedHttpItem(kind.verb, url, opts)) as never,
+          transforms.parallel(
+            concurrency,
+            transforms.timedHttpItem(kind.verb, url, opts, kind.timeoutMs),
+          ) as never,
         ) as Pipeline<unknown>;
       }
-      return input.pipe(transforms[kind.verb](url, opts) as never) as Pipeline<unknown>;
+      return input.pipe(
+        transforms[kind.verb](url, opts, kind.timeoutMs) as never,
+      ) as Pipeline<unknown>;
     }
     case "expect":
       return input.pipe(transforms.expectStatus(kind.matcher) as never) as Pipeline<unknown>;

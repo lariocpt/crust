@@ -10,6 +10,7 @@ import {
   POST,
   parallel,
   statsStage,
+  timedGet,
   timedHttpItem,
 } from "../src/transforms";
 
@@ -283,5 +284,81 @@ describe("parallel with a paced source", () => {
     // The third result must arrive while the source still has items left
     // (< 150ms), not in a final dump after ~180ms.
     expect(arrivals[2]!).toBeLessThan(150);
+  });
+});
+
+describe("http --timeout paths", () => {
+  test("timedGet: timeout yields {status: 0, timedOut: true}; refusal has no flag", async () => {
+    const slow = Bun.serve({
+      port: 0,
+      async fetch() {
+        await Bun.sleep(500);
+        return new Response("late");
+      },
+    });
+    try {
+      const hit = await timedGet(`http://localhost:${slow.port}/x`, undefined, 60)({});
+      expect(hit.status).toBe(0);
+      expect(hit.timedOut).toBe(true);
+      const refused = await timedGet("http://127.0.0.1:1/x", undefined, 5000)({});
+      expect(refused.status).toBe(0);
+      expect(refused.timedOut).toBeUndefined();
+    } finally {
+      slow.stop(true);
+    }
+  });
+
+  test("timedHttpItem: timeout flagged the same way", async () => {
+    const slow = Bun.serve({
+      port: 0,
+      async fetch() {
+        await Bun.sleep(500);
+        return new Response("late");
+      },
+    });
+    try {
+      const hit = await timedHttpItem(
+        "POST",
+        `http://localhost:${slow.port}/x`,
+        undefined,
+        60,
+      )({
+        a: 1,
+      });
+      expect(hit.status).toBe(0);
+      expect(hit.timedOut).toBe(true);
+    } finally {
+      slow.stop(true);
+    }
+  });
+
+  test("plain verb: timeout rejects with the relabeled message", async () => {
+    const slow = Bun.serve({
+      port: 0,
+      async fetch() {
+        await Bun.sleep(500);
+        return new Response("late");
+      },
+    });
+    try {
+      const p = Pipeline.of([{ a: 1 }])
+        .pipe(POST(`http://localhost:${slow.port}/x`, undefined, 60))
+        .collect();
+      await expect(p).rejects.toThrow(`POST http://localhost:${slow.port}/x: timed out after 60ms`);
+    } finally {
+      slow.stop(true);
+    }
+  });
+
+  test("a caller-supplied signal wins over --timeout", async () => {
+    const ok = Bun.serve({ port: 0, fetch: () => new Response("ok") });
+    try {
+      const ctrl = new AbortController();
+      const hit = await timedGet(`http://localhost:${ok.port}/x`, { signal: ctrl.signal }, 1)({});
+      // timeoutMs 1 would have aborted, but the user's (never-aborted) signal wins.
+      expect(hit.status).toBe(200);
+    } finally {
+      ok.stop(true);
+    }
   });
 });

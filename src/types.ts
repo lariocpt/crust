@@ -13,6 +13,8 @@ export type StageKind =
       url: string;
       /** raw "Key: value" strings from -H flags (env-expanded at parse time) */
       headers: string[];
+      /** per-request timeout from --timeout <dur>; unset = no timeout */
+      timeoutMs?: number;
     }
   | { kind: "function"; name: string; args: string[] }
   | { kind: "time"; label: string }

@@ -293,3 +293,29 @@ describe("review fixes — grammar", () => {
     expect(() => classify("parallel 0")).toThrow("parallel: N must be >= 1");
   });
 });
+
+describe("http --timeout", () => {
+  test("--timeout duration forms", () => {
+    expect(classify("GET :3000/x --timeout 5s")).toEqual({
+      kind: "http",
+      verb: "GET",
+      url: ":3000/x",
+      headers: [],
+      timeoutMs: 5000,
+    });
+    expect(classify('POST :3000/x -H "a: b" --timeout=250ms').timeoutMs).toBe(250);
+    expect(classify("GET :3000/x --timeout 2m").timeoutMs).toBe(120_000);
+  });
+
+  test("malformed duration and unknown --flags throw", () => {
+    expect(() => classify("GET :3000/x --timeout fast")).toThrow("bad duration");
+    expect(() => classify("GET :3000/x --timeout")).toThrow("--timeout requires a duration");
+    expect(() => classify("GET :3000/x --retry 3")).toThrow('http: unknown flag "--retry"');
+  });
+
+  test("bare non-flag tokens after the URL stay ignored (back-compat)", () => {
+    const k = classify("GET :3000/x extra junk");
+    expect(k.kind).toBe("http");
+    expect((k as { timeoutMs?: number }).timeoutMs).toBeUndefined();
+  });
+});

@@ -1,12 +1,25 @@
 import { Pipeline, type PipelineStage, pipelineStage } from "./pipeline";
 
+// True when an error came from an AbortSignal.timeout firing.
+function isTimeoutError(err: unknown): boolean {
+  const name = (err as { name?: string }).name;
+  return name === "TimeoutError" || name === "AbortError";
+}
+
 async function httpRequest(
   url: string,
   method: string,
   body: unknown,
   opts?: RequestInit,
+  timeoutMs?: number,
 ): Promise<Response> {
   const init: RequestInit = { ...opts, method };
+  // Minted PER REQUEST — a signal created at parse time would start its
+  // clock at parse and abort every request after the first window. A
+  // caller-supplied signal (TS API) always wins.
+  if (timeoutMs !== undefined && !opts?.signal) {
+    init.signal = AbortSignal.timeout(timeoutMs);
+  }
 
   if (body !== undefined && body !== null) {
     if (typeof body === "string") {
@@ -23,16 +36,23 @@ async function httpRequest(
     }
   }
 
-  return fetch(url, init);
+  try {
+    return await fetch(url, init);
+  } catch (err) {
+    if (timeoutMs !== undefined && isTimeoutError(err)) {
+      throw new Error(`${method} ${url}: timed out after ${timeoutMs}ms`);
+    }
+    throw err;
+  }
 }
 
 function makeHttp(method: "POST" | "PUT" | "PATCH" | "DELETE") {
-  return <T>(url: string, opts?: RequestInit): PipelineStage<T, Response> =>
+  return <T>(url: string, opts?: RequestInit, timeoutMs?: number): PipelineStage<T, Response> =>
     pipelineStage<T, Response>((input) =>
       Pipeline.of(
         (async function* () {
           for await (const item of input.lines()) {
-            yield await httpRequest(url, method, item, opts);
+            yield await httpRequest(url, method, item, opts, timeoutMs);
           }
         })(),
       ),
@@ -44,8 +64,9 @@ export function httpItem(
   method: string,
   url: string,
   opts?: RequestInit,
+  timeoutMs?: number,
 ): (item: unknown) => Promise<Response> {
-  return (item) => httpRequest(url, method, item, opts);
+  return (item) => httpRequest(url, method, item, opts, timeoutMs);
 }
 
 export const POST = makeHttp("POST");
@@ -200,21 +221,32 @@ export interface TimedHit {
   status: number;
   ms: number;
   url: string;
+  /** present (true) only when the request hit its --timeout budget */
+  timedOut?: true;
 }
 
 // Per-item GET against a fixed URL: the incoming item is only a trigger.
 // Returns a lightweight timing record instead of a Response so `stats` can
 // report real latency percentiles without holding bodies alive.
-export function timedGet(url: string, opts?: RequestInit): (x: unknown) => Promise<TimedHit> {
+export function timedGet(
+  url: string,
+  opts?: RequestInit,
+  timeoutMs?: number,
+): (x: unknown) => Promise<TimedHit> {
   return async (_x: unknown) => {
     const t0 = performance.now();
+    const init: RequestInit = { ...opts };
+    if (timeoutMs !== undefined && !opts?.signal) init.signal = AbortSignal.timeout(timeoutMs);
     try {
-      const r = await fetch(url, opts);
+      const r = await fetch(url, init);
       // Drain so keep-alive sockets recycle and timing includes the body.
       await r.arrayBuffer();
       return { status: r.status, ms: performance.now() - t0, url };
-    } catch {
-      return { status: 0, ms: performance.now() - t0, url };
+    } catch (err) {
+      const hit: TimedHit = { status: 0, ms: performance.now() - t0, url };
+      // Distinguish a timeout from a refusal — both are status 0 records.
+      if (timeoutMs !== undefined && isTimeoutError(err)) hit.timedOut = true;
+      return hit;
     }
   };
 }
@@ -228,15 +260,20 @@ export function timedHttpItem(
   method: string,
   url: string,
   opts?: RequestInit,
+  timeoutMs?: number,
 ): (item: unknown) => Promise<TimedHit> {
   return async (item) => {
     const t0 = performance.now();
     try {
-      const r = await httpRequest(url, method, item, opts);
+      const r = await httpRequest(url, method, item, opts, timeoutMs);
       await r.arrayBuffer();
       return { status: r.status, ms: performance.now() - t0, url };
-    } catch {
-      return { status: 0, ms: performance.now() - t0, url };
+    } catch (err) {
+      const hit: TimedHit = { status: 0, ms: performance.now() - t0, url };
+      if (timeoutMs !== undefined && /timed out after/.test((err as Error).message)) {
+        hit.timedOut = true;
+      }
+      return hit;
     }
   };
 }

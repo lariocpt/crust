@@ -111,7 +111,7 @@ The shell parser classifies each `|`-separated stage by looking at its first tok
 | Matches `capture NAME [(fn)]` | Capture stage — writes `process.env.NAME` for later lines |
 | Matches `expect NNN` or `expect Nxx` | Expect stage — status equality or class (`2xx`…`5xx`) |
 | Matches `stats [--every N] [--out f.json]` | Stats stage (unknown flags fall through to shell) |
-| Starts with `GET` / `POST` / `PUT` / `PATCH` / `DELETE` | HTTP stage (`-H` headers, `$VAR` expansion, `:port` shorthand) |
+| Starts with `GET` / `POST` / `PUT` / `PATCH` / `DELETE` | HTTP stage (`-H` headers, `--timeout <dur>`, `$VAR` expansion, `:port` shorthand; unknown `--flags` are errors) |
 | First token is a builtin name | Builtin (no piping; in-process dispatch) |
 | First token is a `crust.fn`-registered function | Registered function (per-item transform) |
 | Anything else | Shell stage — handed to `sh -c "<text>"` |
@@ -253,6 +253,18 @@ network error yields a `status: 0` record instead of killing the run. That
 includes `parallel 1 | POST …` — the explicit opt-in for serial-but-timed.
 Without `parallel`, non-GET verbs keep yielding real `Response` objects
 (`{…} | POST :3000/users | (r => r.json())` still works).
+
+**`--timeout <dur>`** (durations `ms`/`s`/`m`, e.g. `--timeout 2s`) bounds
+every request the stage makes — a hung upstream can no longer stall a load
+run or a `.pipes` line. On timed stages (GET, any verb under `parallel`) a
+timeout yields `{status: 0, timedOut: true, …}` — it shows in the stats
+histogram and fails `expect`, and the `timedOut` flag distinguishes it from
+a connection refusal. On plain verb stages and source `GET` a timeout fails
+the pipeline with `<VERB> <url>: timed out after <ms>ms`. A TS-API
+caller-supplied `signal` always wins. This is per-REQUEST, unlike
+`test-fixture`/`test-pipes` `--timeout` (integer ms, per fixture/line).
+Typo'd `--flags` on http stages are loud errors (they used to be silently
+ignored).
 
 HTTP transforms auto-set `content-type: application/json` for object items. String items are sent as text. `Buffer`/`Uint8Array` go raw.
 
