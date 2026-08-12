@@ -1,8 +1,12 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { existsSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { generateFixtures } from "../src/genFixtures/generate";
+import { envNameFor, generateFixtures, idPathFor } from "../src/genFixtures/generate";
+import type { OpenApiSpec } from "../src/mockServer/loadSpec";
+import { startServer } from "../src/mockServer/server";
+import { runPipes } from "../src/testPipes/runner";
 
 let dir: string;
 
@@ -42,11 +46,18 @@ const SPEC = {
             "application/json": {
               schema: {
                 type: "object",
-                required: ["name", "kind"],
+                required: ["name", "kind", "pin"],
+                additionalProperties: false,
                 properties: {
                   name: { type: "string", minLength: 2 },
                   kind: { type: "string", enum: ["round", "square"] },
                   code: { type: "string", pattern: "^\\d{6}$" },
+                  pin: { type: "string", pattern: "^\\d{4}$" },
+                  label: { type: "string", minLength: 3, maxLength: 30 },
+                  bigText: { type: "string", maxLength: 10000 },
+                  count: { type: "integer", minimum: 1, maximum: 100 },
+                  weight: { type: "number", maximum: Number.MAX_SAFE_INTEGER },
+                  note: { anyOf: [{ type: "string", maxLength: 5 }, { type: "null" }] },
                 },
               },
             },
@@ -68,6 +79,126 @@ const SPEC = {
           "404": { description: "Unknown token" },
         },
       },
+    },
+    // CRUD flow pair: POST 201 example with TOP-LEVEL id + item path.
+    "/api/things": {
+      post: {
+        tags: ["things"],
+        requestBody: {
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["name"],
+                properties: { name: { type: "string", minLength: 2 } },
+              },
+            },
+          },
+        },
+        responses: {
+          "201": {
+            description: "created",
+            content: { "application/json": { example: { id: "seed-thing", name: "Seed" } } },
+          },
+        },
+      },
+    },
+    "/api/things/{thingId}": {
+      get: {
+        tags: ["things"],
+        responses: { "200": { description: "ok" }, "404": { description: "gone" } },
+      },
+      patch: {
+        tags: ["things"],
+        requestBody: {
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: { name: { type: "string", minLength: 2 } },
+              },
+            },
+          },
+        },
+        responses: { "200": { description: "ok" } },
+      },
+      delete: {
+        tags: ["things"],
+        responses: { "204": { description: "deleted" } },
+      },
+    },
+    // Second flow (sorts BEFORE /api/things); id nested in the 201 example.
+    "/api/animals": {
+      post: {
+        tags: ["animals"],
+        requestBody: {
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["species"],
+                properties: { species: { type: "string" } },
+              },
+            },
+          },
+        },
+        responses: {
+          "201": {
+            description: "created",
+            content: { "application/json": { example: { animal: { id: "a-0" }, status: "ok" } } },
+          },
+        },
+      },
+    },
+    "/api/animals/{animalId}": {
+      get: { tags: ["animals"], responses: { "200": { description: "ok" } } },
+    },
+    // Nested collection (userId is not the scope param) -> skipped with notice.
+    "/api/users/{userId}/posts": {
+      post: {
+        tags: ["posts"],
+        requestBody: {
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["title"],
+                properties: { title: { type: "string" } },
+              },
+            },
+          },
+        },
+        responses: { "201": { description: "created" } },
+      },
+    },
+    "/api/users/{userId}/posts/{postId}": {
+      get: { tags: ["posts"], responses: { "200": { description: "ok" } } },
+    },
+    // POST 2xx example has no id anywhere -> skipped with notice.
+    "/api/blobs": {
+      post: {
+        tags: ["blobs"],
+        requestBody: {
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["data"],
+                properties: { data: { type: "string" } },
+              },
+            },
+          },
+        },
+        responses: {
+          "201": {
+            description: "created",
+            content: { "application/json": { example: { status: "ok" } } },
+          },
+        },
+      },
+    },
+    "/api/blobs/{blobId}": {
+      get: { tags: ["blobs"], responses: { "200": { description: "ok" } } },
     },
   },
 };
@@ -107,6 +238,7 @@ describe("gen-fixtures", () => {
       swagger: join(dir, "spec.json"),
       out: join(dir, "out"),
       setup: join(dir, "setup.ts"),
+      log: () => {},
     });
     expect(result.files.length).toBe(3);
 
@@ -133,6 +265,7 @@ describe("gen-fixtures", () => {
       swagger: join(dir, "spec.json"),
       out: join(dir, "out2"),
       setup: join(dir, "setup.ts"),
+      log: () => {},
     });
     const widgetsFile = result.files.find((f) => f.includes("widgets"))!;
     const mod = (await import(widgetsFile)) as {
@@ -171,5 +304,299 @@ describe("gen-fixtures", () => {
       const body = JSON.parse(wrongCode.input(ctx).body!) as { code: unknown };
       expect(typeof body.code).toBe("string");
     }
+  });
+
+  test("boundary-violation matrix: all properties, gated + deduped, additive", async () => {
+    const result = await generateFixtures({
+      swagger: join(dir, "spec.json"),
+      out: join(dir, "out3"),
+      setup: join(dir, "setup.ts"),
+      log: () => {},
+    });
+    const widgetsFile = result.files.find((f) => f.includes("widgets"))!;
+    const widgets = await Bun.file(widgetsFile).text();
+
+    // existing case names are still present — regeneration is additive
+    for (const name of [
+      "without credentials -> 401",
+      "as non-member -> 403",
+      "missing required 'name' -> 400",
+      "wrong type for 'name' -> 400",
+      "invalid enum for 'kind' -> 400",
+    ]) {
+      expect(widgets).toContain(name);
+    }
+
+    // new boundary cases — required AND optional fields
+    expect(widgets).toContain("too short 'name' -> 400");
+    expect(widgets).toContain("too short 'label' -> 400");
+    expect(widgets).toContain("too long 'label' -> 400");
+    expect(widgets).toContain("below minimum 'count' -> 400");
+    expect(widgets).toContain("above maximum 'count' -> 400");
+    // nullable anyOf wrapper is unwrapped (zod-style)
+    expect(widgets).toContain("too long 'note' -> 400");
+    // maxLength > 4096 skipped — keeps checked-in files reviewable
+    expect(widgets).not.toContain("too long 'bigText'");
+    // MAX_SAFE_INTEGER is an "unbounded" sentinel — no above-maximum case
+    expect(widgets).not.toContain("above maximum 'weight'");
+    // optional pattern field gets a case; required pattern field is already
+    // covered by wrong-type's string sentinel -> deduped
+    expect(widgets).toContain("pattern violation 'code' -> 400");
+    expect(widgets).not.toContain("pattern violation 'pin'");
+    expect(widgets).toContain("wrong type for 'pin' -> 400");
+    // op-level extra property asserts status + code ONLY
+    expect(widgets).toContain("unexpected extra property -> 400");
+    expect(widgets).toContain('data: (d: { code?: string }) => d.code === "validation",');
+
+    // perturbed values are what the matrix promises
+    const mod = (await import(widgetsFile)) as {
+      default: Array<{
+        name: string;
+        setup: () => Promise<unknown>;
+        input: (ctx: unknown) => { body?: string };
+      }>;
+    };
+    const ctx = await mod.default[0]!.setup();
+    const bodyOf = (suffix: string): Record<string, unknown> => {
+      const fx = mod.default.find((f) => f.name.includes(suffix));
+      expect(fx).toBeDefined();
+      return JSON.parse(fx!.input(ctx).body!) as Record<string, unknown>;
+    };
+    expect(bodyOf("too short 'name'").name).toBe("x");
+    expect((bodyOf("too long 'label'").label as string).length).toBe(31);
+    expect(bodyOf("below minimum 'count'").count).toBe(0);
+    expect(bodyOf("above maximum 'count'").count).toBe(101);
+    expect(bodyOf("too long 'note'").note).toBe("xxxxxx");
+    expect(bodyOf("pattern violation 'code'").code).toBe("!!pattern-violation!!");
+    expect(bodyOf("unexpected extra property").crustUnexpectedProp).toBe("gen-extra");
+
+    const auth = await Bun.file(result.files.find((f) => f.includes("auth"))!).text();
+    expect(auth).toContain("too short 'password' -> 400");
+  });
+
+  test("flow helpers: envNameFor and idPathFor", () => {
+    expect(envNameFor("/api/things")).toBe("API_THINGS");
+    expect(envNameFor("/api/things/{thingId}/sub-items")).toBe("API_THINGS_SUB_ITEMS");
+
+    const op = (media: Record<string, unknown>) => ({
+      responses: { "201": { description: "c", content: { "application/json": media } } },
+    });
+    expect(idPathFor(op({ example: { id: "x" } }))).toEqual(["id"]);
+    expect(idPathFor(op({ example: { data: { id: "x" }, meta: {} } }))).toEqual(["data", "id"]);
+    expect(
+      idPathFor(op({ schema: { type: "object", properties: { id: { type: "string" } } } })),
+    ).toEqual(["id"]);
+    expect(
+      idPathFor(
+        op({
+          schema: {
+            type: "object",
+            properties: {
+              thing: { type: "object", properties: { id: { type: "string" } } },
+            },
+          },
+        }),
+      ),
+    ).toEqual(["thing", "id"]);
+    expect(idPathFor(op({ example: { status: "ok" } }))).toBeNull();
+    expect(idPathFor({ responses: { "204": { description: "n" } } })).toBeNull();
+  });
+
+  test("emits CRUD flows: capture lines, tombstone 404, sorted order, notices", async () => {
+    const notices: string[] = [];
+    const result = await generateFixtures({
+      swagger: join(dir, "spec.json"),
+      out: join(dir, "out4"),
+      setup: join(dir, "setup.ts"),
+      log: (l) => notices.push(l),
+    });
+    expect(result.flowCount).toBe(2);
+    expect(result.flowFile).toBe(join(dir, "out4", "flows", "flows.gen.pipes"));
+    const pipes = await Bun.file(result.flowFile!).text();
+
+    // create: base body -> status assert -> json -> capture (derived id path)
+    expect(pipes).toContain(
+      '{"name":"gen-value-x"} | POST $GEN_URL_API_THINGS -H "$GEN_AUTH_HEADER" | assert (r => r.status === 201) | (r => r.json()) | capture GEN_ID_API_THINGS (b => b.id)',
+    );
+    expect(pipes).toContain("capture GEN_ID_API_ANIMALS (b => b.animal.id)");
+    // read: id must round-trip
+    expect(pipes).toContain(
+      'GET $GEN_URL_API_THINGS/$GEN_ID_API_THINGS -H "$GEN_AUTH_HEADER" | assert (r => r.status === 200) | (r => r.json()) | assert (j => JSON.stringify(j).includes(process.env.GEN_ID_API_THINGS ?? " "))',
+    );
+    // update prefers PATCH with a single-field body; {} is the DELETE trigger
+    expect(pipes).toContain(
+      '{"name":"gen-value-x"} | PATCH $GEN_URL_API_THINGS/$GEN_ID_API_THINGS -H "$GEN_AUTH_HEADER" | expect 200',
+    );
+    expect(pipes).toContain(
+      '{} | DELETE $GEN_URL_API_THINGS/$GEN_ID_API_THINGS -H "$GEN_AUTH_HEADER" | expect 204',
+    );
+    // tombstone read-after-delete (GET documents 404)
+    expect(pipes).toContain(
+      'GET $GEN_URL_API_THINGS/$GEN_ID_API_THINGS -H "$GEN_AUTH_HEADER" | expect 404',
+    );
+    // animals has no DELETE -> no delete line and no tombstone
+    expect(pipes).not.toContain("DELETE $GEN_URL_API_ANIMALS");
+    expect(pipes).not.toContain('$GEN_ID_API_ANIMALS -H "$GEN_AUTH_HEADER" | expect 404');
+    // flows sorted by template for byte-stable output
+    expect(pipes.indexOf("# flow: /api/animals")).toBeGreaterThan(-1);
+    expect(pipes.indexOf("# flow: /api/animals")).toBeLessThan(
+      pipes.indexOf("# flow: /api/things"),
+    );
+    // SQL assertions are out of scope, and the header says so
+    expect(pipes).toContain("SQL assertions are not derivable");
+
+    // skipped-template notices
+    const joined = notices.join("\n");
+    expect(joined).toContain("/api/users/{userId}/posts");
+    expect(joined).toContain("/api/blobs");
+    expect(joined).not.toContain("skipping flow for /api/things");
+  });
+
+  test("flows.gen.setup.ts seeds GEN_AUTH_HEADER + GEN_URL_* via the setup contract", async () => {
+    const result = await generateFixtures({
+      swagger: join(dir, "spec.json"),
+      out: join(dir, "out5"),
+      setup: join(dir, "setup.ts"),
+      log: () => {},
+    });
+    const setupFile = join(dir, "out5", "flows", "flows.gen.setup.ts");
+    const text = await Bun.file(setupFile).text();
+    expect(text).toContain('import { headersFor, resolvePath, shared } from "../../setup.ts";');
+
+    const mod = (await import(setupFile)) as { default: () => Promise<void> };
+    try {
+      await mod.default();
+      expect(process.env.GEN_AUTH_HEADER).toBe("x-role: member");
+      expect(process.env.GEN_URL_API_THINGS).toBe("http://localhost:9/api/things");
+      expect(process.env.GEN_URL_API_ANIMALS).toBe("http://localhost:9/api/animals");
+    } finally {
+      delete process.env.GEN_AUTH_HEADER;
+      delete process.env.GEN_URL_API_THINGS;
+      delete process.env.GEN_URL_API_ANIMALS;
+    }
+    void result;
+  });
+
+  test("generated flow round-trips create->read->update->delete->404 on the stateful mock", async () => {
+    // Top-level id in the 201 example ON PURPOSE: the stateful mock stores
+    // ids top-level, so a wrapped-response spec would mis-capture against
+    // the MOCK (fine against real servers — documented mock limitation).
+    const CRUD_SPEC = {
+      openapi: "3.0.0",
+      info: { title: "crud", version: "1" },
+      paths: {
+        "/api/things": {
+          post: {
+            tags: ["things"],
+            requestBody: {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    required: ["name"],
+                    properties: { name: { type: "string", minLength: 2 } },
+                  },
+                },
+              },
+            },
+            responses: {
+              "201": {
+                description: "created",
+                content: { "application/json": { example: { id: "seed-thing", name: "Seed" } } },
+              },
+            },
+          },
+        },
+        "/api/things/{thingId}": {
+          get: {
+            tags: ["things"],
+            responses: { "200": { description: "ok" }, "404": { description: "gone" } },
+          },
+          patch: {
+            tags: ["things"],
+            requestBody: {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: { name: { type: "string", minLength: 2 } },
+                  },
+                },
+              },
+            },
+            responses: { "200": { description: "ok" } },
+          },
+          delete: { tags: ["things"], responses: { "204": { description: "deleted" } } },
+        },
+      },
+    };
+    const CRUD_SETUP = `
+export const JSON_HEADERS = { "content-type": "application/json" };
+export const scopeParam = null;
+let cached = null;
+export function shared() {
+  cached ??= Promise.resolve({ base: process.env.CRUST_GENFX_BASE });
+  return cached;
+}
+export function headersFor(ctx, role) {
+  return { ...JSON_HEADERS, authorization: "Bearer gen-" + role };
+}
+export function resolvePath(ctx, template) {
+  return ctx.base + template;
+}
+`;
+    await writeFile(join(dir, "crud-spec.json"), JSON.stringify(CRUD_SPEC));
+    await writeFile(join(dir, "crud-setup.ts"), CRUD_SETUP);
+    const srv = startServer({
+      port: 0,
+      hostname: "127.0.0.1",
+      spec: CRUD_SPEC as OpenApiSpec,
+      stateful: true,
+      log: () => {},
+    });
+    process.env.CRUST_GENFX_BASE = `http://127.0.0.1:${srv.port}`;
+    try {
+      const result = await generateFixtures({
+        swagger: join(dir, "crud-spec.json"),
+        out: join(dir, "out6"),
+        setup: join(dir, "crud-setup.ts"),
+        log: () => {},
+      });
+      expect(result.flowCount).toBe(1);
+      const report = await runPipes({ target: result.flowFile! });
+      expect(report.results.filter((r) => r.status === "fail")).toEqual([]);
+      expect(report.totals).toEqual({ pass: 5, fail: 0, files: 1 });
+    } finally {
+      await srv.stop();
+      delete process.env.CRUST_GENFX_BASE;
+    }
+  });
+
+  test("--no-flows suppresses the flows dir", async () => {
+    const result = await generateFixtures({
+      swagger: join(dir, "spec.json"),
+      out: join(dir, "out7"),
+      setup: join(dir, "setup.ts"),
+      flows: false,
+      log: () => {},
+    });
+    expect(result.flowFile).toBeNull();
+    expect(result.flowCount).toBe(0);
+    expect(existsSync(join(dir, "out7", "flows"))).toBe(false);
+  });
+
+  test("CLI --no-flows maps through to generation", async () => {
+    const { runCli } = await import("../src/genFixtures/cli");
+    const code = await runCli([
+      "--swagger",
+      join(dir, "spec.json"),
+      "--out",
+      join(dir, "out8"),
+      "--setup",
+      join(dir, "setup.ts"),
+      "--no-flows",
+    ]);
+    expect(code).toBe(0);
+    expect(existsSync(join(dir, "out8", "flows"))).toBe(false);
   });
 });
