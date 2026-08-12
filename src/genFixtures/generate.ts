@@ -115,7 +115,10 @@ export function validValue(s: Schema | undefined, key = ""): unknown {
   switch (s.type) {
     case "string": {
       if (s.format === "email" || /email/i.test(key)) return "gen@crust.fixture";
-      if (s.format === "uuid" || /(^|_)id$/.test(key)) return crypto.randomUUID();
+      // Fixed, not random: emitted files must be byte-stable so a checked-in
+      // matrix can be CI-diffed against a regeneration.
+      if (s.format === "uuid" || /(^|_)id$/.test(key))
+        return "00000000-0000-4000-8000-00000000c0de";
       if (s.format === "date") return "2026-08-12";
       if (s.format === "date-time") return "2026-08-12T10:00:00.000Z";
       if (s.pattern) return sampleFromPattern(s.pattern);

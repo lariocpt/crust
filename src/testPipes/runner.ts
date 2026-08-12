@@ -1,4 +1,5 @@
 import { resolve } from "node:path";
+import { Glob } from "bun";
 import { registerBuiltinFns } from "../builtinFns";
 import { expandTarget as expandGlob } from "../fixtures";
 import { parse } from "../parser";
@@ -47,7 +48,10 @@ async function expandPipesTarget(target: string): Promise<string[]> {
     if (!(await Bun.file(abs).exists())) return [];
     return [abs];
   }
-  const { Glob } = await import("bun");
+  // Static import above, NOT await import("bun"): dynamic import of the
+  // "bun" module breaks inside --bytecode compiled binaries ("awaitPromise
+  // is not defined") — only the glob branch hit it, so single-file targets
+  // masked the bug.
   const g = new Glob(target);
   const out: string[] = [];
   for await (const f of g.scan({ cwd: process.cwd(), absolute: true })) {
