@@ -621,7 +621,7 @@ The TS-test ecosystem owns the name `expect`. Crust exports the API name as `exp
 | `test-fixture --target g [--out p] [--threads N] [--count N] [--timeout ms] [--bail]` | Runs `.crust.ts` HTTP fixtures. See [test-fixture](#test-fixture). |
 | `test-pipes --target g [--bail] [--timeout ms] [--setup m]` | Runs `.pipes` files — one shorthand fixture pipeline per line. See [test-pipes](#test-pipes). |
 | `gen-fixtures --swagger s --out d --setup m [--no-flows]` | Generates negative-case `.crust.ts` fixtures and CRUD flow `.pipes` suites from an OpenAPI spec. See [gen-fixtures](#gen-fixtures). |
-| `mock-server --swagger <url-or-path> [--port N] [--host addr] [--stateful] [--validate] [--proxy <upstream>]` | Boots a `Bun.serve` instance that mocks every operation in an OpenAPI 3.x spec; `--stateful` adds an in-memory CRUD layer, `--validate` rejects spec-violating requests with 422, `--proxy` turns it into a validation proxy in front of a real upstream. See [mock-server](#mock-server). |
+| `mock-server --swagger <url-or-path> [--port N] [--host addr] [--stateful] [--state <path\|url>] [--seed <file>] [--validate] [--proxy <upstream>]` | Boots a `Bun.serve` instance that mocks every operation in an OpenAPI 3.x spec; `--stateful` adds a CRUD layer, `--state` persists it to sqlite/postgres, `--seed` inserts boot data, `--validate` rejects spec-violating requests with 422, `--proxy` turns it into a validation proxy in front of a real upstream. See [mock-server](#mock-server). |
 | `skills <list\|install> [--global] [--force]` | Claude agent skills shipped in the binary. See [Agent skills](#agent-skills). |
 | `exit [code]` | Exits crust with optional code (default 0). |
 | `help` | Lists builtins. |
@@ -918,7 +918,7 @@ mock-server --swagger ./spec.json --port 0 --host 127.0.0.1   # OS-assigned port
 mock-server --swagger ./openapi.yaml --port 4000 --stateful   # in-memory CRUD
 ```
 
-Flags: `--swagger <url-or-path>` (required; URL or local `.json`/`.yaml`/`.yml`; Swagger 2.0 specs are auto-converted to OpenAPI 3.x), `--port N` (default `3000`, `0` = ephemeral), `--host addr` (default `0.0.0.0`), `--stateful` (in-memory CRUD layer — see below), `--validate` (reject spec-violating requests with `422` — see below), `--proxy <upstream>` (validation-proxy mode — see below; mutually exclusive with `--stateful`), `--proxy-timeout N` (upstream timeout in ms, default `30000`), `--report <path>` (append violations as NDJSON; requires `--proxy`).
+Flags: `--swagger <url-or-path>` (required; URL or local `.json`/`.yaml`/`.yml`; Swagger 2.0 specs are auto-converted to OpenAPI 3.x), `--port N` (default `3000`, `0` = ephemeral), `--host addr` (default `0.0.0.0`), `--stateful` (CRUD layer — see below), `--state <path|url>` (persist the CRUD state in sqlite/postgres — see below; implies `--stateful`, excludes `--proxy`), `--seed <file.json>` (insert boot data into empty collections — see below; implies `--stateful`, excludes `--proxy`), `--validate` (reject spec-violating requests with `422` — see below), `--proxy <upstream>` (validation-proxy mode — see below; mutually exclusive with `--stateful`), `--proxy-timeout N` (upstream timeout in ms, default `30000`), `--report <path>` (append violations as NDJSON; requires `--proxy`).
 
 Response bodies are picked example-first, schema-fallback:
 
@@ -941,21 +941,84 @@ Ctrl-C (or `SIGTERM`) shuts the server down cleanly. Limits: remote `$ref` resol
 #### Stateful mode (`--stateful`)
 
 By default the mock is stateless — every request replays the spec's example.
-`--stateful` adds an in-memory CRUD layer on top, so what you POST is what
-you GET back:
+`--stateful` adds a CRUD layer on top, so what you POST is what you GET back:
 
-- `POST /things` **creates**: the stored item is the spec-synthesized base
+- `POST /things` **creates**: the stored entity is the spec-synthesized base
   merged **under** the request body, plus an `id` (yours if the body has one,
   else a random uuid).
-- `GET /things/{id}` returns the stored item; `GET /things` returns
+- `GET /things/{id}` returns the stored entity; `GET /things` returns
   everything stored, **shaped like the spec's collection envelope** (a
   documented `{ items: [...] }` wrapper is preserved; a bare array stays a
   bare array).
-- `PATCH`/`PUT /things/{id}` **merge** the body over the stored item.
+- `PATCH`/`PUT /things/{id}` **merge** the body over the stored entity.
 - `DELETE /things/{id}` removes it and returns `204`; unknown ids `404`.
 
+**Entity envelopes are detected and honored.** If the collection POST's
+201 example (or schema-synthesized body) is an object with exactly one
+object-valued property and no top-level `id` — e.g.
+`{"thing": {"id": "…", "name": "…"}}` — that key is treated as the entity
+envelope: the store keeps the **bare** entity, POST responds
+`{"thing": {…, "id": "<real id>"}}` (so a pipeline capturing `t.thing.id`
+round-trips), item GET/PATCH/PUT responses re-wrap with the item GET's
+envelope (falling back to the POST's), and request bodies arriving wrapped
+(`{"thing": {…}}`, per the POST's request example) are unwrapped before
+storing. Detection is deterministic and **flat on ambiguity** — two
+object-valued props, a top-level `id`, or a non-object body all mean the
+flat behavior above, unchanged.
+
 **Untouched collections keep serving spec examples** — consumers see no
-change until they write. State lives in memory only; restart = clean slate.
+change until they write. State lives in memory by default (restart = clean
+slate); add `--state` to persist it.
+
+#### Persistent state & seeding (`--state`, `--seed`)
+
+`--state <path|url>` (implies `--stateful`, excludes `--proxy`) moves the
+CRUD store into SQL via `Bun.SQL`: a bare file path or `sqlite://` URL for
+sqlite, or a `postgres://`/`postgresql://` URL for Postgres (any other
+scheme exits `2`). State survives restarts and is **shared cross-process** —
+every request reads through to the database (no cache), and writes are
+single-statement upserts, so last write wins. The boot line gains
+`(state: sqlite)` or `(state: postgres)`.
+
+The table is created idempotently at open and its shape is a **public
+contract** — assert on it from pipelines or anything else that speaks SQL:
+
+```sql
+CREATE TABLE IF NOT EXISTS crust_mock_state (
+  collection TEXT NOT NULL,   -- the collection path template, e.g. '/api/things'
+  id         TEXT NOT NULL,   -- the entity id (stringified)
+  doc        TEXT,            -- sqlite: JSON text | postgres: JSONB
+  updated_at TEXT NOT NULL,   -- sqlite: ISO 8601 | postgres: timestamptz DEFAULT now()
+  PRIMARY KEY (collection, id)
+)
+```
+
+`doc` is always the **bare** entity (envelopes stripped). With the `sql`
+builtin (one item per row; `DATABASE_URL=sqlite://./mock.sqlite` works —
+`Bun.SQL` handles sqlite URLs):
+
+```crust
+# sqlite
+sql "SELECT json_extract(doc, '$.name') AS name FROM crust_mock_state WHERE collection = '/api/things' AND id = '$TID'" | assert (r => r.name === "Crusty")
+# postgres
+sql "SELECT doc->>'name' AS name FROM crust_mock_state WHERE collection = '/api/things' AND id = '$TID'" | assert (r => r.name === "Crusty")
+```
+
+`--seed <file.json>` (implies `--stateful`, excludes `--proxy`) inserts boot
+data. The file maps collection templates to entity arrays:
+
+```json
+{ "/api/things": [ { "id": "seed-1", "name": "Seeded Thing" }, { "name": "No Id — gets a uuid" } ] }
+```
+
+Seeding is **empty-only and restart-safe**: collections that already have
+rows are skipped entirely (a persistent store's accumulated state is never
+clobbered — re-booting with the same seed neither duplicates nor resets).
+Seeded collections count as written, so their lists serve the seeded data
+instead of spec examples. Unknown collection keys (no matching route) print
+a boot warning and are skipped; an unreadable or invalid seed file exits
+`1`. The boot line gains `(seeded N)` with the number of items actually
+inserted.
 
 #### Request validation (`--validate`)
 

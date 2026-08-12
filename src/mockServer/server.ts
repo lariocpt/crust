@@ -1,8 +1,10 @@
 import { appendFile } from "node:fs/promises";
+import { collectionKeyOf, computeEnvelopes, FLAT_ENVELOPE } from "./envelope";
 import type { OpenApiSpec } from "./loadSpec";
 import { pickResponse, synthesizeBody } from "./mockResponse";
 import { forward, UpstreamError } from "./proxy";
 import { buildRoutes, matchRoute, paramNames, type Route } from "./router";
+import { openStateBackend, type StateBackend, type StateStore } from "./state";
 import {
   isJsonContentType,
   undocumentedOperation,
@@ -17,6 +19,10 @@ export interface ServerOptions {
   spec: OpenApiSpec;
   log?: (line: string) => void;
   stateful?: boolean;
+  /** Persist stateful CRUD: bare path / sqlite:// file / postgres:// URL. Implies stateful. */
+  state?: string;
+  /** JSON seed file { "<collection template>": [ {…}, … ] }. Implies stateful. */
+  seed?: string;
   /** Validate requests against the spec; violations → 422 (mock mode). */
   validate?: boolean;
   /** Upstream base URL — validation-proxy mode (implies request+response validation). */
@@ -26,33 +32,44 @@ export interface ServerOptions {
   report?: string;
 }
 
-export type StateStore = Map<string, Map<string, Record<string, unknown>>>;
+export type { StateStore } from "./state";
 
 export interface RunningServer {
   port: number;
   hostname: string;
   routes: Route[];
+  /** The live store for the memory backend; an empty placeholder for SQL backends. */
   state: StateStore;
-  resetState: () => void;
+  backend: StateBackend;
+  /** Items actually inserted from --seed (0 when unseeded or all collections had rows). */
+  seeded: number;
+  resetState: () => Promise<void>;
   violations: Violation[];
   clearViolations: () => void;
   stop: () => Promise<void>;
 }
 
-// Matches a trailing "/{param}" segment: "/things/{id}" is an item path whose
-// collection key is "/things" — the same key a bare "/things" template maps to.
-const TRAILING_PARAM = /\/\{[^/}]+\}$/;
-
 const MAX_VIOLATIONS = 1000;
 const DEFAULT_PROXY_TIMEOUT_MS = 30_000;
 
-export function startServer(opts: ServerOptions): RunningServer {
+export async function startServer(opts: ServerOptions): Promise<RunningServer> {
   const routes = buildRoutes(opts.spec);
   const log = opts.log ?? ((line) => process.stderr.write(line + "\n"));
-  const state: StateStore = new Map();
+  const { backend, map: state } = openStateBackend(opts.state);
+  const envelopes = computeEnvelopes(routes, opts.spec);
   const violations: Violation[] = [];
   let dropped = 0;
   let reportQueue: Promise<void> = Promise.resolve();
+
+  let seeded = 0;
+  if (opts.seed !== undefined) {
+    try {
+      seeded = await applySeed(opts.seed, backend, routes, log);
+    } catch (err) {
+      await backend.close();
+      throw err;
+    }
+  }
 
   // Capped in-memory ring + optional NDJSON append (one line per violation,
   // as it happens). The report write is awaited per record so callers reading
@@ -71,38 +88,46 @@ export function startServer(opts: ServerOptions): RunningServer {
     }
   }
 
-  // In-memory CRUD layer for --stateful. Returns null to fall through to the
-  // default example/synthesis behavior — untouched collections keep serving
-  // spec examples, so consumers see no change until they write.
-  function statefulResponse(
+  // CRUD layer for --stateful, over the state backend. Returns null to fall
+  // through to the default example/synthesis behavior — untouched collections
+  // keep serving spec examples, so consumers see no change until they write.
+  // The store always holds BARE entities; responses (re)wrap with the
+  // collection's detected envelope. Flat specs behave exactly as before.
+  async function statefulResponse(
     body: Record<string, unknown>,
     route: Route,
     params: Record<string, string>,
-  ): Response | null {
-    const isItemPath = TRAILING_PARAM.test(route.template);
-    const collectionKey = isItemPath ? route.template.replace(TRAILING_PARAM, "") : route.template;
+  ): Promise<Response | null> {
+    const { key: collectionKey, isItem: isItemPath } = collectionKeyOf(route.template);
+    const env = envelopes.get(collectionKey) ?? FLAT_ENVELOPE;
+    // Request bodies may arrive under the request envelope ({thing: {…}}).
+    const unwrapReq = (b: Record<string, unknown>): Record<string, unknown> => {
+      if (env.req && isPlainObject(b[env.req])) return b[env.req] as Record<string, unknown>;
+      return b;
+    };
 
     if (!isItemPath) {
       if (route.method === "POST") {
         const picked = pickResponse(route.operation);
         const synth = synthesizeBody(picked.media, opts.spec);
-        const base = isPlainObject(synth) ? synth : {};
-        const bodyId = body.id;
+        let base: Record<string, unknown> = {};
+        if (env.create) {
+          const inner = isPlainObject(synth) ? synth[env.create] : undefined;
+          if (isPlainObject(inner)) base = inner;
+        } else if (isPlainObject(synth)) {
+          base = synth;
+        }
+        const payload = unwrapReq(body);
+        const bodyId = payload.id;
         const id =
           typeof bodyId === "string" || typeof bodyId === "number" ? bodyId : crypto.randomUUID();
-        const item = { ...base, ...body, id };
-        let collection = state.get(collectionKey);
-        if (!collection) {
-          collection = new Map();
-          state.set(collectionKey, collection);
-        }
-        collection.set(String(id), item);
-        return jsonResponse(picked.status, item);
+        const entity = { ...base, ...payload, id };
+        await backend.put(collectionKey, String(id), entity);
+        return jsonResponse(picked.status, env.create ? { [env.create]: entity } : entity);
       }
       if (route.method === "GET") {
-        const collection = state.get(collectionKey);
-        if (!collection) return null;
-        const items = [...collection.values()];
+        if (!(await backend.has(collectionKey))) return null;
+        const items = await backend.list(collectionKey);
         const picked = pickResponse(route.operation);
         const synth = synthesizeBody(picked.media, opts.spec);
         // Mirror the spec's documented collection shape: a bare array responds
@@ -119,24 +144,24 @@ export function startServer(opts: ServerOptions): RunningServer {
       return null;
     }
 
-    const collection = state.get(collectionKey);
-    if (!collection) return null;
+    if (!(await backend.has(collectionKey))) return null;
     const names = paramNames(route.template);
     const id = params[names[names.length - 1]!] ?? "";
-    const item = collection.get(id);
+    const item = await backend.get(collectionKey, id);
 
     if (route.method === "GET") {
-      return item ? jsonResponse(200, item) : jsonResponse(404, { error: "not found" });
+      if (!item) return jsonResponse(404, { error: "not found" });
+      return jsonResponse(200, env.item ? { [env.item]: item } : item);
     }
     if (route.method === "PATCH" || route.method === "PUT") {
       if (!item) return jsonResponse(404, { error: "not found" });
-      const merged = { ...item, ...body };
-      collection.set(id, merged);
-      return jsonResponse(200, merged);
+      const merged = { ...item, ...unwrapReq(body) };
+      await backend.put(collectionKey, id, merged);
+      return jsonResponse(200, env.item ? { [env.item]: merged } : merged);
     }
     if (route.method === "DELETE") {
-      if (!item) return jsonResponse(404, { error: "not found" });
-      collection.delete(id);
+      const removed = await backend.delete(collectionKey, id);
+      if (!removed) return jsonResponse(404, { error: "not found" });
       return new Response(null, { status: 204 });
     }
     return null;
@@ -144,7 +169,9 @@ export function startServer(opts: ServerOptions): RunningServer {
 
   const proxyMode = typeof opts.proxy === "string" && opts.proxy.length > 0;
   const validateMode = opts.validate === true;
-  const needsBody = validateMode || opts.stateful === true || proxyMode;
+  const statefulMode =
+    opts.stateful === true || opts.state !== undefined || opts.seed !== undefined;
+  const needsBody = validateMode || statefulMode || proxyMode;
 
   const server = Bun.serve({
     port: opts.port,
@@ -315,8 +342,8 @@ export function startServer(opts: ServerOptions): RunningServer {
             response = rejected;
           } else {
             const jsonBody = isPlainObject(parsedBody) ? parsedBody : {};
-            const stateful = opts.stateful
-              ? statefulResponse(jsonBody, lookup.matched, lookup.params)
+            const stateful = statefulMode
+              ? await statefulResponse(jsonBody, lookup.matched, lookup.params)
               : null;
             if (stateful) {
               response = stateful;
@@ -357,7 +384,9 @@ export function startServer(opts: ServerOptions): RunningServer {
     hostname: opts.hostname,
     routes,
     state,
-    resetState: () => state.clear(),
+    backend,
+    seeded,
+    resetState: () => backend.clear(),
     violations,
     clearViolations: () => {
       violations.length = 0;
@@ -365,8 +394,59 @@ export function startServer(opts: ServerOptions): RunningServer {
     },
     stop: async () => {
       server.stop();
+      await backend.close();
     },
   };
+}
+
+/**
+ * Seed { "<collection template>": [ {…}, … ] } into EMPTY collections only —
+ * restart-safe: a persistent store's accumulated state is never clobbered.
+ * Items without an id get a random uuid. Unknown collection keys warn and
+ * boot anyway; unreadable/invalid files throw (the CLI maps that to exit 1).
+ */
+async function applySeed(
+  seedPath: string,
+  backend: StateBackend,
+  routes: Route[],
+  log: (line: string) => void,
+): Promise<number> {
+  const file = Bun.file(seedPath);
+  if (!(await file.exists())) throw new Error(`seed file not found: ${seedPath}`);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await file.text());
+  } catch (err) {
+    throw new Error(`seed file ${seedPath} is not valid JSON: ${(err as Error).message}`);
+  }
+  if (!isPlainObject(parsed)) {
+    throw new Error(`seed file ${seedPath} must be a JSON object of collection -> item[]`);
+  }
+
+  const knownCollections = new Set(routes.map((r) => collectionKeyOf(r.template).key));
+  let inserted = 0;
+  for (const [collection, items] of Object.entries(parsed)) {
+    if (!knownCollections.has(collection)) {
+      log(`mock-server: seed collection '${collection}' matches no route — skipped`);
+      continue;
+    }
+    if (!Array.isArray(items)) {
+      throw new Error(`seed collection '${collection}' must be an array of objects`);
+    }
+    // Empty-only: collections that already have rows are left untouched.
+    if (await backend.has(collection)) continue;
+    for (const item of items) {
+      if (!isPlainObject(item)) {
+        throw new Error(`seed collection '${collection}' contains a non-object item`);
+      }
+      const rawId = item.id;
+      const id =
+        typeof rawId === "string" || typeof rawId === "number" ? rawId : crypto.randomUUID();
+      await backend.put(collection, String(id), { ...item, id });
+      inserted++;
+    }
+  }
+  return inserted;
 }
 
 function jsonResponse(status: number, body: unknown): Response {

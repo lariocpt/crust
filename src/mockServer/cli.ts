@@ -1,8 +1,10 @@
 #!/usr/bin/env bun
 import { loadSpec } from "./loadSpec";
 import { startServer } from "./server";
+import { normalizeStateUrl, stateDialect } from "./state";
 
 const USAGE = `mock-server --swagger <url-or-path> [--port N] [--host addr] [--stateful]
+            [--state <path|url>] [--seed <file.json>]
             [--validate] [--proxy <upstream> [--proxy-timeout ms] [--report path]]
 
 Boots a Bun.serve instance that mocks every operation in the given
@@ -16,6 +18,14 @@ arrays -> [item], objects -> {props}, enums -> first value).
   --stateful        in-memory CRUD: POST creates, GET returns what was
                     created, PATCH/PUT merge, DELETE removes. Untouched
                     collections keep serving the spec's examples.
+  --state <p|url>   persist the CRUD state in SQL instead of memory: a bare
+                    path or sqlite:// URL, or postgres://. Survives restarts
+                    and is shared cross-process (table crust_mock_state).
+                    Implies --stateful; excludes --proxy.
+  --seed <file>     JSON file { "<collection>": [ {...}, ... ] } inserted at
+                    boot into collections with no rows yet (never clobbers a
+                    persistent store). Items without an id get a uuid.
+                    Implies --stateful; excludes --proxy.
   --validate        validate requests against the spec; violations answer
                     422 with a JSON violation list instead of the mock body.
   --proxy <url>     validation-proxy mode: forward every request to the
@@ -31,6 +41,8 @@ export async function runCli(args: string[]): Promise<number> {
   let port = 3000;
   let host = "0.0.0.0";
   let stateful = false;
+  let state: string | undefined;
+  let seed: string | undefined;
   let validate = false;
   let proxy: string | undefined;
   let proxyTimeout = 30000;
@@ -69,6 +81,14 @@ export async function runCli(args: string[]): Promise<number> {
       host = a.slice("--host=".length);
     } else if (a === "--stateful") {
       stateful = true;
+    } else if (a === "--state") {
+      state = args[++i];
+    } else if (a.startsWith("--state=")) {
+      state = a.slice("--state=".length);
+    } else if (a === "--seed") {
+      seed = args[++i];
+    } else if (a.startsWith("--seed=")) {
+      seed = a.slice("--seed=".length);
     } else if (a === "--validate") {
       validate = true;
     } else if (a === "--proxy") {
@@ -100,10 +120,30 @@ export async function runCli(args: string[]): Promise<number> {
     return 2;
   }
 
+  // --state / --seed imply --stateful.
+  if (state !== undefined || seed !== undefined) stateful = true;
+
   // Conflicts are caught before any boot work (spec load, port bind).
+  if (proxy !== undefined && state !== undefined) {
+    process.stderr.write("mock-server: --proxy and --state are mutually exclusive\n");
+    return 2;
+  }
+  if (proxy !== undefined && seed !== undefined) {
+    process.stderr.write("mock-server: --proxy and --seed are mutually exclusive\n");
+    return 2;
+  }
   if (proxy !== undefined && stateful) {
     process.stderr.write("mock-server: --proxy and --stateful are mutually exclusive\n");
     return 2;
+  }
+  if (state !== undefined) {
+    // Scheme is validated before loadSpec so a typo'd URL fails fast.
+    try {
+      state = normalizeStateUrl(state);
+    } catch (err) {
+      process.stderr.write(`mock-server: ${(err as Error).message}\n`);
+      return 2;
+    }
   }
   if (report !== undefined && proxy === undefined) {
     process.stderr.write("mock-server: --report requires --proxy\n");
@@ -132,19 +172,29 @@ export async function runCli(args: string[]): Promise<number> {
     return 1;
   }
 
-  const server = startServer({
-    port,
-    hostname: host,
-    spec: loaded.spec,
-    stateful,
-    validate,
-    proxy,
-    proxyTimeoutMs: proxyTimeout,
-    report,
-  });
+  let server: Awaited<ReturnType<typeof startServer>>;
+  try {
+    server = await startServer({
+      port,
+      hostname: host,
+      spec: loaded.spec,
+      stateful,
+      state,
+      seed,
+      validate,
+      proxy,
+      proxyTimeoutMs: proxyTimeout,
+      report,
+    });
+  } catch (err) {
+    process.stderr.write(`mock-server: ${(err as Error).message}\n`);
+    return 1;
+  }
   process.stdout.write(`mock-server: ${server.routes.length} route(s) from ${loaded.origin}\n`);
   const modes = `${stateful ? " (stateful)" : ""}${validate && proxy === undefined ? " (validate)" : ""}${
     proxy !== undefined ? ` (proxy -> ${proxy})` : ""
+  }${state !== undefined ? ` (state: ${stateDialect(state)})` : ""}${
+    seed !== undefined ? ` (seeded ${server.seeded})` : ""
   }`;
   process.stdout.write(`mock-server: listening on http://${host}:${server.port}${modes}\n`);
 
