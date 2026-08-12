@@ -2,6 +2,10 @@
 
 A Bun-powered shell with first-class pipelines and devops primitives. Globs, HTTP verbs, parallel workers, and TypeScript lambdas all compose under a single `|` / `.pipe()` abstraction.
 
+Battle-tested by dogfooding against a real 97-operation API (a production API):
+406 fixtures, spec-driven mocking for two clients, and the load pipelines
+below — all run through the released binary.
+
 ## Install
 
 crust is published to the LAN artifact plane on the build host. Either channel resolves the same
@@ -33,7 +37,17 @@ range(0, 10000) | parallel 100 | GET :3000/health | expect 200 | stats
 
 # Health monitoring
 range(0, 100).parallel(() => fetch(url)) | expect 200
+
+# One dev tail — merge every dev process into a single tagged stream
+procs({web: "bun run dev", api: "bun api.ts"}) | (l => `[${l.proc}] ${l.line}`)
 ```
+
+Fixtures (`test-fixture`) run `.crust.ts` files with `{ input, output }`
+shapes: `setup()` context flows into the request and every matcher, matchers
+may be async (DB side-effect assertions await), and `--count/--threads`
+turns any fixture into a stress run with p50/p95/p99 reports. `mock-server
+--swagger spec.json` serves an OpenAPI spec example-first so clients run
+without their backend.
 
 ## Docs
 
