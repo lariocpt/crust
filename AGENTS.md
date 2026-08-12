@@ -30,7 +30,10 @@ Biome, husky + lint-staged.
   resolve, 1-arg functions in `input` receive the setup context, 1+-arg
   functions in `output` are matchers `(actual, ctx)`, async matchers are
   awaited (`diffAsync` — sync `diff` must fail loudly on thenables, never
-  truthy-pass a Promise).
+  truthy-pass a Promise). `output.schema` is RESERVED: a JSON Schema the
+  response body must conform to (validated via the mockServer subset
+  validator; extracted before the resolve walk so functions inside a schema
+  are never invoked).
 
 ## Tests
 

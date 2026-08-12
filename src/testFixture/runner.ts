@@ -1,4 +1,5 @@
 import { diffAsync, expandTarget as expandTargetShared } from "../fixtures";
+import { validateSchema } from "../mockServer/validateRequest";
 import type { Fixture, FixtureResult, RunOpts, RunReport, StressBucket } from "./types";
 
 export async function runFixtures(opts: RunOpts): Promise<RunReport> {
@@ -183,15 +184,33 @@ async function runOne(
     // input/output may be functions of the setup context — the only way a
     // fixture can put a setup-created credential or id into the request.
     const rawInput = typeof fx.input === "function" ? await fx.input(setupCtx as never) : fx.input;
-    const rawOutput =
+    let rawOutput =
       typeof fx.output === "function" && (fx.output as Function).length >= 1
         ? await (fx.output as (c: unknown) => unknown)(setupCtx)
         : fx.output;
+    // `schema` is a RESERVED output key: a JSON Schema the response body must
+    // conform to. Extracted BEFORE resolveDeep — a schema object may carry
+    // keys like `default` whose function values must never be invoked.
+    let responseSchema: unknown;
+    if (rawOutput && typeof rawOutput === "object" && "schema" in rawOutput) {
+      const { schema, ...rest } = rawOutput as Record<string, unknown>;
+      responseSchema = schema;
+      rawOutput = rest as typeof rawOutput;
+    }
     const input = (await resolveDeep(rawInput, setupCtx, true)) as Record<string, unknown>;
     const expected = (await resolveDeep(rawOutput, setupCtx, false)) as Record<string, unknown>;
     const actual = await performRequest(input, timeoutMs);
     responseStatus = actual.status;
     const failures = await diffAsync("output", expected, actual, setupCtx);
+    if (responseSchema !== undefined) {
+      for (const v of validateSchema(actual.data, responseSchema, { paths: {} })) {
+        failures.push({
+          path: `output.data${v.pointer}`,
+          expected: `${v.rule}: ${v.message}`,
+          actual: v.received,
+        });
+      }
+    }
     const r: FixtureResult = {
       file,
       name,

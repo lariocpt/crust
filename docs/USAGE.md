@@ -664,6 +664,15 @@ Supported `.env` syntax: `KEY=value`, `KEY="quoted value"`, `KEY='single quoted'
 
 Runs `.crust.ts` fixture files against an HTTP service. Each file is a normal TypeScript module that default-exports a fixture (or array of fixtures) with `input` and `output` objects. Fields can be values *or* zero-argument functions (resolved + awaited at run time). In `output`, a function with at least one parameter is treated as a predicate matcher over the actual value.
 
+**`output.schema` is reserved**: give it a JSON Schema (inline — dereference
+`$ref`s first) and the response body must conform. Violations fail the
+fixture with per-field pointer paths (`output.data/items/0/name —
+minLength: …`). The validator is the mock-server's subset walker, so its
+never-invent-a-violation rule applies (unknown keywords pass). Functions
+inside a schema object are never invoked. `gen-fixtures` emits this key
+automatically for any case whose expected status documents a response
+schema.
+
 **Setup context flows into the request** — `setup()`'s return value is
 passed to `input`/`output` when they are functions of one argument, to unary
 `input` FIELD functions, and to every matcher as its second argument.

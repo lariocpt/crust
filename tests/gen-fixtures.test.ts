@@ -902,3 +902,60 @@ describe("flowOverrides", () => {
     expect(logs.join("\n")).toContain("flowOverrides.skip");
   });
 });
+
+describe("response-schema emission", () => {
+  test("cases whose expected status documents a schema carry output.schema", async () => {
+    const spec = {
+      openapi: "3.1.0",
+      info: { title: "s", version: "1" },
+      paths: {
+        "/api/wombats": {
+          post: {
+            tags: ["wombats"],
+            requestBody: {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    required: ["name"],
+                    properties: { name: { type: "string" } },
+                  },
+                },
+              },
+            },
+            responses: {
+              "201": { description: "ok" },
+              "400": {
+                description: "bad",
+                content: {
+                  "application/json": {
+                    schema: {
+                      type: "object",
+                      required: ["code"],
+                      properties: { code: { type: "string" } },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+    await writeFile(join(dir, "schema-spec.json"), JSON.stringify(spec));
+    const result = await generateFixtures({
+      swagger: join(dir, "schema-spec.json"),
+      out: join(dir, "schema-out"),
+      setup: join(dir, "setup.ts"),
+      log: () => {},
+    });
+    const text = await Bun.file(result.files.find((f) => f.includes("wombats"))!).text();
+    // The 400 matrix cases carry the documented 400 response schema…
+    expect(text).toContain('schema: {"type":"object","required":["code"]');
+    // …and it appears only on cases expecting 400 (the spec documents no other schemas).
+    const perCase = text.split("name:").slice(1);
+    for (const c of perCase) {
+      if (c.includes("schema:")) expect(c).toContain("status: 400");
+    }
+  });
+});

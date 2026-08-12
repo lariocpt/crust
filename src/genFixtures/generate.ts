@@ -253,6 +253,8 @@ interface GenCase {
   expectValidationField?: string;
   /** Assert only status + code === "validation" (no fieldErrors matcher). */
   expectValidationCode?: boolean;
+  /** documented response schema for expectStatus (inline post-deref) */
+  responseSchema?: unknown;
 }
 
 function isScopeGated(path: string, firstParam: string | null, scope: ScopeConfig): boolean {
@@ -424,6 +426,13 @@ function deriveCases(path: string, method: string, op: Operation, scope: ScopeCo
     }
   }
 
+  // Attach the documented response schema (if any) for each case's expected
+  // status — the emitter turns it into the runner's reserved `schema` key.
+  for (const c of cases) {
+    const media = responses[String(c.expectStatus)]?.content?.["application/json"];
+    if (media?.schema !== undefined) c.responseSchema = media.schema;
+  }
+
   return cases;
 }
 
@@ -447,6 +456,11 @@ function emitFixture(c: GenCase, used: Set<string>): string {
     : c.expectValidationCode
       ? `\n      data: (d: { code?: string }) => d.code === "validation",`
       : "";
+  // `schema` is the runner's reserved response-conformance key — emitted only
+  // when the spec documents a schema for the expected status (post-deref, so
+  // it's inline JSON; example-only specs emit nothing here).
+  const schemaLine =
+    c.responseSchema === undefined ? "" : `\n      schema: ${JSON.stringify(c.responseSchema)},`;
   return `  {
     name: ${JSON.stringify(c.name)},
     setup: shared,
@@ -456,7 +470,7 @@ function emitFixture(c: GenCase, used: Set<string>): string {
       headers: ${headersExpr},${bodyLine}
     }),
     output: {
-      status: ${c.expectStatus},${dataMatcher}
+      status: ${c.expectStatus},${dataMatcher}${schemaLine}
     },
   },`;
 }

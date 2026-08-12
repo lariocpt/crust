@@ -365,3 +365,67 @@ describe("--timeout and --bail", () => {
     mode = "ok";
   });
 });
+
+describe("output.schema (reserved key)", () => {
+  test("conforming response passes; violation fails with a pointer path", async () => {
+    const file = await writeFixture(
+      "schema-ok.crust.ts",
+      `export default [
+        {
+          name: "conforms",
+          input: { url: "${baseUrl}/users/42" },
+          output: {
+            status: 200,
+            schema: { type: "object", required: ["id", "name"], properties: { id: { type: "integer" }, name: { type: "string", minLength: 2 } } },
+          },
+        },
+        {
+          name: "violates",
+          input: { url: "${baseUrl}/users/42" },
+          output: {
+            status: 200,
+            schema: { type: "object", required: ["missing_field"], properties: { name: { type: "string", maxLength: 3 } } },
+          },
+        },
+      ];`,
+    );
+    const report = await runFixtures({ target: file, threads: 1 });
+    const ok = report.results.find((r) => r.name === "conforms")!;
+    const bad = report.results.find((r) => r.name === "violates")!;
+    expect(ok.status).toBe("pass");
+    expect(bad.status).toBe("fail");
+    const paths = bad.failures.map((f) => f.path).join("\n");
+    expect(paths).toContain("output.data");
+    expect(bad.failures.some((f) => String(f.expected).includes("required"))).toBe(true);
+    expect(bad.failures.some((f) => String(f.expected).includes("maxLength"))).toBe(true);
+  });
+
+  test("functions inside a schema object are never invoked", async () => {
+    const file = await writeFixture(
+      "schema-shield.crust.ts",
+      `export default {
+        name: "shielded",
+        input: { url: "${baseUrl}/users/42" },
+        output: {
+          status: 200,
+          schema: { type: "object", default: () => { throw new Error("schema default invoked"); } },
+        },
+      };`,
+    );
+    const report = await runFixtures({ target: file, threads: 1 });
+    expect(report.results[0]!.status).toBe("pass");
+  });
+
+  test("fixtures without schema behave exactly as before", async () => {
+    const file = await writeFixture(
+      "schema-absent.crust.ts",
+      `export default {
+        name: "plain",
+        input: { url: "${baseUrl}/users/42" },
+        output: { status: 200, data: { id: 42 } },
+      };`,
+    );
+    const report = await runFixtures({ target: file, threads: 1 });
+    expect(report.results[0]!.status).toBe("pass");
+  });
+});
