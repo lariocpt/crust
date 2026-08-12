@@ -27,10 +27,15 @@ GET $BASE/api/buildings/$BID -H "authorization: Bearer $TOKEN" | expect 404
 ```
 
 Run: `test-pipes --target 'tests/**/*.pipes' [--bail] [--timeout ms] [--setup m]`.
+PASS/FAIL report lines are prefixed `file:LINE` with real file line numbers.
 
 - **Setup module**: `--setup mod.ts`, else sibling `<name>.setup.ts`; its
   default export is awaited before the file and seeds `process.env`
   ($BASE/$TOKEN). `sql` needs `$DATABASE_URL`.
+- **SQL row types**: rows arrive as the driver returns them — uuid and enum
+  columns as strings, but `count(*)` and `numeric` may arrive as
+  strings/bigints. Cast in SQL when comparing numbers
+  (`count(*)::int AS c`), and compare ids as strings.
 - **Hermetic per file**: `process.env` is snapshotted/restored around each
   file — captures and setup vars never leak across files.
 - Status-check placement: `expect N` when the check ends the line;

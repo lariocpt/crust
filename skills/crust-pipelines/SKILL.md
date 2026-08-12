@@ -37,7 +37,15 @@ whose stages are all ordinary commands is handed to `sh -c` untouched.
 `$VAR`/`${VAR}` expand from `process.env` in: URLs, whole `-H` header
 strings, JSON literals, `stats --out` paths, and registered-fn args. They do
 NOT expand inside lambda/`assert`/`capture` bodies (those are JS — use
-`process.env.VAR`) or shell stages (sh does its own).
+`process.env.VAR`) or shell stages (sh does its own). SQL positional
+placeholders are safe: `$1`/`$2` inside a `sql "…"` string survive
+expansion untouched (a digit can't start an env var name) and bind to the
+trailing quoted args — which DO env-expand: `sql "… WHERE id = $1" "$MY_ID"`.
+
+Inside a parenthesized lambda/`assert`/`capture` body, anything goes: the
+tokenizer tracks paren depth and quotes, so literal `|`, `??`, single/double
+quotes, and backticks (template literals) are all safe. In double-quoted
+strings and JSON literals, `\"` escapes work.
 
 ## Request chaining with capture
 
