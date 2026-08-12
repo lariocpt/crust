@@ -130,13 +130,17 @@ export function parallel<T, U>(n: number, fn: (x: T) => U | Promise<U>): Pipelin
         const settled: U[] = [];
         const inFlight = new Set<Promise<void>>();
         let notify: (() => void) | null = null;
+        const wake = () => {
+          notify?.();
+          notify = null;
+        };
 
         const start = (item: T) => {
           let task!: Promise<void>;
           task = (async () => {
             const r = await fn(item);
             settled.push(r);
-            notify?.();
+            wake();
           })().finally(() => {
             inFlight.delete(task);
           });
@@ -145,19 +149,34 @@ export function parallel<T, U>(n: number, fn: (x: T) => U | Promise<U>): Pipelin
 
         const iter = input.lines()[Symbol.asyncIterator]();
         let sourceDone = false;
-        while (!sourceDone || inFlight.size > 0 || settled.length > 0) {
+        // The source pull is raced against completions: with a PACED source
+        // (load) and a fast downstream, a bare `await iter.next()` would sit
+        // through the pacing sleep while finished results pile up unyielded —
+        // collapsing stats --every windows into a final-millisecond dump.
+        let pendingNext: Promise<IteratorResult<T>> | null = null;
+        while (!sourceDone || inFlight.size > 0 || settled.length > 0 || pendingNext !== null) {
           // Drain finished results first — this is what streams them.
           while (settled.length > 0) {
             yield settled.shift()!;
           }
-          // Top up the in-flight pool from the source.
-          while (!sourceDone && inFlight.size < n) {
-            const next = await iter.next();
+          if (!sourceDone && inFlight.size < n) {
+            pendingNext ??= iter.next();
+            const settledFirst = await Promise.race([
+              pendingNext.then(() => false),
+              new Promise<boolean>((r) => {
+                notify = () => r(true);
+              }),
+            ]);
+            notify = null;
+            if (settledFirst) continue; // a result landed — drain it first
+            const next = await pendingNext; // already resolved
+            pendingNext = null;
             if (next.done) {
               sourceDone = true;
-              break;
+              continue;
             }
             start(next.value);
+            continue;
           }
           if (inFlight.size > 0 && settled.length === 0) {
             await new Promise<void>((r) => {

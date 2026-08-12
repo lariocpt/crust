@@ -260,3 +260,28 @@ describe("statsStage windows", () => {
     expect(() => statsStage(undefined, "results.txt")).toThrow("only .json is supported");
   });
 });
+
+describe("parallel with a paced source", () => {
+  test("streams completions during pacing gaps instead of buffering to the end", async () => {
+    // Source: 6 items, one every 30ms (~180ms total). fn completes in ~1ms.
+    // Broken behavior buffers everything until the source drains; fixed
+    // behavior yields each result well before the source is done.
+    const paced = Pipeline.of(
+      (async function* () {
+        for (let i = 0; i < 6; i++) {
+          await Bun.sleep(30);
+          yield i;
+        }
+      })(),
+    );
+    const t0 = performance.now();
+    const arrivals: number[] = [];
+    for await (const _ of paced.pipe(parallel(4, async (x: number) => x)).lines()) {
+      arrivals.push(performance.now() - t0);
+    }
+    expect(arrivals).toHaveLength(6);
+    // The third result must arrive while the source still has items left
+    // (< 150ms), not in a final dump after ~180ms.
+    expect(arrivals[2]!).toBeLessThan(150);
+  });
+});
