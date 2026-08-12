@@ -124,7 +124,13 @@ tail -n 100 app.log               # custom line count
 tail -F app.log                   # follow mode: stream new lines forever
 GET https://api.example.com/  # → Pipeline<Response> (single item)
 GET :3000/health                  # localhost shorthand
+procs({web: "bun run dev", api: "bun api.ts"})   # merge long-lived processes
 ```
+
+`procs({name: "command", …})` spawns each command and streams
+`{ proc, stream, line }` for every stdout/stderr line (plus an `exit`
+marker), merged as lines arrive — the "one dev tail" source. Children are
+killed when the pipeline ends or crust gets SIGINT/SIGTERM.
 
 ### Transforms
 
@@ -134,13 +140,29 @@ GET :3000/health                  # localhost shorthand
 … | tr '[:lower:]' '[:upper:]'             # standard pipes work
 … | POST :3000/users                       # per-item HTTP POST (body = item)
 … | DELETE :3000/users/:id                 # per-item DELETE
+… | GET :3000/health                       # per-item timed GET (item = trigger)
 ```
+
+`GET` as a transform fires one request per upstream item and yields
+`{ status, ms, url }` timing records (bodies are drained, not kept) — pair it
+with `parallel` and `stats` for load pipelines.
 
 HTTP transforms auto-set `content-type: application/json` for object items. String items are sent as text. `Buffer`/`Uint8Array` go raw.
 
-### Assertions & concurrency (TypeScript-only in v0.1)
+### Assertions & concurrency
 
-`expect`, `parallel`, and `stats` are not yet shell-line keywords — they're TS-API only. To use them from a shell line, call into a TS script you `source`, or write the line as a `.ts` file and run it with `bun`. Native shell-line support is a v0.1.5 stretch.
+```bash
+range(0, 999) | parallel 50 | GET :3000/health | expect 200 | stats
+```
+
+- `parallel N` — sets the fan-out for the NEXT http stage (it is a modifier,
+  not a buffering stage).
+- `expect NNN` — passes items through; when the stream drains, fails the
+  pipeline (exit 1) naming the mismatch count if any item's `status` didn't
+  match.
+- `stats` — consumes the stream and yields one summary: `count`, `wallMs`,
+  `rps`, a status histogram, and real `p50/p95/p99/meanMs` latency
+  percentiles from the timed-GET records.
 
 ### Timing a pipeline (`time "label"`)
 
@@ -344,6 +366,30 @@ Supported `.env` syntax: `KEY=value`, `KEY="quoted value"`, `KEY='single quoted'
 
 Runs `.crust.ts` fixture files against an HTTP service. Each file is a normal TypeScript module that default-exports a fixture (or array of fixtures) with `input` and `output` objects. Fields can be values *or* zero-argument functions (resolved + awaited at run time). In `output`, a function with at least one parameter is treated as a predicate matcher over the actual value.
 
+**Setup context flows into the request** — `setup()`'s return value is
+passed to `input`/`output` when they are functions of one argument, to unary
+`input` FIELD functions, and to every matcher as its second argument.
+**Matchers may be async** — the runner awaits Promise-returning predicates
+(a DB side-effect assertion is one `await` away).
+
+```ts
+export default {
+  name: "signup lands a users row",
+  setup: () => ({ email: `u-${crypto.randomUUID()}@t.dev` }),
+  input: (ctx) => ({
+    url: "http://localhost:3000/signup",
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ email: ctx.email, password: "pw-123456" }),
+  }),
+  output: {
+    status: 201,
+    data: async (d, ctx) => (await db.userByEmail(ctx.email)) !== null,
+  },
+  teardown: (ctx) => db.deleteByEmail(ctx.email),
+};
+```
+
 ```bash
 test-fixture --target fixtures/*.crust.ts
 test-fixture --target fixtures/users.crust.ts --out report.md
@@ -351,7 +397,7 @@ test-fixture --target 'fixtures/**/*.crust.ts' --threads 8 --out report.json
 test-fixture --target fixtures/users.crust.ts --count 1000 --threads 32   # stress
 ```
 
-Module resolution inside a fixture file uses Bun's normal walk: imports resolve from the fixture's own directory upward, so the nearest `node_modules` wins — same as running `bun` from that directory.
+**Module resolution caveat:** when the runner is the AOT-compiled binary (the normal install), fixture files can import relative modules and Bun builtins (`Bun.SQL`, `Bun.file`, …) but NOT third-party npm packages — the compiled binary has no `node_modules` walk. Keep fixture helpers on builtins (use `Bun.SQL` instead of `pg`). Under dev mode (`bun src/index.ts`), the full walk works.
 
 Example fixture:
 
