@@ -14,9 +14,16 @@
  *   - 400 per request-body field: required field missing, wrong JSON type,
  *     enum violation — asserting the canonical
  *     { error, code: "validation", fieldErrors } body
+ *   - 400 boundary violations for ALL body properties (required and
+ *     optional): too short/long (minLength/maxLength), below/above
+ *     (minimum/maximum), pattern violation, plus one op-level
+ *     unexpected-extra-property case when additionalProperties is false
  *
  * Output: one `<tag>.gen.crust.ts` per OpenAPI tag in --out (the directory is
  * deleted and recreated on every run), runnable by the test-fixture runner.
+ * Unless --no-flows, qualifying collection paths (POST + item path) also get
+ * a generated CRUD flow suite: --out/flows/flows.gen.pipes + its sibling
+ * flows.gen.setup.ts, runnable by test-pipes with zero extra flags.
  *
  * ## The setup-module contract
  *
@@ -63,12 +70,20 @@ type Schema = {
   format?: string;
   pattern?: string;
   minLength?: number;
+  maxLength?: number;
   minimum?: number;
+  maximum?: number;
+  additionalProperties?: boolean | Schema;
   anyOf?: Schema[];
   allOf?: Schema[];
   oneOf?: Schema[];
   default?: unknown;
 };
+
+interface ResponseMedia {
+  schema?: Schema;
+  example?: unknown;
+}
 
 interface Operation {
   tags?: string[];
@@ -76,19 +91,28 @@ interface Operation {
   requestBody?: {
     content?: Record<string, { schema?: Schema }>;
   };
-  responses?: Record<string, { description?: string } | undefined>;
+  responses?: Record<
+    string,
+    { description?: string; content?: Record<string, ResponseMedia> } | undefined
+  >;
 }
 
 export interface GenerateOpts {
   swagger: string;
   out: string;
   setup: string;
+  /** Emit CRUD flow .pipes files (default true; the CLI's --no-flows sets false). */
+  flows?: boolean;
+  /** Notice sink for skipped flows (default: process.stdout). */
+  log?: (line: string) => void;
 }
 
 export interface GenerateResult {
   outDir: string;
   files: string[];
   totalCases: number;
+  flowFile: string | null;
+  flowCount: number;
 }
 
 interface ScopeConfig {
@@ -188,6 +212,17 @@ export function wrongTypeFor(s: Schema | undefined): unknown {
   }
 }
 
+// zod emits nullable fields as `anyOf: [X, { type: "null" }]` — a property
+// node with no own type (and no own enum) but combinator branches unwraps to
+// the first non-null branch, so constraint inspection sees the real schema.
+// Without this the boundary matrix would miss every nullable field.
+export function effectiveSchema(s: Schema | undefined): Schema | undefined {
+  if (!s || s.type || s.enum) return s;
+  const branches = s.anyOf ?? s.oneOf;
+  if (!branches?.length) return s;
+  return branches.find((b) => b.type !== "null") ?? s;
+}
+
 // ---------------------------------------------------------------------------
 // Case derivation
 // ---------------------------------------------------------------------------
@@ -200,6 +235,8 @@ interface GenCase {
   body?: Record<string, unknown>;
   expectStatus: number;
   expectValidationField?: string;
+  /** Assert only status + code === "validation" (no fieldErrors matcher). */
+  expectValidationCode?: boolean;
 }
 
 function isScopeGated(path: string, firstParam: string | null, scope: ScopeConfig): boolean {
@@ -292,8 +329,11 @@ function deriveCases(path: string, method: string, op: Operation, scope: ScopeCo
         expectValidationField: field,
       });
     }
-    for (const [field, fs] of Object.entries(props)) {
-      if (fs.enum?.length) {
+    for (const [field, rawFs] of Object.entries(props)) {
+      // effectiveSchema here is purely additive: it only unwraps nullable
+      // combinator wrappers (which previously derived NO enum case at all).
+      const fs = effectiveSchema(rawFs);
+      if (fs?.enum?.length) {
         cases.push({
           name: `${method.toUpperCase()} ${path} invalid enum for '${field}' -> 400`,
           auth: validAuth,
@@ -304,6 +344,67 @@ function deriveCases(path: string, method: string, op: Operation, scope: ScopeCo
           expectValidationField: field,
         });
       }
+    }
+
+    // Boundary-violation matrix — ALL properties (required and optional), one
+    // perturbation per case, fixed per-field order so regeneration is a
+    // purely additive, byte-stable diff.
+    for (const [field, rawFs] of Object.entries(props)) {
+      const fs = effectiveSchema(rawFs);
+      if (!fs) continue;
+      const push = (suffix: string, wrongValue: unknown) =>
+        cases.push({
+          name: `${method.toUpperCase()} ${path} ${suffix} '${field}' -> 400`,
+          auth: validAuth,
+          method,
+          path,
+          body: { ...base, [field]: wrongValue },
+          expectStatus: 400,
+          expectValidationField: field,
+        });
+      const isString = fs.type === "string";
+      const isNumeric = fs.type === "integer" || fs.type === "number";
+      if (isString && typeof fs.minLength === "number" && fs.minLength >= 1) {
+        push("too short", "x".repeat(fs.minLength - 1));
+      }
+      // maxLength > 4096 is skipped on purpose: a 100KB literal in a
+      // checked-in generated file is unreviewable.
+      if (isString && typeof fs.maxLength === "number" && fs.maxLength <= 4096) {
+        push("too long", "x".repeat(fs.maxLength + 1));
+      }
+      if (isNumeric && typeof fs.minimum === "number") {
+        push("below minimum", fs.minimum - 1);
+      }
+      // Real specs use MAX_SAFE_INTEGER as an "unbounded" sentinel — +1 would
+      // not even round-trip through JSON faithfully, so skip those.
+      if (
+        isNumeric &&
+        typeof fs.maximum === "number" &&
+        fs.maximum + 1 <= Number.MAX_SAFE_INTEGER
+      ) {
+        push("above maximum", fs.maximum + 1);
+      }
+      if (fs.pattern) {
+        // For required constrained-string fields the wrong-type case already
+        // sends wrongTypeFor's string sentinel — a pattern violation in
+        // disguise. Dedupe to avoid an identical-in-substance case.
+        const covered = required.includes(field) && wrongTypeFor(rawFs) === "!!not-a-valid-value!!";
+        if (!covered) push("pattern violation", "!!pattern-violation!!");
+      }
+    }
+
+    // Op-level: one unexpected-extra-property case. Unknown-key naming in
+    // fieldErrors varies by server, so this asserts status + code only.
+    if (bodySchema.additionalProperties === false) {
+      cases.push({
+        name: `${method.toUpperCase()} ${path} unexpected extra property -> 400`,
+        auth: validAuth,
+        method,
+        path,
+        body: { ...base, crustUnexpectedProp: "gen-extra" },
+        expectStatus: 400,
+        expectValidationCode: true,
+      });
     }
   }
 
@@ -327,7 +428,9 @@ function emitFixture(c: GenCase, used: Set<string>): string {
     c.body === undefined ? "" : `\n      body: ${JSON.stringify(JSON.stringify(c.body))},`;
   const dataMatcher = c.expectValidationField
     ? `\n      data: (d: { code?: string; fieldErrors?: Record<string, unknown> }) =>\n        d.code === "validation" && d.fieldErrors !== undefined && ${JSON.stringify(c.expectValidationField)} in d.fieldErrors,`
-    : "";
+    : c.expectValidationCode
+      ? `\n      data: (d: { code?: string }) => d.code === "validation",`
+      : "";
   return `  {
     name: ${JSON.stringify(c.name)},
     setup: shared,
@@ -352,6 +455,239 @@ function setupSpecifier(setup: string, outDir: string): string {
 
 function isPathLike(setup: string): boolean {
   return setup.startsWith(".") || isAbsolute(setup) || /\.(m?[jt]s|[jt]sx)$/.test(setup);
+}
+
+// ---------------------------------------------------------------------------
+// CRUD flows — emitted as a .pipes file (test-pipes runs it; the sibling
+// flows.gen.setup.ts is auto-detected and seeds $GEN_AUTH_HEADER/$GEN_URL_*).
+// ---------------------------------------------------------------------------
+
+/** Lowest documented 2xx status of an op, or null when it documents none. */
+function lowest2xx(op: Operation): number | null {
+  const codes = Object.keys(op.responses ?? {})
+    .filter((k) => /^2\d\d$/.test(k))
+    .map(Number)
+    .sort((a, b) => a - b);
+  return codes[0] ?? null;
+}
+
+/**
+ * `/api/things/{thingId}` -> `API_THINGS`: drop {params}, non-alphanumeric
+ * runs -> one `_`, trim, uppercase. Residual collisions get `_2`, `_3`, …
+ * suffixes (assigned over templates in sorted order, so names are stable).
+ */
+export function envNameFor(template: string): string {
+  return template
+    .replace(/\{[^}]*\}/g, "")
+    .replace(/[^A-Za-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .toUpperCase();
+}
+
+function isPlainRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+/**
+ * Where the created id lives in the POST's 2xx response body. Prefers the
+ * 2xx media `example`, else `schema.properties`. Top-level `id` -> ["id"];
+ * else the FIRST object-valued property containing an `id` (JSON key order —
+ * deterministic) -> [prop, "id"]. Depth cap 2. Null -> flow is skipped.
+ */
+export function idPathFor(op: Operation): string[] | null {
+  const code = lowest2xx(op);
+  if (code === null) return null;
+  const media = op.responses?.[String(code)]?.content?.["application/json"];
+  if (!media) return null;
+  if (isPlainRecord(media.example)) {
+    if ("id" in media.example) return ["id"];
+    for (const [k, v] of Object.entries(media.example)) {
+      if (isPlainRecord(v) && "id" in v) return [k, "id"];
+    }
+    return null;
+  }
+  const props = media.schema?.properties;
+  if (!props) return null;
+  if ("id" in props) return ["id"];
+  for (const [k, v] of Object.entries(props)) {
+    const eff = effectiveSchema(v);
+    if (eff?.properties && "id" in eff.properties) return [k, "id"];
+  }
+  return null;
+}
+
+interface ItemOps {
+  get?: Operation;
+  put?: Operation;
+  patch?: Operation;
+  delete?: Operation;
+}
+
+interface FlowPlan {
+  template: string; // collection path template
+  post: Operation;
+  itemOps: ItemOps;
+  idPath: string[];
+  envName: string;
+}
+
+interface SkippedFlow {
+  template: string;
+  reason: string;
+}
+
+function deriveFlows(
+  paths: Record<string, Record<string, Operation>>,
+  scope: ScopeConfig,
+): { flows: FlowPlan[]; skipped: SkippedFlow[] } {
+  const flows: FlowPlan[] = [];
+  const skipped: SkippedFlow[] = [];
+  const templates = Object.keys(paths);
+
+  for (const template of templates) {
+    const post = paths[template]?.post;
+    const bodySchema = post?.requestBody?.content?.["application/json"]?.schema;
+    if (!post || !bodySchema || lowest2xx(post) === null) continue;
+
+    // Item template: `<template>/{param}` with at least one of GET/PUT/PATCH/
+    // DELETE. First match in JSON key order — deterministic.
+    let itemOps: ItemOps | null = null;
+    for (const k of templates) {
+      if (!k.startsWith(template) || !/^\/\{[^/}]+\}$/.test(k.slice(template.length))) continue;
+      const m = paths[k]!;
+      const ops: ItemOps = { get: m.get, put: m.put, patch: m.patch, delete: m.delete };
+      if (ops.get || ops.put || ops.patch || ops.delete) {
+        itemOps = ops;
+        break;
+      }
+    }
+    if (!itemOps) continue;
+
+    // Only the scope param may appear in the collection template — a nested
+    // collection's parent id is not derivable from the spec alone.
+    const params = [...template.matchAll(/\{(\w+)\}/g)].map((m) => m[1] as string);
+    const scoped = params.length > 0 && isScopeGated(template, params[0]!, scope);
+    const extraParams = scoped ? params.slice(1) : params;
+    if (extraParams.length > 0) {
+      skipped.push({ template, reason: `nested path params {${extraParams.join("}, {")}}` });
+      continue;
+    }
+
+    const idPath = idPathFor(post);
+    if (!idPath) {
+      skipped.push({ template, reason: "no id derivable from the POST 2xx response" });
+      continue;
+    }
+
+    flows.push({ template, post, itemOps, idPath, envName: "" });
+  }
+
+  flows.sort((a, b) => (a.template < b.template ? -1 : 1));
+  const used = new Map<string, number>();
+  for (const f of flows) {
+    const base = envNameFor(f.template) || "ROOT";
+    const n = (used.get(base) ?? 0) + 1;
+    used.set(base, n);
+    f.envName = n === 1 ? base : `${base}_${n}`;
+  }
+  return { flows, skipped };
+}
+
+// `b`, ["billing", "id"] -> `b.billing.id` (bracket form for non-identifier keys).
+function accessExpr(root: string, path: string[]): string {
+  let out = root;
+  for (const key of path) {
+    out += /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(key) ? `.${key}` : `[${JSON.stringify(key)}]`;
+  }
+  return out;
+}
+
+function emitFlow(f: FlowPlan): string {
+  const T = f.envName;
+  const url = `$GEN_URL_${T}`;
+  const itemUrl = `$GEN_URL_${T}/$GEN_ID_${T}`;
+  const H = `-H "$GEN_AUTH_HEADER"`;
+  const bodySchema = f.post.requestBody!.content!["application/json"]!.schema!;
+  const base = baseBody(bodySchema);
+  const lines: string[] = [];
+  const steps: string[] = ["create"];
+
+  const postStatus = lowest2xx(f.post)!;
+  lines.push(
+    `${JSON.stringify(base)} | POST ${url} ${H} | assert (r => r.status === ${postStatus}) | (r => r.json()) | capture GEN_ID_${T} (b => ${accessExpr("b", f.idPath)})`,
+  );
+
+  if (f.itemOps.get) {
+    steps.push("read");
+    const s = lowest2xx(f.itemOps.get) ?? 200;
+    lines.push(
+      `GET ${itemUrl} ${H} | assert (r => r.status === ${s}) | (r => r.json()) | assert (j => JSON.stringify(j).includes(process.env.GEN_ID_${T} ?? " "))`,
+    );
+  }
+
+  const update = f.itemOps.patch ?? f.itemOps.put;
+  if (update) {
+    steps.push("update");
+    const verb = f.itemOps.patch ? "PATCH" : "PUT";
+    const s = lowest2xx(update) ?? 200;
+    // Single-field body: the first schema property with a valid value (the
+    // update op's own schema when it has one, else the POST's).
+    const props =
+      update.requestBody?.content?.["application/json"]?.schema?.properties ??
+      bodySchema.properties ??
+      {};
+    const firstKey = Object.keys(props)[0];
+    const body = firstKey ? { [firstKey]: validValue(props[firstKey], firstKey) } : {};
+    lines.push(`${JSON.stringify(body)} | ${verb} ${itemUrl} ${H} | expect ${s}`);
+  }
+
+  if (f.itemOps.delete) {
+    steps.push("delete");
+    const s = lowest2xx(f.itemOps.delete) ?? 204;
+    // {} is the upstream trigger item, not a meaningful body.
+    lines.push(`{} | DELETE ${itemUrl} ${H} | expect ${s}`);
+  }
+
+  // Tombstone read: only meaningful after a DELETE, and only when the GET
+  // actually documents 404.
+  if (f.itemOps.delete && f.itemOps.get && "404" in (f.itemOps.get.responses ?? {})) {
+    steps.push("read-after-delete");
+    lines.push(`GET ${itemUrl} ${H} | expect 404`);
+  }
+
+  return `# flow: ${f.template}  (${steps.join(" -> ")})\n${lines.join("\n")}\n`;
+}
+
+function emitFlowsPipes(flows: FlowPlan[]): string {
+  return `# GENERATED by crust gen-fixtures — DO NOT EDIT.
+# CRUD flows derived from the OpenAPI spec; run with test-pipes (the sibling
+# flows.gen.setup.ts is auto-detected and seeds $GEN_AUTH_HEADER/$GEN_URL_*;
+# capture stages write $GEN_ID_* at run time).
+# NOTE: SQL assertions are not derivable from a spec, so none are emitted —
+# add DB-level checks in a hand-written .pipes file if you need them.
+
+${flows.map(emitFlow).join("\n")}`;
+}
+
+function emitFlowsSetup(flows: FlowPlan[], specifier: string): string {
+  const urlLines = flows
+    .map(
+      (f) =>
+        `  process.env.GEN_URL_${f.envName} = resolvePath(ctx, ${JSON.stringify(f.template)});`,
+    )
+    .join("\n");
+  return `// GENERATED by crust gen-fixtures — DO NOT EDIT.
+import { headersFor, resolvePath, shared } from ${JSON.stringify(specifier)};
+
+export default async function setup(): Promise<void> {
+  const ctx = await shared();
+  const headers = headersFor(ctx, "member");
+  const auth = Object.entries(headers).find(([k]) => k.toLowerCase() !== "content-type");
+  if (!auth) throw new Error("gen flows: headersFor(ctx, 'member') returned no auth header");
+  process.env.GEN_AUTH_HEADER = \`\${auth[0]}: \${auth[1]}\`;
+${urlLines}
+}
+`;
 }
 
 export async function generateFixtures(opts: GenerateOpts): Promise<GenerateResult> {
@@ -412,5 +748,31 @@ ${fixtures}
     files.push(outFile);
   }
 
-  return { outDir, files, totalCases };
+  // CRUD flows — a .pipes file + auto-detected sibling setup, run by
+  // test-pipes with zero extra flags.
+  let flowFile: string | null = null;
+  let flowCount = 0;
+  if (opts.flows !== false) {
+    const log = opts.log ?? ((line: string) => process.stdout.write(`${line}\n`));
+    const { flows, skipped } = deriveFlows(
+      (spec.paths ?? {}) as Record<string, Record<string, Operation>>,
+      scope,
+    );
+    for (const s of skipped) {
+      log(`gen-fixtures: skipping flow for ${s.template} — ${s.reason}`);
+    }
+    if (flows.length > 0) {
+      const flowsDir = resolve(outDir, "flows");
+      await mkdir(flowsDir, { recursive: true });
+      flowFile = resolve(flowsDir, "flows.gen.pipes");
+      await writeFile(flowFile, emitFlowsPipes(flows));
+      await writeFile(
+        resolve(flowsDir, "flows.gen.setup.ts"),
+        emitFlowsSetup(flows, setupSpecifier(opts.setup, flowsDir)),
+      );
+      flowCount = flows.length;
+    }
+  }
+
+  return { outDir, files, totalCases, flowFile, flowCount };
 }

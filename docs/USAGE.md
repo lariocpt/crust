@@ -573,7 +573,7 @@ The TS-test ecosystem owns the name `expect`. Crust exports the API name as `exp
 | `dotenv [--config p] [--append]` | Loads `.env` files into the session. Tracks history, supports `dotenv status` and `dotenv clear`. See [dotenv](#dotenv). |
 | `test-fixture --target g [--out p] [--threads N] [--count N] [--timeout ms] [--bail]` | Runs `.crust.ts` HTTP fixtures. See [test-fixture](#test-fixture). |
 | `test-pipes --target g [--bail] [--timeout ms] [--setup m]` | Runs `.pipes` files — one shorthand fixture pipeline per line. See [test-pipes](#test-pipes). |
-| `gen-fixtures --swagger s --out d --setup m` | Generates negative-case `.crust.ts` fixtures from an OpenAPI spec. See [gen-fixtures](#gen-fixtures). |
+| `gen-fixtures --swagger s --out d --setup m [--no-flows]` | Generates negative-case `.crust.ts` fixtures and CRUD flow `.pipes` suites from an OpenAPI spec. See [gen-fixtures](#gen-fixtures). |
 | `mock-server --swagger <url-or-path> [--port N] [--host addr] [--stateful] [--validate] [--proxy <upstream>]` | Boots a `Bun.serve` instance that mocks every operation in an OpenAPI 3.x spec; `--stateful` adds an in-memory CRUD layer, `--validate` rejects spec-violating requests with 422, `--proxy` turns it into a validation proxy in front of a real upstream. See [mock-server](#mock-server). |
 | `skills <list\|install> [--global] [--force]` | Claude agent skills shipped in the binary. See [Agent skills](#agent-skills). |
 | `exit [code]` | Exits crust with optional code (default 0). |
@@ -750,6 +750,7 @@ generated files), runnable by [test-fixture](#test-fixture).
 ```bash
 gen-fixtures --swagger ./openapi.json --out tests/gen --setup ./tests/gen-setup.ts
 test-fixture --target 'tests/gen/*.gen.crust.ts' --threads 8
+test-pipes --target tests/gen/flows/flows.gen.pipes   # generated CRUD flows
 ```
 
 Derived cases:
@@ -767,6 +768,46 @@ Derived cases:
   applied to a **schema-valid base body** (with format-aware synthesis:
   emails, uuids, dates, simple digit-pattern sampling), so exactly one thing
   is wrong per case.
+- **400 boundary violations**, for ALL body properties — required *and*
+  optional — in fixed per-field order: too short (`minLength`), too long
+  (`maxLength`; skipped above 4096 to keep checked-in files reviewable),
+  below minimum / above maximum (`maximum: Number.MAX_SAFE_INTEGER` is
+  treated as an "unbounded" sentinel and skipped), and pattern violation
+  (deduped when the required-field wrong-type case already sends an
+  unparseable string). Nullable zod-style `anyOf: [X, {type: "null"}]`
+  wrappers are unwrapped, so nullable fields get their boundary cases too.
+  One op-level **unexpected extra property** case is added when the body
+  schema has `additionalProperties: false`; it asserts only status +
+  `code === "validation"` (unknown-key naming in `fieldErrors` varies by
+  server). Regenerating a spec that predates the boundary matrix yields a
+  purely additive diff — existing case names, order and bodies are
+  untouched.
+
+#### Generated CRUD flows
+
+Unless `--no-flows`, qualifying collection paths also get a **CRUD flow
+suite**: `--out/flows/flows.gen.pipes` plus a sibling `flows.gen.setup.ts`
+that [test-pipes](#test-pipes) auto-detects — zero extra flags to run. A
+collection path `P` qualifies when it has a POST with an `application/json`
+request schema and a documented 2xx, an item path `P/{param}` with at least
+one of GET/PUT/PATCH/DELETE exists, `P` carries no path params beyond the
+scope param (nested collections are skipped with a stdout notice), and the
+created id's location is derivable from the POST's 2xx response (the media
+`example`, else `schema.properties`: top-level `id`, else the first
+object-valued property containing an `id`; not derivable → skipped with a
+notice).
+
+Each flow chains create → read → update → delete → read-after-delete using
+the [capture](#shorthand-fixture-grammar) stage — the POST captures the new
+id into `$GEN_ID_<T>`, later lines interpolate it into the item URL. Update
+(prefers PATCH) / delete / tombstone-404 lines are emitted only when the
+spec documents those ops (the 404 read needs both a DELETE and a documented
+404 on the GET). Statuses come from each op's lowest documented 2xx. The
+generated setup module adapts the standard setup contract: it calls
+`shared()` + `headersFor(ctx, "member")` to seed `$GEN_AUTH_HEADER` and
+`resolvePath` per flow to seed `$GEN_URL_<T>`. SQL assertions are not
+derivable from a spec, so none are emitted — add DB-level checks in a
+hand-written `.pipes` file.
 
 #### The setup-module contract
 
