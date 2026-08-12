@@ -22,6 +22,13 @@ beforeAll(async () => {
         await new Promise((r) => setTimeout(r, 300));
         return new Response("{}", { status: 200 });
       }
+      if (url.pathname === "/items" && req.method === "POST") {
+        return Response.json({ item: { id: "itm-42" } }, { status: 201 });
+      }
+      if (url.pathname.startsWith("/items/")) {
+        const found = url.pathname === "/items/itm-42";
+        return new Response("{}", { status: found ? 200 : 404 });
+      }
       return new Response("{}", { status: 200 });
     },
   });
@@ -82,6 +89,36 @@ describe("test-pipes runner", () => {
     });
     expect(report.totals.fail).toBe(1);
     expect(report.results[0]!.error).toContain("timed out after 50ms");
+  });
+
+  test("capture chains a POSTed id into the next line", async () => {
+    await writeFile(
+      join(dir, "chain.pipes"),
+      [
+        `{"name":"x"} | POST ${base}/items | assert (r => r.status === 201) | (r => r.json()) | capture PIPES_ITEM (j => j.item.id)`,
+        `GET ${base}/items/$PIPES_ITEM | expect 200`,
+        "",
+      ].join("\n"),
+    );
+    const report = await runPipes({ target: join(dir, "chain.pipes") });
+    expect(report.totals).toEqual({ pass: 2, fail: 0, files: 1 });
+    // Hermeticity: the capture must not leak out of the run.
+    expect(process.env.PIPES_ITEM).toBeUndefined();
+  });
+
+  test("env is restored per file — captures and setup vars do not cross", async () => {
+    const sub = join(dir, "isolation");
+    const { mkdir } = await import("node:fs/promises");
+    await mkdir(sub, { recursive: true });
+    await writeFile(
+      join(sub, "a-cap.pipes"),
+      `{"v":"hello"} | capture PIPES_LEAK (r => r.v) | assert (r => r.v === "hello")\n`,
+    );
+    // $PIPES_LEAK expands to "" here if (and only if) file A's capture was rolled back.
+    await writeFile(join(sub, "b-iso.pipes"), `{"v":"$PIPES_LEAK"} | assert (r => r.v === "")\n`);
+    const report = await runPipes({ target: `${sub}/*.pipes` });
+    expect(report.totals).toEqual({ pass: 2, fail: 0, files: 2 });
+    expect(process.env.PIPES_LEAK).toBeUndefined();
   });
 
   test("glob target picks up only .pipes files", async () => {

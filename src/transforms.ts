@@ -200,7 +200,16 @@ export function timedGet(url: string, opts?: RequestInit): (x: unknown) => Promi
 
 // Pass items through; on drain, fail the pipeline if any item's status
 // didn't match. Works on TimedHit records and Response objects.
-export function expectStatus<T extends { status: number }>(expected: number): PipelineStage<T, T> {
+// `expected` is an exact code (201) or a class ("2xx").
+export function expectStatus<T extends { status: number }>(
+  expected: number | string,
+): PipelineStage<T, T> {
+  const classMatch = typeof expected === "string" ? expected.match(/^([1-5])xx$/) : null;
+  if (typeof expected === "string" && !classMatch) {
+    throw new Error(`expect: bad matcher "${expected}" — use a 3-digit code or 1xx…5xx`);
+  }
+  const lo = classMatch ? parseInt(classMatch[1]!, 10) * 100 : (expected as number);
+  const hi = classMatch ? lo + 100 : lo + 1;
   return pipelineStage<T, T>((input) =>
     Pipeline.of(
       (async function* () {
@@ -208,11 +217,48 @@ export function expectStatus<T extends { status: number }>(expected: number): Pi
         let total = 0;
         for await (const item of input.lines()) {
           total++;
-          if (item.status !== expected) mismatches++;
+          // Explicit type check: an item with NO numeric status (undefined)
+          // must count as a mismatch, not slide through NaN comparisons.
+          const s = (item as { status?: unknown }).status;
+          if (typeof s !== "number" || s < lo || s >= hi) mismatches++;
           yield item;
         }
         if (mismatches > 0) {
           throw new Error(`expect ${expected}: ${mismatches}/${total} responses did not match`);
+        }
+      })(),
+    ),
+  );
+}
+
+// `capture NAME (r => r.id)` — write each item's captured value to
+// process.env[name] (last item wins) and pass items through. Later shell
+// lines see $NAME because crust parses each line right before running it.
+// Fails loudly on an empty upstream and on a nullish captured value: a
+// capture that silently captured nothing turns into a baffling "" expansion
+// three lines later.
+export function captureEnv<T>(
+  name: string,
+  fn?: (x: T) => unknown,
+  sourceText?: string,
+): PipelineStage<T, T> {
+  const from = sourceText ? ` from ${sourceText}` : "";
+  return pipelineStage<T, T>((input) =>
+    Pipeline.of(
+      (async function* () {
+        let count = 0;
+        for await (const item of input.lines()) {
+          count++;
+          const value = fn ? await fn(item) : item;
+          if (value === null || value === undefined) {
+            throw new Error(`capture ${name}: got ${String(value)}${from} — item ${count}`);
+          }
+          process.env[name] =
+            typeof value === "string" ? value : (JSON.stringify(value) ?? String(value));
+          yield item;
+        }
+        if (count === 0) {
+          throw new Error(`capture ${name}: no items reached capture — upstream was empty`);
         }
       })(),
     ),

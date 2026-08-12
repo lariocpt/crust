@@ -20,9 +20,10 @@ export type StageKind =
   | { kind: "procs"; source: string }
   | { kind: "json"; source: string }
   | { kind: "assert"; source: string }
+  | { kind: "capture"; name: string; source: string | null }
   | { kind: "readsrc"; pattern: string }
   | { kind: "parallel"; n: number }
-  | { kind: "expect"; status: number }
+  | { kind: "expect"; matcher: number | string }
   | { kind: "stats"; everySec?: number }
   | { kind: "shell"; text: string };
 

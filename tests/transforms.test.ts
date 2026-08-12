@@ -1,7 +1,15 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { Pipeline } from "../src/pipeline";
 import { GET, range } from "../src/sources";
-import { DELETE, ExpectError, expect as expectStage, POST, parallel } from "../src/transforms";
+import {
+  captureEnv,
+  DELETE,
+  ExpectError,
+  expect as expectStage,
+  expectStatus,
+  POST,
+  parallel,
+} from "../src/transforms";
 
 let server: ReturnType<typeof Bun.serve>;
 let baseUrl: string;
@@ -139,5 +147,76 @@ describe("parallel", () => {
       )
       .collect();
     expect(peak).toBeLessThanOrEqual(3);
+  });
+});
+
+describe("expectStatus", () => {
+  test("class matcher passes any status in the class", async () => {
+    const out = await Pipeline.of([{ status: 201 }, { status: 299 }])
+      .pipe(expectStatus("2xx"))
+      .collect();
+    expect(out).toHaveLength(2);
+  });
+
+  test("class matcher fails at drain with mismatch counts", async () => {
+    const p = Pipeline.of([{ status: 201 }, { status: 404 }])
+      .pipe(expectStatus("2xx"))
+      .collect();
+    await expect(p).rejects.toThrow("expect 2xx: 1/2 responses did not match");
+  });
+
+  test("exact matcher unchanged", async () => {
+    const p = Pipeline.of([{ status: 200 }, { status: 201 }])
+      .pipe(expectStatus(200))
+      .collect();
+    await expect(p).rejects.toThrow("expect 200: 1/2 responses did not match");
+  });
+
+  test("bad matcher string throws at build time", () => {
+    expect(() => expectStatus("20x")).toThrow("bad matcher");
+  });
+});
+
+describe("captureEnv", () => {
+  afterEach(() => {
+    delete process.env.CAP_T;
+  });
+
+  test("captures via lambda, last item wins, passes items through", async () => {
+    const out = await Pipeline.of([{ id: "a" }, { id: "b" }])
+      .pipe(captureEnv("CAP_T", (x: { id: string }) => x.id))
+      .collect();
+    expect(out).toEqual([{ id: "a" }, { id: "b" }]);
+    expect(process.env.CAP_T).toBe("b");
+  });
+
+  test("no lambda captures the item; non-strings JSON-stringified", async () => {
+    await Pipeline.of(["plain"]).pipe(captureEnv("CAP_T")).collect();
+    expect(process.env.CAP_T).toBe("plain");
+    await Pipeline.of([{ a: 1 }])
+      .pipe(captureEnv("CAP_T"))
+      .collect();
+    expect(process.env.CAP_T).toBe('{"a":1}');
+    await Pipeline.of([42]).pipe(captureEnv("CAP_T")).collect();
+    expect(process.env.CAP_T).toBe("42");
+  });
+
+  test("awaits async capture lambdas", async () => {
+    await Pipeline.of([{ id: "z" }])
+      .pipe(captureEnv("CAP_T", async (x: { id: string }) => x.id))
+      .collect();
+    expect(process.env.CAP_T).toBe("z");
+  });
+
+  test("nullish captured value throws naming the source", async () => {
+    const p = Pipeline.of([{ id: "a" }])
+      .pipe(captureEnv("CAP_T", (x: { idd?: string }) => x.idd, "(x => x.idd)"))
+      .collect();
+    await expect(p).rejects.toThrow("capture CAP_T: got undefined from (x => x.idd) — item 1");
+  });
+
+  test("empty upstream throws", async () => {
+    const p = Pipeline.of([]).pipe(captureEnv("CAP_T")).collect();
+    await expect(p).rejects.toThrow("capture CAP_T: no items reached capture — upstream was empty");
   });
 });

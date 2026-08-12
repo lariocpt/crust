@@ -101,6 +101,36 @@ describe("shorthand pipelines end-to-end", () => {
     expect(out[0]).toBe(201);
   });
 
+  test("capture writes process.env and later lines expand it", async () => {
+    delete process.env.CAP_METHOD;
+    const out = await drain(
+      `{"a":1} | POST ${base}/echo | (r => r.json()) | capture CAP_METHOD (j => j.method)`,
+    );
+    expect(out).toHaveLength(1);
+    expect(process.env.CAP_METHOD).toBe("POST");
+    // The next line sees $CAP_METHOD at parse time — the chaining contract.
+    const echoed = await drain(
+      `{"was":"$CAP_METHOD"} | assert (r => r.was === "POST") | (r => r.was)`,
+    );
+    expect(echoed[0]).toBe("POST");
+    delete process.env.CAP_METHOD;
+  });
+
+  test("expect 2xx class works in shorthand", async () => {
+    const out = await drain(`{"a":1} | POST ${base}/echo | expect 2xx`);
+    expect(out).toHaveLength(1);
+    await expect(drain(`{"a":1} | POST ${base}/echo | expect 4xx`)).rejects.toThrow(
+      "expect 4xx: 1/1 responses did not match",
+    );
+  });
+
+  test("-H expands env in the whole header, name included", async () => {
+    process.env.SH_FULL_HEADER = "authorization: Bearer whole-header";
+    const out = await drain(`{"a":1} | POST ${base}/echo -H "$SH_FULL_HEADER" | (r => r.json())`);
+    expect((out[0] as { auth: string }).auth).toBe("Bearer whole-header");
+    delete process.env.SH_FULL_HEADER;
+  });
+
   test("assert passes truthy through and fails falsy", async () => {
     const ok = await drain('{"c":1} | assert (r => r.c === 1) | (r => "yes")');
     expect(ok[0]).toBe("yes");

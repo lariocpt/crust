@@ -176,3 +176,38 @@ describe("classify — stage kind dispatch", () => {
     expect(classify("tail --help").kind).toBe("shell");
   });
 });
+
+describe("capture classification", () => {
+  test("capture with lambda", () => {
+    expect(classify("capture ID (r => r.id)")).toEqual({
+      kind: "capture",
+      name: "ID",
+      source: "(r => r.id)",
+    });
+  });
+
+  test("capture without lambda captures the item itself", () => {
+    expect(classify("capture RAW")).toEqual({ kind: "capture", name: "RAW", source: null });
+  });
+
+  test("invalid env name falls through to shell", () => {
+    expect(classify("capture 9x (r => r)").kind).toBe("shell");
+  });
+});
+
+describe("expect classification", () => {
+  test("exact three-digit code", () => {
+    expect(classify("expect 404")).toEqual({ kind: "expect", matcher: 404 });
+  });
+
+  test("class shorthand", () => {
+    expect(classify("expect 2xx")).toEqual({ kind: "expect", matcher: "2xx" });
+    expect(classify("expect 5xx")).toEqual({ kind: "expect", matcher: "5xx" });
+  });
+
+  test("malformed matchers fall through to shell", () => {
+    expect(classify("expect 20x").kind).toBe("shell");
+    expect(classify("expect 6xx").kind).toBe("shell");
+    expect(classify("expect ok").kind).toBe("shell");
+  });
+});

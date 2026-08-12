@@ -82,9 +82,12 @@ function httpOpts(headers: string[]): RequestInit | undefined {
   if (headers.length === 0) return undefined;
   const h = new Headers();
   for (const raw of headers) {
-    const idx = raw.indexOf(":");
+    // Expand the WHOLE raw string first so -H "$AUTH_HEADER" can hold a
+    // complete `authorization: Bearer …` line (generated flows rely on it).
+    const expanded = expandEnv(raw);
+    const idx = expanded.indexOf(":");
     if (idx === -1) throw new Error(`-H expects "Key: value", got "${raw}"`);
-    h.set(raw.slice(0, idx).trim(), expandEnv(raw.slice(idx + 1).trim()));
+    h.set(expanded.slice(0, idx).trim(), expanded.slice(idx + 1).trim());
   }
   return { headers: h };
 }
@@ -132,6 +135,7 @@ function buildSource(kind: StageKind, ctx?: Context): Pipeline<unknown> {
     case "expect":
     case "stats":
     case "assert":
+    case "capture":
       throw new Error(`${kind.kind} cannot be a source — needs upstream items`);
     case "time":
       throw new Error("time: only allowed as the first stage of a pipeline");
@@ -185,7 +189,15 @@ function applyStage(
       return input.pipe(transforms[kind.verb](url, opts) as never) as Pipeline<unknown>;
     }
     case "expect":
-      return input.pipe(transforms.expectStatus(kind.status) as never) as Pipeline<unknown>;
+      return input.pipe(transforms.expectStatus(kind.matcher) as never) as Pipeline<unknown>;
+    case "capture":
+      return input.pipe(
+        transforms.captureEnv(
+          kind.name,
+          kind.source ? (evalLambda(kind.source) as (x: unknown) => unknown) : undefined,
+          kind.source ?? undefined,
+        ) as never,
+      ) as Pipeline<unknown>;
     case "assert": {
       // A predicate that FAILS the pipeline on falsy — unlike a plain lambda,
       // which maps. `| sql "SELECT ..." | assert (r => r[0].c === 1)`.

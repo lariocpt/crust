@@ -5,10 +5,13 @@ const USAGE = `test-pipes --target <file|glob> [--bail] [--timeout <ms>] [--setu
 
 Run .pipes files: one shorthand fixture pipeline per line.
   # comments and blank lines are skipped
-  {"name":"Court"} | POST $BASE/api/buildings -H "authorization: Bearer $TOKEN" | expect 201
+  {"name":"Court"} | POST $BASE/api/buildings -H "authorization: Bearer $TOKEN" | assert (r => r.status === 201) | (r => r.json()) | capture BID (b => b.building.id)
+  GET $BASE/api/buildings/$BID -H "authorization: Bearer $TOKEN" | expect 200
   sql "SELECT count(*)::int AS c FROM buildings" | assert (r => r.c === 1)
 
-Lines run sequentially per file (DB assertions may depend on earlier lines).
+Lines run sequentially per file (DB assertions may depend on earlier lines);
+capture writes $NAME for every later line in the same file. Env changes are
+rolled back when the file finishes — files are hermetic.
 Before a file runs, its setup module is imported and its default export
 awaited: --setup <module>, else a sibling <name>.setup.ts. Setup seeds
 process.env — that's how lines get $TOKEN-style values.

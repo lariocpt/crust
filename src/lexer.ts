@@ -91,6 +91,13 @@ export function classify(text: string): StageKind {
     return { kind: "assert", source: assertMatch[1]! };
   }
 
+  // `capture NAME (r => r.id)` — lambda optional; a name that isn't a valid
+  // env identifier falls through to shell like any other word.
+  const captureMatch = t.match(/^capture\s+([A-Za-z_][A-Za-z0-9_]*)\s*(\(.+)?$/);
+  if (captureMatch) {
+    return { kind: "capture", name: captureMatch[1]!, source: captureMatch[2] ?? null };
+  }
+
   const readMatch = t.match(/^read\s+(.+)$/);
   if (readMatch) {
     return { kind: "readsrc", pattern: readMatch[1]!.trim() };
@@ -109,9 +116,10 @@ export function classify(text: string): StageKind {
     return { kind: "parallel", n: parseInt(parallelMatch[1]!, 10) };
   }
 
-  const expectMatch = t.match(/^expect\s+(\d{3})$/);
+  const expectMatch = t.match(/^expect\s+(\d{3}|[1-5]xx)$/);
   if (expectMatch) {
-    return { kind: "expect", status: parseInt(expectMatch[1]!, 10) };
+    const m = expectMatch[1]!;
+    return { kind: "expect", matcher: /^\d{3}$/.test(m) ? parseInt(m, 10) : m };
   }
 
   const statsMatch = t.match(/^stats(?:\s+--every[= ](\d+)s?)?$/);

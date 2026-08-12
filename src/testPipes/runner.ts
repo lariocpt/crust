@@ -114,41 +114,53 @@ export async function runPipes(opts: PipesOpts): Promise<PipesReport> {
   let bailed = false;
 
   outer: for (const file of files) {
-    await runSetup(file, opts.setup);
-    const text = await Bun.file(file).text();
-    const lines = text.split("\n");
-    const ctx = freshContext();
+    // Snapshot/restore process.env per file: setup seeds it and `capture`
+    // stages write to it, and neither may leak into the next file or the
+    // interactive session. NOTE any future --threads must shard per FILE —
+    // captures pin line execution within a file to this sequential model.
+    const envSnapshot = { ...process.env };
+    try {
+      await runSetup(file, opts.setup);
+      const text = await Bun.file(file).text();
+      const lines = text.split("\n");
+      const ctx = freshContext();
 
-    for (let i = 0; i < lines.length; i++) {
-      const raw = lines[i]!;
-      const line = raw.trim();
-      if (!line || line.startsWith("#")) continue;
-      const start = performance.now();
-      try {
-        // Sequential on purpose: shorthand suites interleave requests with
-        // sql assertions about what the previous line did.
-        await drainWithTimeout(line, ctx, opts.timeoutMs);
-        results.push({
-          file,
-          lineNo: i + 1,
-          line,
-          status: "pass",
-          durationMs: performance.now() - start,
-        });
-      } catch (err) {
-        results.push({
-          file,
-          lineNo: i + 1,
-          line,
-          status: "fail",
-          durationMs: performance.now() - start,
-          error: (err as Error).message,
-        });
-        if (opts.bail) {
-          bailed = true;
-          break outer;
+      for (let i = 0; i < lines.length; i++) {
+        const raw = lines[i]!;
+        const line = raw.trim();
+        if (!line || line.startsWith("#")) continue;
+        const start = performance.now();
+        try {
+          // Sequential on purpose: shorthand suites interleave requests with
+          // sql assertions about what the previous line did.
+          await drainWithTimeout(line, ctx, opts.timeoutMs);
+          results.push({
+            file,
+            lineNo: i + 1,
+            line,
+            status: "pass",
+            durationMs: performance.now() - start,
+          });
+        } catch (err) {
+          results.push({
+            file,
+            lineNo: i + 1,
+            line,
+            status: "fail",
+            durationMs: performance.now() - start,
+            error: (err as Error).message,
+          });
+          if (opts.bail) {
+            bailed = true;
+            break outer;
+          }
         }
       }
+    } finally {
+      for (const k of Object.keys(process.env)) {
+        if (!(k in envSnapshot)) delete process.env[k];
+      }
+      Object.assign(process.env, envSnapshot);
     }
   }
 
