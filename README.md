@@ -26,8 +26,17 @@ git clone git@github.com:lariocpt/crust.git ~/.crust && ~/.crust/install.sh
 ## What it looks like
 
 ```bash
-# API testing
-fixtures/*.json | POST :3000/users | expect 201
+# API smoke test — every fixture file's contents, POSTed and asserted
+read fixtures/*.json | POST :3000/users | expect 201
+
+# A whole CRUD suite as one .pipes file — request, then assert the DB saw it
+#   {"name":"Court"} | POST $BASE/api/buildings -H "authorization: Bearer $TOKEN" | expect 201
+#   sql "SELECT count(*)::int AS c FROM buildings" | assert (r => r.c === 1)
+test-pipes --target smoke.pipes --bail
+
+# Generate the negative-test matrix (401/403/404 + per-field 400s) from a spec
+gen-fixtures --swagger ./openapi.json --out tests/gen --setup ./tests/gen-setup.ts
+test-fixture --target 'tests/gen/*.gen.crust.ts' --threads 8
 
 # Load testing
 range(0, 10000) | parallel 100 | GET :3000/health | expect 200 | stats
@@ -35,19 +44,17 @@ range(0, 10000) | parallel 100 | GET :3000/health | expect 200 | stats
 # Log mining
 **/*.log | (l => l.includes('ERROR')) | wc -l
 
-# Health monitoring
-range(0, 100).parallel(() => fetch(url)) | expect 200
-
-# One dev tail — merge every dev process into a single tagged stream
-procs({web: "bun run dev", api: "bun api.ts"}) | (l => `[${l.proc}] ${l.line}`)
+# One dev tail — merge every dev process, auto-restart the flaky one
+procs({web: "bun run dev", api: {cmd: "bun api.ts", restart: true}}) | (l => `[${l.proc}] ${l.line}`)
 ```
 
 Fixtures (`test-fixture`) run `.crust.ts` files with `{ input, output }`
 shapes: `setup()` context flows into the request and every matcher, matchers
 may be async (DB side-effect assertions await), and `--count/--threads`
-turns any fixture into a stress run with p50/p95/p99 reports. `mock-server
---swagger spec.json` serves an OpenAPI spec example-first so clients run
-without their backend.
+turns any fixture into a stress run with p50/p95/p99 reports —
+`--timeout/--bail` keep long runs honest. `mock-server --swagger spec.json`
+serves an OpenAPI spec example-first so clients run without their backend;
+`--stateful` makes it remember what you POST.
 
 ## Docs
 

@@ -11,8 +11,12 @@ A Bun-powered shell with first-class pipelines. Shell commands, TypeScript lambd
 - [One-liner mode](#one-liner-mode)
 - [The Pipeline model](#the-pipeline-model)
 - [Shell-line syntax](#shell-line-syntax)
+- [Shorthand fixture grammar](#shorthand-fixture-grammar)
 - [TypeScript API](#typescript-api)
 - [Builtins](#builtins)
+- [test-fixture](#test-fixture)
+- [test-pipes](#test-pipes)
+- [gen-fixtures](#gen-fixtures)
 - [mock-server](#mock-server)
 - [verify-web-links](#verify-web-links)
 - [Editor keybindings](#editor-keybindings)
@@ -59,7 +63,7 @@ crust -c 'src/**/*.ts | wc -l'
 | Flag | Effect |
 |---|---|
 | `crust` | Interactive REPL (default). |
-| `crust -c <line>` | Run one line and exit. Multi-line strings split on `\n`; exit code is the last line's. |
+| `crust -c <line>` | Run one line and exit. Multi-line strings split on `\n` and are **fail-fast**: crust stops at the first failing line and exits with *its* code (previously a later success masked an earlier failure). |
 | `crust -h`, `--help` | Show usage. |
 | `crust -V`, `--version` | Show version. |
 
@@ -97,9 +101,12 @@ The shell parser classifies each `|`-separated stage by looking at its first tok
 |---|---|
 | Contains `*` / `?` / `[…]` | Glob source |
 | Matches `range(a, b)` | Range source |
+| Starts with `{` or `[` | JSON-literal source (invalid JSON = hard error, never shell) |
+| Starts with `read <path\|glob>` | Whole-file source — one item per matched file |
 | Starts with `tail <path>` (with optional `-F` / `-n N`) | Native `tail` source |
 | Starts with `(` and contains `=>` | TypeScript lambda |
-| Starts with `GET` / `POST` / `PUT` / `PATCH` / `DELETE` | HTTP stage |
+| Starts with `assert (` | Assert stage — falsy or empty upstream fails the pipeline |
+| Starts with `GET` / `POST` / `PUT` / `PATCH` / `DELETE` | HTTP stage (`-H` headers, `$VAR` expansion, `:port` shorthand) |
 | First token is a builtin name | Builtin (no piping; in-process dispatch) |
 | First token is a `crust.fn`-registered function | Registered function (per-item transform) |
 | Anything else | Shell stage — handed to `sh -c "<text>"` |
@@ -124,13 +131,44 @@ tail -n 100 app.log               # custom line count
 tail -F app.log                   # follow mode: stream new lines forever
 GET https://api.example.com/  # → Pipeline<Response> (single item)
 GET :3000/health                  # localhost shorthand
+read fixtures/*.json              # whole-file contents, one item per file
+{"name": "Court"}                 # JSON literal — one parsed item (the request body)
 procs({web: "bun run dev", api: "bun api.ts"})   # merge long-lived processes
 ```
+
+`read <path|glob>` yields each matched file's **entire contents** as one item
+(vs the TS `read(path)`, which streams lines of a single file). It's the
+fixture-folder source: `read fixtures/*.json | POST :3000/users | expect 201`.
+Matches are sorted; zero matches is a hard error. Note the plain glob source
+(`fixtures/*.json | …`) yields *paths* — `POST` would post the path strings.
+
+A stage starting with `{` or `[` is a **JSON-literal source**: one parsed
+item. `$VAR`/`${VAR}` inside it are env-expanded first. Invalid JSON is a
+hard error — it never falls back to a shell command.
+
+`GET` has a dual role: as the **first** stage it's a source yielding one
+`Response` (fixture asserts); **mid-pipeline** it's a per-item timed request
+yielding `{ status, ms, url }` records (load pipelines). See
+[Shorthand fixture grammar](#shorthand-fixture-grammar).
 
 `procs({name: "command", …})` spawns each command and streams
 `{ proc, stream, line }` for every stdout/stderr line (plus an `exit`
 marker), merged as lines arrive — the "one dev tail" source. Children are
 killed when the pipeline ends or crust gets SIGINT/SIGTERM.
+
+A spec value can also be an object — `{cmd, env?, restart?}`:
+
+```bash
+procs({
+  web: {cmd: "bun run dev", env: {PORT: "3001"}},
+  api: {cmd: "bun api.ts", restart: true}
+})
+```
+
+- `env` — extra env for THAT process, merged over the inherited environment.
+- `restart: true` — respawn on unexpected exit, with backoff starting at
+  250ms and doubling to a 2s cap (a `restarting in Nms` line is emitted on
+  the `exit` stream). A **user kill** (Ctrl-C / SIGTERM) never respawns.
 
 ### Transforms
 
@@ -141,11 +179,18 @@ killed when the pipeline ends or crust gets SIGINT/SIGTERM.
 … | POST :3000/users                       # per-item HTTP POST (body = item)
 … | DELETE :3000/users/:id                 # per-item DELETE
 … | GET :3000/health                       # per-item timed GET (item = trigger)
+… | POST $BASE/api/things -H "authorization: Bearer $TOKEN"   # headers + env vars
 ```
 
 `GET` as a transform fires one request per upstream item and yields
 `{ status, ms, url }` timing records (bodies are drained, not kept) — pair it
 with `parallel` and `stats` for load pipelines.
+
+Every http verb stage accepts repeatable `-H "Key: value"` header flags
+(quote them — values may contain spaces and colons). URLs and `-H` values are
+`$VAR`/`${VAR}` env-expanded, and the `:port/path` localhost shorthand works
+for **all** verbs, source or transform. `parallel N` upstream is honored for
+non-GET verbs too: `read fixtures/*.json | parallel 8 | POST :3000/users`.
 
 HTTP transforms auto-set `content-type: application/json` for object items. String items are sent as text. `Buffer`/`Uint8Array` go raw.
 
@@ -153,16 +198,29 @@ HTTP transforms auto-set `content-type: application/json` for object items. Stri
 
 ```bash
 range(0, 999) | parallel 50 | GET :3000/health | expect 200 | stats
+sql "SELECT count(*)::int AS c FROM users" | assert (r => r.c === 1)
+range(0, 599) | parallel 50 | GET :3000/health | stats --every 5
 ```
 
 - `parallel N` — sets the fan-out for the NEXT http stage (it is a modifier,
-  not a buffering stage).
+  not a buffering stage). **Results stream in COMPLETION order, not input
+  order** — a deliberate contract change so downstream windowed stats see a
+  live stream instead of a final-millisecond dump. If you need input order,
+  sort downstream.
 - `expect NNN` — passes items through; when the stream drains, fails the
   pipeline (exit 1) naming the mismatch count if any item's `status` didn't
   match.
+- `assert (x => expr)` — per-item predicate; a **falsy** result fails the
+  pipeline naming the item. Unlike a plain lambda (which maps), and unlike
+  `expect`, an **empty upstream also fails** ("no items reached") — the
+  sql-returned-zero-rows silent pass is exactly the trap this closes.
 - `stats` — consumes the stream and yields one summary: `count`, `wallMs`,
   `rps`, a status histogram, and real `p50/p95/p99/meanMs` latency
   percentiles from the timed-GET records.
+- `stats --every N` — additionally emits a **per-window delta summary** every
+  N seconds (`{window: 1, …}`, `{window: 2, …}`) and finishes with one
+  cumulative summary tagged `{final: true}`. Windows flush on the item path —
+  a fully stalled upstream delays the next window until an item arrives.
 
 ### Timing a pipeline (`time "label"`)
 
@@ -225,6 +283,52 @@ Builtins run in-process. They dispatch when the first token matches a builtin na
 
 ---
 
+## Shorthand fixture grammar
+
+One shell line can now be a complete HTTP fixture — body, auth header, and
+assertion. This is what [test-pipes](#test-pipes) runs from `.pipes` files,
+and it works identically at the prompt and in `crust -c`:
+
+```bash
+{"name": "Court", "floors": 3} | POST $BASE/api/buildings -H "authorization: Bearer $TOKEN" | expect 201
+sql "SELECT count(*)::int AS c FROM buildings WHERE name = $1" "Court" | assert (r => r.c === 1)
+read fixtures/*.json | POST :3000/users | expect 201
+GET :3000/api/buildings -H "authorization: Bearer $TOKEN" | (r => r.json()) | assert (b => b.items.length > 0)
+```
+
+The pieces:
+
+- **JSON-literal source** — a stage starting `{`/`[` parses as JSON and
+  yields one item: the request body. Invalid JSON is a **hard error**; it
+  never falls back to shell (a typo'd body exec'ing as a command would be
+  baffling).
+- **`-H "Key: value"`** — repeatable header flags on every http verb stage.
+- **`read <path|glob>`** — whole-file contents, one item per matched file
+  (sorted; zero matches errors). Gotcha: this shadows POSIX `read <var>` at
+  the prompt.
+- **`assert (x => expr)`** — falsy fails the pipeline; **empty upstream also
+  fails**. `expect NNN` stays the status-code assertion; `assert` is for
+  everything else (DB rows, parsed bodies).
+- **`:port/path`** — localhost shorthand, all verbs, source or transform.
+- **GET dual role** — first stage: one `Response` item (fixture asserts);
+  mid-pipeline: per-item timed `{status, ms, url}` records (load).
+
+### Where `$VAR` expands
+
+`$VAR` / `${VAR}` come from `process.env`; missing vars become the empty
+string. Expansion is **opt-in per position** — crust expands exactly:
+
+| Position | Expanded? |
+|---|---|
+| URLs (all http verbs) | yes |
+| `-H` header values | yes |
+| JSON-literal sources | yes |
+| Registered-fn args (`sql "…" "$RUN_ID"`) | yes — SQL positionals `$1`/`$2` survive (a digit can't start an env var name) |
+| Lambda / `assert` bodies | **no** — they're JS; use `process.env.TOKEN` |
+| Shell stages | untouched — `sh` does its own expansion |
+
+---
+
 ## TypeScript API
 
 The full pipeline surface is available to any `.ts` file run by Bun, including `~/.config/crust/init.ts`. Crust exposes these as globals when starting up:
@@ -234,12 +338,14 @@ Pipeline             // class — the unified stream abstraction
 range(start, end)    // source
 glob(pattern)        // source
 read(path)           // source — Pipeline<string> of lines
+readAll(pattern)     // source — whole-file contents, one item per matched file
+                     // (the shell line's `read <glob>`)
 tail(paths, opts?)   // source — string | string[]; globs expanded; multi-file merges
 GET(url, opts?)      // source
 POST(url, opts?)     // transform: Pipeline<T> → Pipeline<Response>
 PUT, PATCH, DELETE   // same shape as POST
 expectStage(matcher) // transform — fails the pipeline on mismatch
-parallel(n, fn)      // transform — N concurrent workers, order-preserving
+parallel(n, fn)      // transform — N concurrent workers, COMPLETION order
 $                    // Bun's tagged-template shell (`Bun.$`)
 ```
 
@@ -326,7 +432,7 @@ expectStage((item) => item.status < 300) // custom predicate
 
 ### Why `expectStage` and not `expect`
 
-The TS-test ecosystem owns the name `expect`. Crust exports the API name as `expectStage` to avoid collisions when you `import { expect as expectStage }` in test files. From the shell line in v0.1.5 it'll just be `expect 201`.
+The TS-test ecosystem owns the name `expect`. Crust exports the API name as `expectStage` to avoid collisions when you `import { expect as expectStage }` in test files. From the shell line it's just `expect 201`.
 
 ---
 
@@ -341,8 +447,10 @@ The TS-test ecosystem owns the name `expect`. Crust exports the API name as `exp
 | `source file` | `.sh` files run via `sh`; `.ts`/`.js` dynamically imported. |
 | `history` | Numbered list of this session's lines. Persistent at `~/.local/share/crust/history`. |
 | `dotenv [--config p] [--append]` | Loads `.env` files into the session. Tracks history, supports `dotenv status` and `dotenv clear`. See [dotenv](#dotenv). |
-| `test-fixture --target g [--out p] [--threads N]` | Runs `.crust.ts` HTTP fixtures. See [test-fixture](#test-fixture). |
-| `mock-server --swagger <url-or-path> [--port N] [--host addr] [--cluster N]` | Boots a `Bun.serve` instance that mocks every operation in an OpenAPI 3.x spec; `--cluster N` forks N workers sharing the port on Linux. See [mock-server](#mock-server). |
+| `test-fixture --target g [--out p] [--threads N] [--count N] [--timeout ms] [--bail]` | Runs `.crust.ts` HTTP fixtures. See [test-fixture](#test-fixture). |
+| `test-pipes --target g [--bail] [--timeout ms] [--setup m]` | Runs `.pipes` files — one shorthand fixture pipeline per line. See [test-pipes](#test-pipes). |
+| `gen-fixtures --swagger s --out d --setup m` | Generates negative-case `.crust.ts` fixtures from an OpenAPI spec. See [gen-fixtures](#gen-fixtures). |
+| `mock-server --swagger <url-or-path> [--port N] [--host addr] [--stateful]` | Boots a `Bun.serve` instance that mocks every operation in an OpenAPI 3.x spec; `--stateful` adds an in-memory CRUD layer. See [mock-server](#mock-server). |
 | `exit [code]` | Exits crust with optional code (default 0). |
 | `help` | Lists builtins. |
 
@@ -395,7 +503,19 @@ test-fixture --target fixtures/*.crust.ts
 test-fixture --target fixtures/users.crust.ts --out report.md
 test-fixture --target 'fixtures/**/*.crust.ts' --threads 8 --out report.json
 test-fixture --target fixtures/users.crust.ts --count 1000 --threads 32   # stress
+test-fixture --target 'gen/*.gen.crust.ts' --threads 8 --timeout 5000 --bail
 ```
+
+- `--timeout <ms>` — fail any fixture whose request runs longer. A fixture's
+  own `input.signal` wins; `--timeout` only fills the gap.
+- `--bail` — stop **starting** new fixtures after the first fail/error;
+  in-flight fixtures finish and are reported.
+
+> **Teardown isolation.** Under `--threads`/`--count`, many fixtures are
+> mid-flight at once. A `teardown` must touch ONLY what its own `ctx`
+> created — a "global cleanup" sweep (`DELETE FROM users`, truncate-all)
+> shreds every other fixture still running. If you need a full reset, do it
+> once outside the runner, not per-fixture.
 
 **Module resolution caveat:** when the runner is the AOT-compiled binary (the normal install), fixture files can import relative modules and Bun builtins (`Bun.SQL`, `Bun.file`, …) but NOT third-party npm packages — the compiled binary has no `node_modules` walk. Keep fixture helpers on builtins (use `Bun.SQL` instead of `pg`). Under dev mode (`bun src/index.ts`), the full walk works.
 
@@ -424,6 +544,112 @@ Report formats are picked from `--out`'s extension: `.json`, `.md`, anything els
 
 When installed via `install.sh`, the runner is AOT-compiled to a host-arch bytecode binary at `~/.crust/bin/crust-test-fixture` for fast cold-start. The shell builtin execs that binary if present and falls back to in-process dynamic import otherwise (dev mode).
 
+### test-pipes
+
+Runs `.pipes` files: **one shorthand fixture pipeline per line** (the
+[shorthand grammar](#shorthand-fixture-grammar)). `#` comments and blank
+lines are skipped. Lines run **sequentially per file, in order** — on
+purpose, because shorthand suites interleave requests with `sql`/`assert`
+lines about what the previous line did.
+
+```bash
+test-pipes --target smoke.pipes
+test-pipes --target 'tests/**/*.pipes' --bail --timeout 5000
+test-pipes --target smoke.pipes --setup ./seed.ts
+```
+
+```bash
+# smoke.pipes — a whole CRUD suite, no framework
+{"name": "Court", "floors": 3} | POST $BASE/api/buildings -H "authorization: Bearer $TOKEN" | expect 201
+sql "SELECT count(*)::int AS c FROM buildings WHERE name = 'Court'" | assert (r => r.c === 1)
+GET $BASE/api/buildings -H "authorization: Bearer $TOKEN" | (r => r.json()) | assert (b => b.items.length > 0)
+```
+
+Flags: `--bail` stops at the first failing line (across files); `--timeout
+<ms>` fails any line that runs longer.
+
+**Setup module.** Before a file runs, its setup module is imported and its
+**default export awaited**: explicit `--setup <module>`, else a sibling
+`<name>.setup.ts` next to the `.pipes` file. Setup seeds `process.env` —
+that's how lines get their `$BASE`/`$TOKEN` values:
+
+```ts
+// smoke.setup.ts
+export default async () => {
+  process.env.BASE = "http://localhost:3000";
+  process.env.TOKEN = await loginAndGetToken();
+};
+```
+
+Each file gets a fresh, hermetic pipeline context: builtin fns (`sql`, …)
+registered, but no `init.ts` and no shared alias state — a `.pipes` file
+must behave the same on every machine. Exit codes: `0` all lines pass,
+`1` any fail, `2` no files matched / bad args.
+
+### gen-fixtures
+
+Derives a **negative-case fixture matrix** from an OpenAPI 3.x spec (Swagger
+2.0 is auto-converted): for every operation the spec documents, cases the
+server must *reject*. Output is one `<tag>.gen.crust.ts` per OpenAPI tag in
+`--out` (the directory is **deleted and recreated** every run — never edit
+generated files), runnable by [test-fixture](#test-fixture).
+
+```bash
+gen-fixtures --swagger ./openapi.json --out tests/gen --setup ./tests/gen-setup.ts
+test-fixture --target 'tests/gen/*.gen.crust.ts' --threads 8
+```
+
+Derived cases:
+
+- **401** when the op documents a *middleware* 401 — a 401 response whose
+  description matches `/not authenticated|log in/i`. Public endpoints like
+  login that document 401 for bad credentials get no case.
+- **403** for scope-gated ops that document 403 (an authenticated outsider
+  with no membership in the scope).
+- **404** for non-scope-gated ops with path params that document 404 (an
+  authorised caller requests a random uuid).
+- **400 per request-body field**: required field missing, wrong JSON type,
+  enum violation — asserting the canonical
+  `{ error, code: "validation", fieldErrors }` body. Perturbations are
+  applied to a **schema-valid base body** (with format-aware synthesis:
+  emails, uuids, dates, simple digit-pattern sampling), so exactly one thing
+  is wrong per case.
+
+#### The setup-module contract
+
+Generated files are app-agnostic: they import ONLY from the `--setup` module
+(the import specifier is rewritten relative to `--out`). That module carries
+every app-specific detail and must export:
+
+- `shared(): Promise<Ctx>` — promise-cached scenario factory (roles, ids).
+  Wired as every fixture's `setup`, so it MUST cache: build the scenario once
+  on first call and return the same promise afterwards (safe under
+  `--threads`). It must also be **lazy** — no side effects at module import
+  time, because the generator imports the module at generation time just to
+  read the scope config.
+- `headersFor(ctx, role: "none" | "member" | "outsider"): Record<string,
+  string>` — request headers for a caller in that role. `"member"` must
+  clear both the auth and scope gates; `"outsider"` is authenticated but has
+  no membership in the shared scope. Generated code only calls it with
+  `"member"`/`"outsider"` — unauthenticated cases use `JSON_HEADERS`
+  directly.
+- `resolvePath(ctx, template: string): string` — takes the raw path template
+  with `{param}` placeholders, substitutes scope params from ctx,
+  substitutes any other `{param}` with a random uuid, and prefixes the API
+  base URL; returns the absolute request URL.
+- `scopeParam: string | null` — the template param name that marks a path as
+  scope-gated (e.g. `"buildingId"`). An op is scope-gated when its path's
+  FIRST template param has this name. `null` disables 403 derivation
+  entirely.
+- `scopeRoots?: string[]` — optional path prefixes (e.g. `"/api/buildings"`)
+  whose immediately following first template param is the scope id even when
+  it has a different name (`/api/buildings/{id}`).
+- `JSON_HEADERS: Record<string, string>` — plain unauthenticated JSON
+  headers, used for role `"none"`.
+
+Exit codes: `0` generated, `1` generation error (including a setup module
+missing `scopeParam`), `2` bad args.
+
 ### mock-server
 
 Boots a `Bun.serve` instance that mocks every operation in an OpenAPI 3.x spec — useful for frontend dev before the backend exists, demoing a pipeline, or seeding fixture tests against an upstream you don't want to spin up.
@@ -432,10 +658,10 @@ Boots a `Bun.serve` instance that mocks every operation in an OpenAPI 3.x spec �
 mock-server --swagger ./openapi.yaml --port 4000
 mock-server --swagger https://petstore3.swagger.io/api/v3/openapi.json --port 4747
 mock-server --swagger ./spec.json --port 0 --host 127.0.0.1   # OS-assigned port
-mock-server --swagger ./openapi.yaml --port 4000 --cluster 4  # Linux only
+mock-server --swagger ./openapi.yaml --port 4000 --stateful   # in-memory CRUD
 ```
 
-Flags: `--swagger <url-or-path>` (required; URL or local `.json`/`.yaml`/`.yml`), `--port N` (default `3000`, `0` = ephemeral), `--host addr` (default `0.0.0.0`), `--cluster N` (Linux only; fork N workers that share the port via `SO_REUSEPORT`, with each request log line prefixed `[wN]`).
+Flags: `--swagger <url-or-path>` (required; URL or local `.json`/`.yaml`/`.yml`; Swagger 2.0 specs are auto-converted to OpenAPI 3.x), `--port N` (default `3000`, `0` = ephemeral), `--host addr` (default `0.0.0.0`), `--stateful` (in-memory CRUD layer — see below).
 
 Response bodies are picked example-first, schema-fallback:
 
@@ -453,7 +679,26 @@ POST   /pets        201  2ms
 DELETE /pets/99     404  0ms
 ```
 
-Ctrl-C (or `SIGTERM`) shuts the server down cleanly. v0.1 limits: Swagger 2.0, remote `$ref` resolution, request validation, faker-style data, and hot-reload are not supported yet.
+Ctrl-C (or `SIGTERM`) shuts the server down cleanly. Limits: remote `$ref` resolution, request validation, faker-style data, and hot-reload are not supported yet.
+
+#### Stateful mode (`--stateful`)
+
+By default the mock is stateless — every request replays the spec's example.
+`--stateful` adds an in-memory CRUD layer on top, so what you POST is what
+you GET back:
+
+- `POST /things` **creates**: the stored item is the spec-synthesized base
+  merged **under** the request body, plus an `id` (yours if the body has one,
+  else a random uuid).
+- `GET /things/{id}` returns the stored item; `GET /things` returns
+  everything stored, **shaped like the spec's collection envelope** (a
+  documented `{ items: [...] }` wrapper is preserved; a bare array stays a
+  bare array).
+- `PATCH`/`PUT /things/{id}` **merge** the body over the stored item.
+- `DELETE /things/{id}` removes it and returns `204`; unknown ids `404`.
+
+**Untouched collections keep serving spec examples** — consumers see no
+change until they write. State lives in memory only; restart = clean slate.
 
 #### Stress mode (`--count`) and randomized inputs
 
@@ -687,10 +932,12 @@ The signature is `(item, ...staticArgs)` — static args come from the shell-lin
 ### API smoke test against a local server
 
 ```bash
-fixtures/*.json | POST :3000/users | (r => r.status === 201)
+read fixtures/*.json | POST :3000/users | expect 201
 ```
 
-(The `(r => …)` lambda passes through items where the predicate is truthy, fails the shell-line pipeline on a thrown error. Native `expect 201` is v0.1.5.)
+(`read` yields each file's **contents** — a bare `fixtures/*.json` glob would
+POST the path strings. For a whole suite of lines like this, put them in a
+`.pipes` file and run [test-pipes](#test-pipes).)
 
 ### Health-check spam
 
@@ -735,7 +982,6 @@ Honest about what doesn't work yet:
 - **No job control.** No `Ctrl-Z`, no `fg`/`bg`, no `&` background jobs.
 - **No multi-line input / heredocs.**
 - **No `$(...)` substitution across stages.** Within a single shell stage it works (delegated to `sh`).
-- **`expect`, `parallel`, `stats` are TS-only.** Shell-line keywords land in v0.1.5.
 - **No `|>` operator and no `[0..9]` range literal.** Need a Bun loader; v0.2.
 - **No syntax highlighting in the editor.** v0.1.5.
 - **No fuzzy history search (Ctrl-R).** v0.2.
