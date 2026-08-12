@@ -10,6 +10,24 @@ export interface OpenApiSpec {
 
 export interface OperationObject {
   responses?: Record<string, ResponseObject>;
+  parameters?: ParameterObject[];
+  requestBody?: RequestBodyObject;
+  [k: string]: unknown;
+}
+
+export interface ParameterObject {
+  name?: string;
+  in?: string; // "path" | "query" | "header" | "cookie"
+  required?: boolean;
+  schema?: unknown;
+  $ref?: string;
+  [k: string]: unknown;
+}
+
+export interface RequestBodyObject {
+  required?: boolean;
+  content?: Record<string, MediaTypeObject>;
+  $ref?: string;
   [k: string]: unknown;
 }
 

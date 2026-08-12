@@ -1,4 +1,4 @@
-import type { OpenApiSpec, OperationObject } from "./loadSpec";
+import type { OpenApiSpec, OperationObject, ParameterObject } from "./loadSpec";
 
 const HTTP_METHODS = new Set(["get", "post", "put", "patch", "delete", "head", "options", "trace"]);
 
@@ -7,6 +7,8 @@ export interface Route {
   template: string;
   regex: RegExp;
   operation: OperationObject;
+  /** Path-item-level parameters merged with (before) operation-level ones. */
+  parameters: ParameterObject[];
   literalSegments: number;
 }
 
@@ -19,14 +21,20 @@ export function buildRoutes(spec: OpenApiSpec): Route[] {
   const routes: Route[] = [];
   for (const [template, pathItem] of Object.entries(paths)) {
     if (!pathItem || typeof pathItem !== "object") continue;
+    // OpenAPI allows parameters at the path-item level, shared by every
+    // operation under the path; operation-level parameters come after.
+    const itemParams = (pathItem as { parameters?: unknown }).parameters;
+    const pathParams = Array.isArray(itemParams) ? (itemParams as ParameterObject[]) : [];
     for (const [method, op] of Object.entries(pathItem)) {
       if (!HTTP_METHODS.has(method.toLowerCase())) continue;
       if (!op || typeof op !== "object") continue;
+      const operation = op as OperationObject;
       routes.push({
         method: method.toUpperCase(),
         template,
         regex: compileTemplate(template),
-        operation: op as OperationObject,
+        operation,
+        parameters: [...pathParams, ...(operation.parameters ?? [])],
         literalSegments: countLiteralSegments(template),
       });
     }

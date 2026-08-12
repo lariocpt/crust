@@ -135,7 +135,7 @@ function stringDefault(format: string | undefined): string {
   }
 }
 
-function resolveRef(ref: string, spec: OpenApiSpec): unknown {
+export function resolveRef(ref: string, spec: OpenApiSpec): unknown {
   if (!ref.startsWith("#/")) return null;
   const parts = ref.slice(2).split("/");
   let cur: unknown = spec;
