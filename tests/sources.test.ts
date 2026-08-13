@@ -879,3 +879,32 @@ describe("findTailWindowStart (bounded tail scan)", () => {
     }
   });
 });
+
+describe("tail abort signal", () => {
+  test("abort wakes a parked follow loop without waiting out the poll sleep", async () => {
+    const { mkdtemp, rm } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const dir = await mkdtemp(join(tmpdir(), "crust-tail-abort-"));
+    try {
+      const p = join(dir, "quiet.log");
+      await Bun.write(p, "old\n");
+      const controller = new AbortController();
+      // pollMs is LONG on purpose: only the abort can wake the loop in time.
+      const iter = tail(p, { lines: 0, follow: true, pollMs: 5000, signal: controller.signal })
+        .lines()
+        [Symbol.asyncIterator]();
+      const first = iter.next();
+      await Bun.sleep(50); // let the loop park on its poll race
+      const t0 = Date.now();
+      controller.abort();
+      void iter.return?.(undefined);
+      const res = await Promise.race([first, Bun.sleep(2000).then(() => null)]);
+      expect(res).not.toBe(null);
+      expect((res as IteratorResult<string>).done).toBe(true);
+      expect(Date.now() - t0).toBeLessThan(1000);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});

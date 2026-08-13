@@ -234,7 +234,7 @@ ignores SIGTERM can't wedge the shutdown or the restart loop.
 ### Transforms
 
 ```bash
-… | grep TODO                              # any shell command
+… | grep TODO                              # native line-buffered grep (fancier flags → sh)
 … | (line => line.toUpperCase())           # TS lambda (maps every item)
 … | filter (line => line.includes('ERR'))  # keep items whose predicate is truthy
 … | tr '[:lower:]' '[:upper:]'             # standard pipes work
@@ -269,16 +269,23 @@ range(1, 20) | (n => `item-${n}`) | grep 'item-1[0-9]'
 ```
 
 Native handles `-i`, `-v`, `-F`, `-E` (a no-op — JS regexes are ERE-shaped)
-with exactly **one** pattern argument, matching against the same formatted
-text a shell grep would have received. Everything else keeps exact `grep`
-semantics via `sh`: bare `grep`, combined or unknown flags (`-iv`, `-c`,
-`--color`), two positionals (that's a file grep), any `$` in the stage (env
-expansion is sh's job), backslash escapes, POSIX classes (`[[:digit:]]`),
-and patterns JS's regex engine rejects (`*.log`). Pure shell lines
+with exactly **one** pattern argument. Matching is per LINE on the same
+formatted text a shell grep received: multi-line items (`read` whole-file
+contents) are split at their newlines and the matching lines are emitted,
+so `read app.log | grep -v ERROR` behaves exactly like the sh pipe did.
+Everything else keeps exact `grep` semantics via `sh`: bare `grep` or
+flags with no pattern, combined or unknown flags (`-iv`, `-c`, `--color`),
+`-F` together with `-E` (grep's own error), two positionals (that's a file
+grep), any `$` in the stage (env expansion is sh's job), and — for regex
+patterns (a `-F` literal needs none of this) — backslash escapes, POSIX
+classes (`[[:digit:]]`), GNU open intervals (`{,5}`), `(?`-groups, and
+anything JS's regex engine rejects (`*.log`). Pure shell lines
 (`ps aux | grep node`) and first-stage grep (`grep ERROR app.log`) always
-use the system binary, byte-for-byte. One divergence to know: a quoted
+use the system binary, byte-for-byte. Two divergences to know: a quoted
 `'a|b'` pattern alternates (ERE) where plain BRE grep matched the literal
-`a|b` — write `grep -F 'a|b'` for the literal.
+`a|b` — write `grep -F 'a|b'` for the literal — and lines containing NUL
+bytes are matched and passed through raw where GNU grep would suppress
+them with "binary file matches".
 
 `GET` as a transform fires one request per upstream item and yields
 `{ status, ms, url }` timing records (bodies are drained, not kept) — pair it
@@ -476,8 +483,10 @@ journalctl -f -o json | crust -c 'stdin | (l => JSON.parse(l)) | filter (e => e.
 kubectl get pods -o name | crust -c 'stdin | (p => p.replace("pod/", ""))'
 ```
 
-A trailing line without a final newline is still emitted. `stdin` is only a
-source — mid-pipeline it errors.
+A trailing line without a final newline is still emitted — as a full item,
+so the printed output gains a terminating `\n` the raw input lacked (items
+are lines; byte-exact passthrough is `cat`'s job, not a line pipeline's).
+`stdin` is only a source — mid-pipeline it errors.
 
 **The bare-pipe trap:** `cmd | crust` (no `-c`, no script file) treats piped
 stdin as **lines to run** — it reads to EOF first, so `docker logs -f app |
@@ -1279,7 +1288,7 @@ Rules of the road:
 - Query errors print and re-prompt; they never kill the session or the
   held source. `clear` empties the buffer; `buffer` shows usage; `help`
   lists everything.
-- `procs` items are `{proc, line, ts}` **objects** — `(l => l.line)`
+- `procs` items are `{proc, stream, line}` **objects** — `(l => l.line)`
   extracts text, `filter (l => l.proc === "web")` selects a stream.
 - The `logs` line itself takes no pipes or redirections (put a complex
   command in a script); interactive-only — with piped stdin use

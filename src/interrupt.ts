@@ -47,8 +47,14 @@ export function endRun(): void {
   running = false;
   interrupted = false;
   children.clear();
-  // Leave any unresolved promise dangling: abandoned generators from this
-  // run wake on their own sleep tick and then process their queued return.
+  // Drop the cached promise: after a fired run it is RESOLVED, and any
+  // interruptPromise() caller between now and the next beginRun (a tail
+  // started at the idle prompt, or one that was mid-stat when fire hit)
+  // would win its poll race instantly forever — a hot stat() loop at ~200%
+  // CPU. An unresolved promise from a clean run is dropped too; abandoned
+  // generators wake on their own sleep tick and process their queued return.
+  promise = null;
+  resolvePromise = null;
 }
 
 export function isInterrupted(): boolean {

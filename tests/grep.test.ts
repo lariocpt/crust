@@ -170,3 +170,30 @@ describe("grep e2e in pipelines", () => {
     }
   });
 });
+
+describe("grep — review fixes", () => {
+  test("multi-line items are matched and yielded PER LINE (read | grep parity)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "crust-grep-ml-"));
+    try {
+      const log = join(dir, "app.log");
+      await Bun.write(log, "line one ok\nline two ERROR boom\nline three ok\nline four ok\n");
+      expect(await drain(`read ${log} | grep ERROR`)).toEqual(["line two ERROR boom"]);
+      expect(await drain(`read ${log} | grep -v ERROR`)).toEqual([
+        "line one ok",
+        "line three ok",
+        "line four ok",
+        "", // the sh path's child also saw a trailing blank line
+      ]);
+      const counted = await drain(`read ${dir}/*.log | grep ERROR | wc -l`);
+      expect(counted).toEqual(["1"]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("GNU-vs-JS dialect edges fall back to shell", () => {
+    expect(classify("grep -E 'ab{,5}c'").kind).toBe("shell"); // GNU open interval
+    expect(classify("grep 'ERROR(?=:)'").kind).toBe("shell"); // JS-only lookahead
+    expect(classify("grep -F '{,'").kind).toBe("grep"); // -F is literal — guards don't apply
+  });
+});

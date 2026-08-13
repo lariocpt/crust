@@ -225,3 +225,32 @@ describe("runLine + fake tty — Ctrl-C job control", () => {
     expect(code).toBe(0);
   });
 });
+
+describe("review fixes — bus hygiene and shellTransform errors", () => {
+  test("endRun clears the resolved promise (no post-Ctrl-C busy spin)", async () => {
+    interrupt.beginRun();
+    void interrupt.interruptPromise();
+    interrupt.fire();
+    interrupt.endRun();
+    // A fresh caller (a tail at the idle prompt) must get a PENDING promise.
+    const winner = await Promise.race([
+      interrupt.interruptPromise().then(() => "stale-resolved"),
+      Bun.sleep(30).then(() => "pending"),
+    ]);
+    expect(winner).toBe("pending");
+  });
+
+  test("upstream errors through a shell stage fail fast instead of hanging", async () => {
+    const t0 = Date.now();
+    const code = await runLine("read /nonexistent-crust-xyz | wc -l", ctx());
+    expect(code).toBe(1);
+    expect(Date.now() - t0).toBeLessThan(3000);
+    const code2 = await runLine("range(1, 3) | assert (x => x > 5) | wc -l", ctx());
+    expect(code2).toBe(1);
+  });
+
+  test("a child that exits early (head) is still success", async () => {
+    const code = await runLine("range(1, 5000) | head -1", ctx());
+    expect(code).toBe(0);
+  });
+});

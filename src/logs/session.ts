@@ -1,4 +1,5 @@
 import { formatItem } from "../format";
+import * as interrupt from "../interrupt";
 import { classify, tokenize } from "../lexer";
 import { parseStages } from "../parser";
 import { Pipeline } from "../pipeline";
@@ -155,69 +156,113 @@ export class LogsSession {
     const queue = this.sourceEnded ? null : new ViewQueue(this.viewQueueSize);
     this.live = queue;
 
+    // The QUERY (never the held source) drives the interrupt bus: shell
+    // stages inside a fragment register their children with it, so a
+    // cancelled query's `sh` child is actually killed instead of leaking.
+    // The held source is immune by construction — cli tails carry their own
+    // AbortSignal (which opts them out of the bus race), cli shell sources
+    // never register, and procs listens for SIGINT which the bus never emits.
+    interrupt.beginRun();
     try {
-      const retro = build(Pipeline.of(snapshot), ctx);
-      for await (const item of retro.lines()) write(`${formatItem(item)}\n`);
-    } catch (err) {
-      writeErr(`crust: ${(err as Error).message}\n`);
-      this.live = null;
-      queue?.end();
-      return; // a query that broke on the buffer must not run again live
-    }
-
-    if (!queue) {
-      writeErr(
-        `-- source ended${this.sourceError ? ` (${this.sourceError})` : ""}: retro only --\n`,
-      );
-      return;
-    }
-
-    writeErr("-- live --\n");
-    this.maybeStatsHint(fragment);
-    let presses = 0;
-    let hardCancel: () => void = () => {};
-    const hardCancelled = new Promise<void>((res) => {
-      hardCancel = res;
-    });
-    const dispose = this.opts.onInterrupt(() => {
-      presses++;
-      if (presses === 1) {
+      // RETRO — the watcher must be armed here too: a fragment whose shell
+      // child lingers after stdin EOF would otherwise wedge the session
+      // with the keyboard dead. One press cancels the whole query.
+      let retroCancelled = false;
+      let cancelRetro: () => void = () => {};
+      const retroCancelPromise = new Promise<void>((res) => {
+        cancelRetro = res;
+      });
+      const disposeRetro = this.opts.onInterrupt(() => {
         writeErr("^C\n");
-        queue.end(); // graceful: stream ends, terminal stages flush
-      } else {
-        writeErr("^C\n");
-        hardCancel();
-      }
-    });
-    const iter = build(Pipeline.of(queue.stream()), ctx).lines()[Symbol.asyncIterator]();
-    try {
-      const drain = (async () => {
-        let res = await iter.next();
-        while (!res.done) {
-          write(`${formatItem(res.value)}\n`);
-          res = await iter.next();
+        retroCancelled = true;
+        interrupt.fire(); // kill the fragment's registered shell children
+        cancelRetro();
+      });
+      const retroIter = build(Pipeline.of(snapshot), ctx).lines()[Symbol.asyncIterator]();
+      try {
+        const retroDrain = (async () => {
+          let res = await retroIter.next();
+          while (!res.done) {
+            write(`${formatItem(res.value)}\n`);
+            res = await retroIter.next();
+          }
+        })();
+        const who = await Promise.race([
+          retroDrain.then(() => "done" as const),
+          retroCancelPromise.then(() => "cancelled" as const),
+        ]);
+        if (who === "cancelled") {
+          retroDrain.catch(() => {});
+          void retroIter.return?.(undefined);
+          return;
         }
-      })();
-      const outcome = await Promise.race([
-        drain.then(() => "done" as const),
-        hardCancelled.then(() => "hard" as const),
-      ]);
-      if (outcome === "hard") {
-        drain.catch(() => {});
-        void iter.return?.(undefined);
-      } else if (queue.dropped > 0) {
-        writeErr(`logs: live view lagged — dropped ${queue.dropped} oldest item(s)\n`);
+      } catch (err) {
+        writeErr(`crust: ${(err as Error).message}\n`);
+        return; // a query that broke on the buffer must not run again live
+      } finally {
+        disposeRetro();
+        if (retroCancelled) {
+          this.live = null;
+          queue?.end();
+        }
       }
-      if (this.sourceEnded && presses === 0) {
-        writeErr(`-- source ended${this.sourceError ? ` (${this.sourceError})` : ""} --\n`);
+
+      if (!queue) {
+        writeErr(
+          `-- source ended${this.sourceError ? ` (${this.sourceError})` : ""}: retro only --\n`,
+        );
+        return;
       }
-    } catch (err) {
-      // A query error never kills the session — print and reprompt.
-      writeErr(`crust: ${(err as Error).message}\n`);
+
+      writeErr("-- live --\n");
+      this.maybeStatsHint(fragment);
+      let presses = 0;
+      let hardCancel: () => void = () => {};
+      const hardCancelled = new Promise<void>((res) => {
+        hardCancel = res;
+      });
+      const dispose = this.opts.onInterrupt(() => {
+        presses++;
+        writeErr("^C\n");
+        if (presses === 1) {
+          queue.end(); // graceful: stream ends, terminal stages flush
+        } else {
+          interrupt.fire(); // kill stuck shell children, wake parked stages
+          hardCancel();
+        }
+      });
+      const iter = build(Pipeline.of(queue.stream()), ctx).lines()[Symbol.asyncIterator]();
+      try {
+        const drain = (async () => {
+          let res = await iter.next();
+          while (!res.done) {
+            write(`${formatItem(res.value)}\n`);
+            res = await iter.next();
+          }
+        })();
+        const outcome = await Promise.race([
+          drain.then(() => "done" as const),
+          hardCancelled.then(() => "hard" as const),
+        ]);
+        if (outcome === "hard") {
+          drain.catch(() => {});
+          void iter.return?.(undefined);
+        } else if (queue.dropped > 0) {
+          writeErr(`logs: live view lagged — dropped ${queue.dropped} oldest item(s)\n`);
+        }
+        if (this.sourceEnded && presses === 0) {
+          writeErr(`-- source ended${this.sourceError ? ` (${this.sourceError})` : ""} --\n`);
+        }
+      } catch (err) {
+        // A query error never kills the session — print and reprompt.
+        writeErr(`crust: ${(err as Error).message}\n`);
+      } finally {
+        dispose();
+      }
     } finally {
-      dispose();
+      interrupt.endRun();
       if (this.live === queue) this.live = null;
-      queue.end();
+      queue?.end();
     }
   }
 

@@ -18,7 +18,7 @@ whose stages are all ordinary commands is handed to `sh -c` untouched.
 | `read fixtures/*.json` | whole-file contents, one item per file (sorted; zero matches = error) |
 | `tail -F app.log` | native tail source (`-n N`, `-F` follow); the `-n N` cut is a bounded backward read, safe on huge files |
 | `stdin` (alias `-`) | piped-stdin source, one item per line — `docker logs -f X \| crust -c 'stdin \| …'`. Source position only. Bare `cmd \| crust` treats stdin as a SCRIPT, so data pipes need `-c` |
-| `grep ERROR` mid-pipeline | native line-buffered grep (`-i`/`-v`/`-F`, ONE pattern) — follow streams don't stall on grep's 4KB pipe buffer. Combined/unknown flags, two positionals, any `$`, `\`, or `[[:` = exact system grep via sh; first-stage grep = file grep via sh |
+| `grep ERROR` mid-pipeline | native line-buffered grep (`-i`/`-v`/`-F`, ONE pattern; per-line even on multi-line items) — follow streams don't stall on grep's 4KB pipe buffer. Combined/unknown flags, two positionals, any `$`, or GNU/JS-divergent regex bits (`\`, `[[:`, `{,`, `(?`) = exact system grep via sh; first-stage grep = file grep via sh |
 | `load 30s 100/s` | paced load ticks (see the crust-load-testing skill) |
 | `{"name": "x"}` | JSON-literal source — ONE parsed item (the request body). Invalid JSON is a hard error |
 | `GET :3000/path` | HTTP. First stage: one `Response`. Mid-pipeline: per-item timed `{status, ms, url}` |

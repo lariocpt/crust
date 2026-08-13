@@ -2,10 +2,12 @@ import { formatItem } from "./format";
 import { Pipeline, type PipelineStage, pipelineStage } from "./pipeline";
 
 // Native `grep` over pipeline items — line-buffered where sh grep block-
-// buffers into a pipe. Matches against formatItem(item) (exactly the bytes
-// sh-grep would have received on stdin) and yields the FORMATTED string, so
-// downstream stages see the same shape either way. No `g` flag: grep is a
-// per-line boolean, and a sticky lastIndex would make it stateful.
+// buffers into a pipe. The sh path wrote formatItem(item)+"\n" to grep's
+// stdin, where embedded newlines were REAL line boundaries — so a
+// multi-line item (a `read` whole-file item) must be split and matched per
+// LINE, yielding matching lines, or `read x | grep -v y` silently inverts
+// per file instead of per line. No `g` flag: grep is a per-line boolean,
+// and a sticky lastIndex would make it stateful.
 export function grepStage(opts: {
   pattern: string;
   ignoreCase: boolean;
@@ -24,8 +26,12 @@ export function grepStage(opts: {
     Pipeline.of(
       (async function* () {
         for await (const item of input.lines()) {
-          const line = formatItem(item);
-          if (test(line) !== opts.invert) yield line;
+          // Split exactly as the sh child's stdin did: no trailing-empty
+          // pop — "a\nb\n" reached grep as lines "a", "b", "" and an
+          // inverted match emits that blank line there too.
+          for (const line of formatItem(item).split("\n")) {
+            if (test(line) !== opts.invert) yield line;
+          }
         }
       })(),
     ),

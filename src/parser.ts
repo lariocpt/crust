@@ -400,16 +400,35 @@ function shellTransform(input: Pipeline<unknown>, cmd: string): Pipeline<unknown
       });
       const unregister = registerChild(() => proc.kill());
       try {
+        // UPSTREAM failures must fail the line (the -c fail-fast contract);
+        // writer failures must not (a child that exits early — head — closes
+        // its stdin, and sh treats that as success). Either way the child
+        // must reach EOF-or-death, or the stdout loop below never ends.
+        let upstreamError: unknown;
         const writePromise = (async () => {
           const writer = proc.stdin as FileSink;
-          for await (const item of input.lines()) {
-            writer.write(formatItem(item) + "\n");
+          try {
+            for await (const item of input.lines()) {
+              try {
+                // write() returns a Promise under backpressure — awaiting it
+                // paces the writer AND surfaces EPIPE here (catchable) when
+                // the child exits early, instead of as unhandled-rejection
+                // spam from the sink's internal flush.
+                const r = writer.write(formatItem(item) + "\n") as number | Promise<number>;
+                if (typeof r !== "number") await r;
+              } catch {
+                break; // child closed stdin — stop feeding, not an error
+              }
+            }
+          } catch (err) {
+            upstreamError = err ?? new Error("upstream failed");
+          } finally {
+            try {
+              await writer.end();
+            } catch {}
+            if (upstreamError !== undefined) proc.kill();
           }
-          await writer.end();
         })();
-        // An early exit (Ctrl-C, downstream break) can kill the child while
-        // the writer is mid-stream — that rejection is the cancellation.
-        writePromise.catch(() => {});
 
         const decoder = new TextDecoder();
         let buf = "";
@@ -424,6 +443,9 @@ function shellTransform(input: Pipeline<unknown>, cmd: string): Pipeline<unknown
         if (buf) yield buf;
         await proc.exited;
         await writePromise;
+        if (upstreamError !== undefined) {
+          throw upstreamError instanceof Error ? upstreamError : new Error(String(upstreamError));
+        }
       } finally {
         unregister();
         proc.kill();

@@ -325,3 +325,42 @@ describe("logs CLI gates", () => {
     expect(stderr).toContain("stdin |");
   });
 });
+
+describe("review fixes — retro Ctrl-C and stuck-child reaping", () => {
+  test("Ctrl-C during a wedged RETRO pass cancels the query and kills its shell child", async () => {
+    const marker = "sleep 27.313"; // unique pgrep-able token for THIS test
+    const h = harness();
+    h.driver.offer("one");
+    let promptCameBack = false;
+    h.inputs.push(
+      async () => {
+        await Bun.sleep(50);
+        return marker; // shell stage child ignores stdin EOF and lingers
+      },
+      async () => {
+        promptCameBack = true;
+        return "exit";
+      },
+    );
+    const done = h.session.run();
+    (async () => {
+      // Wait for the sleep child to exist (retro is wedged on it), then press.
+      let up = "";
+      for (let i = 0; i < 50 && !up; i++) {
+        await Bun.sleep(100);
+        up = Bun.spawnSync(["pgrep", "-f", marker]).stdout.toString().trim();
+      }
+      expect(up).not.toBe("");
+      h.press(); // ONE press during retro must cancel the whole query
+    })();
+    const code = await done;
+    expect(code).toBe(0);
+    expect(promptCameBack).toBe(true);
+    let gone = false;
+    for (let i = 0; i < 40 && !gone; i++) {
+      await Bun.sleep(100);
+      gone = Bun.spawnSync(["pgrep", "-f", marker]).stdout.toString().trim() === "";
+    }
+    expect(gone).toBe(true); // the bus fire reaped it — no leak
+  }, 15_000);
+});

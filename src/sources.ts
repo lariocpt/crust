@@ -99,6 +99,14 @@ export interface TailOptions {
   lines?: number;
   follow?: boolean;
   pollMs?: number;
+  /**
+   * Cancels a follow loop from outside: a queued iterator .return() cannot
+   * wake a generator parked on its poll sleep, but aborting this signal
+   * does. When a signal is provided the holder owns cancellation and the
+   * loop does NOT race the REPL interrupt bus (the `logs` builtin holds
+   * tails across queries whose Ctrl-C fires the bus).
+   */
+  signal?: AbortSignal;
 }
 
 // Polling cadence under follow. Aggressive enough for an interactive log
@@ -120,10 +128,10 @@ export function tail(paths: string | string[], opts: TailOptions = {}): Pipeline
         return;
       }
       if (resolved.length === 1) {
-        yield* tailOne(resolved[0]!, initialLines, follow, pollMs);
+        yield* tailOne(resolved[0]!, initialLines, follow, pollMs, opts.signal);
         return;
       }
-      yield* mergeAsync(resolved.map((p) => tailOne(p, initialLines, follow, pollMs)));
+      yield* mergeAsync(resolved.map((p) => tailOne(p, initialLines, follow, pollMs, opts.signal)));
     })(),
   );
 }
@@ -191,6 +199,7 @@ async function* tailOne(
   initialLines: number,
   follow: boolean,
   pollMs: number,
+  signal?: AbortSignal,
 ): AsyncGenerator<string> {
   let offset = 0;
   let currentIno: number | null = null;
@@ -218,11 +227,21 @@ async function* tailOne(
 
   if (!follow) return;
 
+  // One abort promise for the whole loop (a fresh listener per tick would
+  // accumulate); already-aborted signals resolve immediately.
+  const aborted = signal
+    ? signal.aborted
+      ? Promise.resolve()
+      : new Promise<void>((res) => signal.addEventListener("abort", () => res(), { once: true }))
+    : null;
+
   while (true) {
-    // Race the poll sleep against the REPL interrupt bus: a queued
-    // `.return()` can't wake a parked generator, so Ctrl-C must.
-    await Promise.race([Bun.sleep(pollMs), interruptPromise()]);
-    if (isInterrupted()) return;
+    // Race the poll sleep against cancellation: a queued `.return()` can't
+    // wake a parked generator, so Ctrl-C (the REPL bus) or the holder's
+    // abort must. With a signal the HOLDER owns cancellation and the bus is
+    // ignored — a logs query's Ctrl-C must not kill the held source.
+    await Promise.race([Bun.sleep(pollMs), aborted ?? interruptPromise()]);
+    if (signal ? signal.aborted : isInterrupted()) return;
     let s: Awaited<ReturnType<typeof stat>>;
     try {
       s = await stat(path);

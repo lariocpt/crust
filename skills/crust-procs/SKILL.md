@@ -56,7 +56,7 @@ To iterate on these filters WITHOUT restarting the dev stack, hold it in a
 worker.ts"})` keeps the group running and buffers its recent output; each
 line you type (`filter (l => l.proc === "api")`, `(l => l.line) | grep -i
 error`) runs over the buffer, then live until Ctrl-C. Items stay `{proc,
-line, ts}` objects. `exit`/Ctrl-D tears the group down (SIGTERM→SIGKILL).
+stream, line}` objects. `exit`/Ctrl-D tears the group down (SIGTERM→SIGKILL).
 
 ## wait — readiness as a one-liner (CI's friend)
 

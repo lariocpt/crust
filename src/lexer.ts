@@ -250,9 +250,18 @@ function classifyGrep(t: string): StageKind | null {
   if (fixed && ere) return null; // grep errors on -F -E; let it
   const pattern = positionals[0]!;
   if (!fixed) {
-    // Regex dialects diverge exactly where escapes and POSIX classes live —
-    // don't reinterpret those, and never native-compile what JS rejects.
-    if (pattern.includes("\\") || pattern.includes("[[:")) return null;
+    // Regex dialects diverge exactly where escapes, POSIX classes, GNU open
+    // intervals ("{,5}" — literal in JS), and JS-only groups ("(?=…)" — an
+    // error in GNU grep) live. Don't reinterpret any of those, and never
+    // native-compile what JS rejects.
+    if (
+      pattern.includes("\\") ||
+      pattern.includes("[[:") ||
+      pattern.includes("{,") ||
+      pattern.includes("(?")
+    ) {
+      return null;
+    }
     try {
       new RegExp(pattern);
     } catch {

@@ -106,6 +106,26 @@ async function runLogsInner(rawArgs: string, ctx: Context): Promise<number> {
       };
       break;
     }
+    case "tail": {
+      // Built directly (not via buildSource) so teardown can ABORT the
+      // follow loop — a queued iter.return can't wake its poll sleep, and
+      // the session's Ctrl-C fires the interrupt bus, which a held source
+      // must ignore (the signal opts the tail out of the bus race).
+      const controller = new AbortController();
+      const { tail } = await import("../sources");
+      const pipeline = tail(kind.paths, {
+        lines: kind.lines,
+        follow: kind.follow,
+        signal: controller.signal,
+      });
+      const iter = pipeline.lines()[Symbol.asyncIterator]();
+      source = { [Symbol.asyncIterator]: () => iter };
+      teardown = () => {
+        controller.abort();
+        void iter.return?.(undefined);
+      };
+      break;
+    }
     case "procs": {
       let pipeline: Pipeline<unknown>;
       try {
@@ -123,7 +143,7 @@ async function runLogsInner(rawArgs: string, ctx: Context): Promise<number> {
         void iter.return?.(undefined);
       };
       note =
-        'items are {proc, line, ts} objects — try (l => l.line) or filter (l => l.proc === "web")';
+        'items are {proc, stream, line} objects — try (l => l.line) or filter (l => l.proc === "web")';
       break;
     }
     default: {
