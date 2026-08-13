@@ -261,6 +261,10 @@ ancestor `node_modules/.bin` of the current directory is prepended
 and `procs` children — so locally-installed tool binaries work bare:
 `… | pino-pretty --colorize`, `… | tsc --noEmit`, no
 `node_modules/.bin/` prefix. Computed per spawn, so `cd` is respected.
+Same trust model (and same shadowing caveat) as `npm run`/`bun run`: a
+project's `node_modules/.bin` entry takes precedence over a system binary
+of the same name while you're inside that project. Use an absolute path
+when that matters.
 
 **`grep` mid-pipeline is native and line-buffered.** GNU grep block-buffers
 ~4KB when writing into a pipe, which used to stall `tail -F app.log | grep
