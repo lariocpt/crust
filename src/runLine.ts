@@ -3,6 +3,7 @@ import { formatItem } from "./format";
 import * as interrupt from "./interrupt";
 import { classify, tokenize } from "./lexer";
 import { parse } from "./parser";
+import { shellEnv } from "./shellPath";
 import type { Context } from "./types";
 
 // Write with honest backpressure: Bun's stdout.write returns false when the
@@ -100,8 +101,9 @@ export async function runLine(line: string, ctx: Context, tty?: ReplTty): Promis
         const proc = Bun.spawn(["sh", "-c", expanded], {
           stdio: ["inherit", "inherit", "inherit"],
           // Live env, not the startup snapshot — `capture` writes process.env
-          // at run time and later shell lines must see $NAME.
-          env: { ...process.env },
+          // at run time and later shell lines must see $NAME. shellEnv also
+          // prepends ancestor node_modules/.bin, npm-run style.
+          env: shellEnv(),
         });
         await proc.exited;
         return proc.exitCode ?? 0;

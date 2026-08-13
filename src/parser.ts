@@ -9,6 +9,7 @@ import { formatItem } from "./format";
 import { registerChild } from "./interrupt";
 import { classify, tokenize } from "./lexer";
 import { Pipeline } from "./pipeline";
+import { shellEnv } from "./shellPath";
 import * as sources from "./sources";
 import * as transforms from "./transforms";
 import type { Context, StageKind } from "./types";
@@ -362,7 +363,7 @@ function shellSource(cmd: string): Pipeline<unknown> {
         stdout: "pipe",
         stderr: "inherit",
         // Live env so `capture`d $VARs from earlier lines reach sh.
-        env: { ...process.env },
+        env: shellEnv(),
       });
       // REPL Ctrl-C kills the child through the bus; the finally kill also
       // reaps it when a downstream stage stops iterating early.
@@ -396,7 +397,7 @@ function shellTransform(input: Pipeline<unknown>, cmd: string): Pipeline<unknown
         stdout: "pipe",
         stderr: "inherit",
         // Live env so `capture`d $VARs from earlier lines reach sh.
-        env: { ...process.env },
+        env: shellEnv(),
       });
       const unregister = registerChild(() => proc.kill());
       try {

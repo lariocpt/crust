@@ -255,6 +255,13 @@ result should mean:
 
 Async predicates are awaited in all three.
 
+**Shell stages see `node_modules/.bin` on PATH, npm-run style.** Every
+ancestor `node_modules/.bin` of the current directory is prepended
+(nearest first) for shell stages, pure shell lines, `logs` shell sources,
+and `procs` children — so locally-installed tool binaries work bare:
+`… | pino-pretty --colorize`, `… | tsc --noEmit`, no
+`node_modules/.bin/` prefix. Computed per spawn, so `cd` is respected.
+
 **`grep` mid-pipeline is native and line-buffered.** GNU grep block-buffers
 ~4KB when writing into a pipe, which used to stall `tail -F app.log | grep
 ERROR` until enough matches accumulated. The safe subset now runs as a
@@ -1291,11 +1298,11 @@ Rules of the road:
 - `procs` items are `{proc, stream, line}` **objects** — `(l => l.line)`
   extracts text, `filter (l => l.proc === "web")` selects a stream.
 - Fragments end in shell stages, so pretty-rendering is just another
-  stage: `grep api_request | node_modules/.bin/pino-pretty --colorize
-  --singleLine` pretty-prints the buffered past AND the live stream
-  (`--colorize` forces ANSI through the pipe). For `procs` sources,
-  normalize the object first — see the pino-pretty recipe in
-  [Log mining](#log-mining).
+  stage: `grep api_request | pino-pretty --colorize --singleLine`
+  pretty-prints the buffered past AND the live stream (`--colorize`
+  forces ANSI through the pipe; local `node_modules/.bin` is on PATH, so
+  no prefix needed). For `procs` sources, normalize the object first —
+  see the pino-pretty recipe in [Log mining](#log-mining).
 - The `logs` line itself takes no pipes or redirections (put a complex
   command in a script); interactive-only — with piped stdin use
   `cmd | crust -c 'stdin | …'` instead (exit 2 points you there).

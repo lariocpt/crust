@@ -121,6 +121,9 @@ flushes terminal stages (bare `stats` prints there), `exit` leaves.
   where BRE grep matched the literal — use `grep -F 'a|b'` for the literal.
 - `stdin` is single-shot per process: inside a bare `cmd | crust` script it
   errors (the pipe was already consumed as the script itself).
+- Shell stages get npm-run-style PATH: ancestor `node_modules/.bin` dirs
+  are prepended, so local tool binaries work bare (`| pino-pretty`,
+  `| tsc --noEmit`) — no `node_modules/.bin/` prefix, no global install.
 - In `… | expect 200 | stats`, a failing expect throws at drain BEFORE stats
   emits — gate status inside a stats assert instead if you need the summary.
 

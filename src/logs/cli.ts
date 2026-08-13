@@ -2,6 +2,7 @@ import { onInterrupt, readLine } from "../editor";
 import { classify } from "../lexer";
 import { buildSource } from "../parser";
 import type { Pipeline } from "../pipeline";
+import { shellEnv } from "../shellPath";
 import type { Context } from "../types";
 import { LogsSession } from "./session";
 
@@ -85,7 +86,7 @@ async function runLogsInner(rawArgs: string, ctx: Context): Promise<number> {
       const proc = Bun.spawn(["sh", "-c", kind.text], {
         stdout: "pipe",
         stderr: "inherit",
-        env: { ...process.env },
+        env: shellEnv(),
       });
       source = (async function* () {
         const decoder = new TextDecoder();

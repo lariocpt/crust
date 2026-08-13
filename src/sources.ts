@@ -3,6 +3,7 @@ import { file, Glob } from "bun";
 import { interruptPromise, isInterrupted } from "./interrupt";
 import { Pipeline } from "./pipeline";
 import { awaitReady, formatReadyTarget, parseReadyTarget, type ReadyTarget } from "./readiness";
+import { shellEnv } from "./shellPath";
 import { HttpTimeoutError, isTimeoutError, labelBodyTimeout } from "./transforms";
 
 // Set when index.ts consumes stdin as a SCRIPT (the bare `cmd | crust`
@@ -637,7 +638,7 @@ export function procs(
             const child = Bun.spawn(["sh", "-c", spec.cmd], {
               stdout: "pipe",
               stderr: "pipe",
-              env: { ...process.env, FORCE_COLOR: "0", ...(spec.env ?? {}) },
+              env: { ...shellEnv(), FORCE_COLOR: "0", ...(spec.env ?? {}) },
               // Own process group (setsid leader) so kills reach grandchildren.
               detached: true,
             });
