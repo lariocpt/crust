@@ -289,6 +289,13 @@ const skillsBuiltin: Builtin = async (rawArgs, _ctx) => {
   return await runSkills(splitArgs(rawArgs.trim()));
 };
 
+const logsBuiltin: Builtin = async (rawArgs, ctx) => {
+  // rawArgs stays UNSPLIT — the source spec is the rest of the line verbatim
+  // (splitArgs would mangle procs({...}) literals and quoted commands).
+  const { runLogs } = await import("./logs/cli");
+  return await runLogs(rawArgs, ctx);
+};
+
 export const builtins: Record<string, Builtin> = {
   skills: skillsBuiltin,
   cd: cdBuiltin,
@@ -305,6 +312,7 @@ export const builtins: Record<string, Builtin> = {
   "gen-fixtures": genFixturesBuiltin,
   "mock-server": mockServerBuiltin,
   "verify-web-links": verifyWebLinksBuiltin,
+  logs: logsBuiltin,
 };
 
 // Keyed by registry name so `help` and `crust -h` can't drift from what is
@@ -326,6 +334,7 @@ const builtinSummaries: Record<string, string> = {
   "gen-fixtures": "generate fixture suites from an OpenAPI spec",
   "mock-server": "serve an OpenAPI spec's examples (optionally --stateful)",
   "verify-web-links": "crawl a site from its sitemap and verify every link",
+  logs: "interactive search over a held live log stream",
 };
 
 export function renderBuiltinList(): string {

@@ -71,6 +71,57 @@ export function parse(line: string): (ctx?: Context) => Pipeline<unknown> {
 
 const CONSUMES_PARALLEL = new Set<StageKind["kind"]>(["http", "lambda", "function"]);
 
+const SOURCE_ONLY = new Set<StageKind["kind"]>([
+  "range",
+  "glob",
+  "tail",
+  "procs",
+  "json",
+  "readsrc",
+  "stdin",
+  "load",
+]);
+
+// Parse a TRANSFORMS-ONLY fragment (no source position) — the `logs` query
+// path. Returns a builder so each invocation constructs FRESH stages: a logs
+// query runs twice, retro over the buffer snapshot and forward over the live
+// stream, and stages like stats are stateful.
+export function parseStages(
+  fragment: string,
+): (input: Pipeline<unknown>, ctx?: Context) => Pipeline<unknown> {
+  const tokens = tokenize(fragment);
+  return (input, ctx) => {
+    let pipeline = input;
+    let pendingParallel: number | null = null;
+    for (const tok of tokens) {
+      const kind = resolveKind(tok.text, ctx);
+      if (kind.kind === "time") {
+        throw new Error("time: not available in a logs query");
+      }
+      if (SOURCE_ONLY.has(kind.kind)) {
+        throw new Error(
+          `${kind.kind}: logs queries transform the buffered/live stream — start with grep, filter, a lambda, or a shell stage`,
+        );
+      }
+      if (kind.kind === "parallel") {
+        pendingParallel = kind.n;
+        continue;
+      }
+      if (pendingParallel !== null && !CONSUMES_PARALLEL.has(kind.kind)) {
+        throw new Error(
+          `parallel ${pendingParallel}: only applies to http, lambda, or function stages — got ${kind.kind}`,
+        );
+      }
+      pipeline = applyStage(pipeline, kind, ctx, pendingParallel);
+      pendingParallel = null;
+    }
+    if (pendingParallel !== null) {
+      throw new Error("parallel: must be followed by an http, lambda, or function stage");
+    }
+    return pipeline;
+  };
+}
+
 // Demote a shell stage to a function stage when its first word is a
 // crust.fn()-registered name. The lexer is intentionally pure (no ctx),
 // so we resolve registered names here.
@@ -105,7 +156,7 @@ function httpOpts(headers: string[]): RequestInit | undefined {
   return { headers: h };
 }
 
-function buildSource(kind: StageKind, ctx?: Context): Pipeline<unknown> {
+export function buildSource(kind: StageKind, ctx?: Context): Pipeline<unknown> {
   switch (kind.kind) {
     case "range":
       return sources.range(kind.start, kind.end) as Pipeline<unknown>;
