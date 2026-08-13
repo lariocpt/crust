@@ -47,6 +47,43 @@ describe("parser — transforms", () => {
   });
 });
 
+describe("filter stage", () => {
+  test("keeps items whose predicate is truthy", async () => {
+    const p = parse("range(1, 6) | filter (n => n % 2 === 0)")();
+    expect(await p.collect()).toEqual([2, 4, 6]);
+  });
+
+  test("plain truthiness: 0 is dropped, unlike a mapping lambda", async () => {
+    const p = parse("range(0, 3) | filter (n => n)")();
+    expect(await p.collect()).toEqual([1, 2, 3]);
+  });
+
+  test("awaits async predicates", async () => {
+    const p = parse("range(1, 3) | filter (async n => n > 1)")();
+    expect(await p.collect()).toEqual([2, 3]);
+  });
+
+  test("empty result passes silently — selection, not assertion", async () => {
+    const p = parse("range(1, 3) | filter (n => n > 99)")();
+    expect(await p.collect()).toEqual([]);
+  });
+
+  test("cannot be a source", () => {
+    expect(() => parse("filter (x => x)")()).toThrow("filter cannot be a source");
+  });
+
+  test("does not consume the parallel modifier", () => {
+    expect(() => parse("range(0, 3) | parallel 2 | filter (x => x)")()).toThrow(
+      "parallel 2: only applies to http, lambda, or function stages — got filter",
+    );
+  });
+
+  test("a throwing predicate names the item and source", async () => {
+    const p = parse("range(1, 3) | filter (n => n.missing.deep)")();
+    await expect(p.collect()).rejects.toThrow(/filter: item 1 threw in \(n => n\.missing\.deep\)/);
+  });
+});
+
 describe("parallel modifier", () => {
   test("errors loudly before a non-consuming stage", () => {
     expect(() => parse("range(0, 3) | parallel 2 | stats")()).toThrow(

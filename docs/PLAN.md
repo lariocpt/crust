@@ -1,5 +1,13 @@
 # crust — a Bun-powered shell
 
+> **Historical design document.** crust began life as the shell for a
+> Fedora-COSMIC-based distro concept, which is the framing below. The
+> project has since been repositioned as a pipeline-first devops toolkit
+> built on Bun — see `README.md` and `docs/USAGE.md` for current
+> positioning and behavior. Kept unedited because the pipeline architecture
+> decisions here still govern the code. References to `lariocpt`
+> name a defunct GitHub org.
+
 ## Context
 
 You want a Linux distro flavor called **Crust** built on the Fedora COSMIC spin, where the headline feature is a Bun-powered terminal shell (also called `crust`). Phase 1 is intentionally not a full ISO — it's a post-install layer distributed exactly like oh-my-zsh / Bun / Homebrew: a one-line `curl … | bash` installer that turns a vanilla Fedora COSMIC install (or any modern Linux/macOS) into a Crust system. The deliverable for phase 1 is the **shell itself + the installer**.
@@ -29,7 +37,7 @@ Crust is one shell, many jobs. All of these are one-liners in the Pipeline model
 | **Interactive shell** | `git status` / `ls -la \| grep .ts` | v0.1 |
 | **API testing** | `fixtures/*.json \| POST :3000/users \| expect 201` | v0.1 |
 | **Load / scale testing** | `range(0, 10000) \| parallel 100 \| GET :3000/health \| expect 200 \| stats` | v0.1 |
-| **Glob / log mining** | `**/*.log \| (l => l.includes('ERROR')) \| wc -l` | v0.1 |
+| **Glob / log mining** | `read **/*.log \| grep ERROR \| filter (l => l.includes('user=42'))` | v0.1 |
 | **Health monitoring loops** | `range(0, 100).parallel(() => fetch(url)) \| expect 200` | v0.1 |
 | **Image optimization** | `src/images/**/*.png \| optimize --quality=85 \| dest dist/images/` | v0.2 |
 | **Bundling / packaging** | `./src \| bundle \| dest dist/app.js` | v0.2 |

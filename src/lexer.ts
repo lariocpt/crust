@@ -115,6 +115,13 @@ export function classify(text: string): StageKind {
     return { kind: "assert", source: assertMatch[1]! };
   }
 
+  // `filter (l => ...)` — keeps items whose predicate is truthy. Without a
+  // lambda it falls through to shell, so a real /usr/bin/filter still works.
+  const filterMatch = t.match(/^filter\s+(\(.+)$/);
+  if (filterMatch) {
+    return { kind: "filter", source: filterMatch[1]! };
+  }
+
   // `capture NAME (r => r.id)` — lambda optional; a name that isn't a valid
   // env identifier falls through to shell like any other word.
   const captureMatch = t.match(/^capture\s+([A-Za-z_][A-Za-z0-9_]*)\s*(\(.+)?$/);

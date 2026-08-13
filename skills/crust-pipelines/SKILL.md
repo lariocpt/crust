@@ -1,11 +1,11 @@
 ---
 name: crust-pipelines
-description: Compose crust shell pipelines — sources (range, glob, read, tail, GET, load, procs, sql), transforms (TS lambdas, HTTP verbs, parallel), assertions (expect, assert), and request chaining with capture. Use when writing or debugging crust one-liners, `crust -c` scripts, or .pipes lines that mix HTTP, SQL, and processes.
+description: Compose crust pipelines — sources (range, glob, read, tail, GET, load, procs, sql), transforms (TS lambdas, filter, HTTP verbs, parallel), assertions (expect, assert), and request chaining with capture. Use when writing or debugging crust one-liners, `crust -c` scripts, .crust script files, or .pipes lines that mix HTTP, SQL, and processes.
 ---
 
 # crust pipelines
 
-crust is a Bun-powered shell where every command is a typed stream
+crust is a Bun-powered pipeline runner where every command is a typed stream
 (`Pipeline<T>`). Stages compose under `|`. Plain shell still works — a line
 whose stages are all ordinary commands is handed to `sh -c` untouched.
 
@@ -22,7 +22,8 @@ whose stages are all ordinary commands is handed to `sh -c` untouched.
 | `GET :3000/path` | HTTP. First stage: one `Response`. Mid-pipeline: per-item timed `{status, ms, url}` |
 | `POST/PUT/PATCH/DELETE url` | per-item request; upstream item = body (objects auto-JSON) |
 | `GET url --timeout 2s` | per-request timeout on any http stage (`ms`/`s`/`m`); timed paths yield `{status: 0, timedOut: true}`, plain verbs fail the pipeline; unknown `--flags` are errors |
-| `(x => x * 2)` | TypeScript lambda, per item, async ok |
+| `(x => x * 2)` | TypeScript lambda, per item, async ok — MAPS, never drops (falsy results are emitted as-is) |
+| `filter (l => l.ok)` | keeps items whose predicate is truthy; falsy (`0`, `""`, `null`…) drop; async ok; empty result passes |
 | `assert (r => r.ok)` | falsy FAILS the pipeline; empty upstream also fails |
 | `capture NAME (r => r.id)` | write value to `process.env.NAME` for later lines |
 | `expect 201` / `expect 2xx` | status assertion, counts mismatches, fails at drain |
@@ -70,8 +71,9 @@ GET $BASE/api/buildings/$BID -H "authorization: Bearer $TOKEN" | expect 200
 ## Verified one-liner patterns
 
 ```crust
-# log mining — read yields file CONTENTS (a bare glob would grep the paths)
-read **/*.log | grep ERROR | wc -l
+# log mining — read yields file CONTENTS (a bare glob would grep the paths);
+# after a shell stage like grep, items are LINES, so filter is per-line
+read **/*.log | grep ERROR | filter (l => !l.includes('healthcheck')) | wc -l
 
 # lambda + shell mixing — items cross as lines (objects as JSON)
 range(1, 5) | (n => n * n) | sort -rn
@@ -88,8 +90,12 @@ read fixtures/*.json | parallel 8 | POST :3000/users | expect 2xx
 
 ## Traps
 
-- `assert` fails on EMPTY upstream ("no items reached") — deliberate, it
-  closes the sql-returned-zero-rows silent pass. `expect` does not.
+- A plain lambda MAPS — `(l => l.includes('ERROR'))` emits `true`/`false`
+  per item, and `(x => cond ? x : null)` prints literal `null` lines. To
+  drop items, use `filter (l => l.includes('ERROR'))`.
+- `filter` passes an empty stream through silently; `assert` fails on EMPTY
+  upstream ("no items reached") — deliberate, it closes the
+  sql-returned-zero-rows silent pass. `expect` does not fail on empty either.
 - `parallel` streams results in COMPLETION order, not input order.
 - `parallel N` before anything except an http verb, lambda, or registered
   fn is a parse error; so is a trailing `parallel N`.
@@ -102,6 +108,8 @@ read fixtures/*.json | parallel 8 | POST :3000/users | expect 2xx
 
 ## Exit codes
 
-Any stage throw → `crust: <message>` on stderr, line exits 1. `crust -c`
-runs newline-separated lines and STOPS at the first non-zero — put warmup
-and cleanup on their own lines.
+Any stage throw → `crust: <message>` on stderr, line exits 1. `crust -c`,
+`crust file.crust`, and piped stdin all run newline-separated lines through
+the same fail-fast loop and STOP at the first non-zero — put warmup and
+cleanup on their own lines. Blank lines and `#` comments are skipped, so a
+`#!/usr/bin/env crust` shebang works in `.crust` files.

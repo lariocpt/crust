@@ -195,6 +195,27 @@ describe("capture classification", () => {
   });
 });
 
+describe("filter classification", () => {
+  test("filter with lambda", () => {
+    expect(classify("filter (l => l.ok)")).toEqual({
+      kind: "filter",
+      source: "(l => l.ok)",
+    });
+  });
+
+  test("pipe inside the lambda stays one stage", () => {
+    const tokens = tokenize('range(0,3) | filter (l => l.includes("|") || l.ok)');
+    expect(tokens.length).toBe(2);
+    expect(classify(tokens[1]!.text).kind).toBe("filter");
+  });
+
+  test("bare filter and filter-with-flags fall through to shell", () => {
+    expect(classify("filter").kind).toBe("shell");
+    expect(classify("filter --help").kind).toBe("shell");
+    expect(classify("filter -v foo").kind).toBe("shell");
+  });
+});
+
 describe("expect classification", () => {
   test("exact three-digit code", () => {
     expect(classify("expect 404")).toEqual({ kind: "expect", matcher: 404 });

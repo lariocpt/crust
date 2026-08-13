@@ -4,6 +4,23 @@ import { classify, tokenize } from "./lexer";
 import { parse } from "./parser";
 import type { Context } from "./types";
 
+// Run a block of lines — a script file, piped stdin, multi-line -c, or a
+// `source`d .crust file. Fail-fast: stop at the first failing line and
+// return ITS code. Blank lines and `#` comments are skipped, which also
+// covers a `#!/usr/bin/env crust` shebang on line 1.
+// (builtins.ts imports this while this module imports builtins.ts — the
+// cycle is call-time-only, so it's safe under ESM.)
+export async function runLines(source: string, ctx: Context): Promise<number> {
+  let last = 0;
+  for (const l of source.split("\n")) {
+    const trimmed = l.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    last = await runLine(l, ctx);
+    if (last !== 0) break;
+  }
+  return last;
+}
+
 export async function runLine(line: string, ctx: Context): Promise<number> {
   const trimmed = line.trim();
   if (!trimmed) return 0;

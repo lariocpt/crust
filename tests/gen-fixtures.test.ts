@@ -806,6 +806,73 @@ export function resolvePath(ctx, template) {
     expect(code).toBe(0);
     expect(existsSync(join(dir, "out8", "flows"))).toBe(false);
   });
+
+  test("a setup module without scopeParam fails loudly", async () => {
+    await writeFile(join(dir, "no-scope-setup.ts"), "export const JSON_HEADERS = {};\n");
+    await expect(
+      generateFixtures({
+        swagger: join(dir, "spec.json"),
+        out: join(dir, "out9"),
+        setup: join(dir, "no-scope-setup.ts"),
+        log: () => {},
+      }),
+    ).rejects.toThrow(/must export scopeParam/);
+  });
+
+  test("CLI prints the derivation hint when zero cases generate", async () => {
+    const bareSpec = {
+      openapi: "3.1.0",
+      info: { title: "bare", version: "1" },
+      paths: {
+        "/ping": {
+          get: {
+            tags: ["ping"],
+            responses: { "200": { description: "OK" } },
+          },
+        },
+      },
+    };
+    await writeFile(join(dir, "bare-spec.json"), JSON.stringify(bareSpec));
+    const { runCli } = await import("../src/genFixtures/cli");
+    const written: string[] = [];
+    const realWrite = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((chunk: string) => {
+      written.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write;
+    try {
+      const code = await runCli([
+        "--swagger",
+        join(dir, "bare-spec.json"),
+        "--out",
+        join(dir, "out10"),
+        "--setup",
+        join(dir, "setup.ts"),
+        "--no-flows",
+      ]);
+      expect(code).toBe(0);
+    } finally {
+      process.stdout.write = realWrite;
+    }
+    const out = written.join("");
+    expect(out).toContain("generated 0 cases");
+    expect(out).toContain("DOCUMENTED responses");
+    expect(out).toContain("examples/gen-setup.ts");
+  });
+
+  test("examples/gen-setup.ts satisfies the setup contract against a real spec", async () => {
+    // Staleness guard: the shipped example must keep generating cases —
+    // generation only reads scopeParam/scopeRoots, so its lazy fetch
+    // helpers never run here.
+    const result = await generateFixtures({
+      swagger: join(dir, "spec.json"),
+      out: join(dir, "out11"),
+      setup: `${import.meta.dir}/../examples/gen-setup.ts`,
+      flows: false,
+      log: () => {},
+    });
+    expect(result.totalCases).toBeGreaterThan(0);
+  });
 });
 
 describe("$ref dereferencing", () => {

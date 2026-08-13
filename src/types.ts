@@ -22,6 +22,7 @@ export type StageKind =
   | { kind: "procs"; source: string }
   | { kind: "json"; source: string }
   | { kind: "assert"; source: string }
+  | { kind: "filter"; source: string }
   | { kind: "capture"; name: string; source: string | null }
   | { kind: "readsrc"; pattern: string }
   | { kind: "parallel"; n: number }

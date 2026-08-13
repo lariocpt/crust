@@ -80,7 +80,7 @@ const unaliasBuiltin: Builtin = (rawArgs, ctx) => {
   return 0;
 };
 
-const sourceBuiltin: Builtin = async (rawArgs, _ctx) => {
+const sourceBuiltin: Builtin = async (rawArgs, ctx) => {
   const path = rawArgs.trim();
   if (!path) {
     process.stderr.write("source: missing file\n");
@@ -90,15 +90,15 @@ const sourceBuiltin: Builtin = async (rawArgs, _ctx) => {
     if (/\.(ts|js|mjs)$/.test(path)) {
       const resolved = path.startsWith("/") ? path : `${process.cwd()}/${path}`;
       await import(resolved);
-    } else {
-      const proc = Bun.spawn(["sh", path], {
-        stdio: ["inherit", "inherit", "inherit"],
-        env: { ...process.env },
-      });
-      await proc.exited;
-      return proc.exitCode ?? 0;
+      return 0;
     }
-    return 0;
+    // Anything else runs line-by-line through the crust parser with the
+    // SHARED ctx — aliases, exports, and captures persist in this session,
+    // which is what `source` means. (The old behavior handed the file to a
+    // `sh` subprocess, where nothing could persist anyway; to run a bash
+    // script, run it with sh.)
+    const { runLines } = await import("./runLine");
+    return await runLines(await Bun.file(path).text(), ctx);
   } catch (err) {
     process.stderr.write(`source: ${(err as Error).message}\n`);
     return 1;

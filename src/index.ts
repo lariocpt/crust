@@ -5,17 +5,19 @@ import { type CrustGlobal, loadConfig } from "./config";
 import { readLine } from "./editor";
 import { appendHistory, loadHistory } from "./history";
 import { defaultPrompt } from "./prompt";
-import { runLine } from "./runLine";
+import { runLine, runLines } from "./runLine";
 import type { Context } from "./types";
 
 interface UserCrustGlobals {
   prompt?: (cwd: string, git: string | null, ctx?: Context) => string;
 }
 
-const USAGE = `crust ${pkg.version}
+const USAGE = `crust ${pkg.version} — pipeline-first devops toolkit on Bun
 usage:
   crust                    start interactive REPL
+  crust <file.crust>       run a script file and exit
   crust -c <line>          run one line and exit
+  cmd | crust              run lines piped on stdin and exit
   crust -h | --help        show this help
   crust -V | --version     show version
 
@@ -45,6 +47,20 @@ function newContext(history: string[]): Context {
   return ctx;
 }
 
+async function bootstrapCtx(history: string[] = []): Promise<Context> {
+  const ctx = newContext(history);
+  await loadConfig(ctx, process.env.CRUST_CONFIG);
+  const userCrust = (globalThis as { crust?: CrustGlobal }).crust;
+  if (userCrust?.onBeforeStart) {
+    try {
+      await userCrust.onBeforeStart();
+    } catch (err) {
+      process.stderr.write(`crust: onBeforeStart error: ${(err as Error).message}\n`);
+    }
+  }
+  return ctx;
+}
+
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
 
@@ -63,44 +79,44 @@ async function main(): Promise<void> {
         process.stderr.write("crust: -c requires an argument\n");
         process.exit(2);
       }
-      const ctx = newContext([]);
-      await loadConfig(ctx, process.env.CRUST_CONFIG);
-      const userCrust = (globalThis as { crust?: CrustGlobal }).crust;
-      if (userCrust?.onBeforeStart) {
-        try {
-          await userCrust.onBeforeStart();
-        } catch (err) {
-          process.stderr.write(`crust: onBeforeStart error: ${(err as Error).message}\n`);
-        }
-      }
-      const source = argv[1]!;
-      const lines = source.split("\n");
+      const ctx = await bootstrapCtx();
       // Fail fast: stop at the first failing line and exit with ITS code —
       // previously a later success masked an earlier failure.
-      let last = 0;
-      for (const l of lines) {
-        if (!l.trim()) continue;
-        last = await runLine(l, ctx);
-        if (last !== 0) break;
-      }
-      await shutdown(last);
+      await shutdown(await runLines(argv[1]!, ctx));
     }
-    process.stderr.write(`crust: unsupported argument: ${flag}\n`);
-    process.exit(2);
-  }
-
-  const ctx = newContext(await loadHistory());
-
-  await loadConfig(ctx, process.env.CRUST_CONFIG);
-
-  const userCrust = (globalThis as { crust?: CrustGlobal }).crust;
-  if (userCrust?.onBeforeStart) {
+    if (flag.startsWith("-")) {
+      process.stderr.write(`crust: unsupported argument: ${flag}\n`);
+      process.exit(2);
+    }
+    // Script mode: `crust file.crust`. Positional args are not supported —
+    // rejecting (not ignoring) them keeps `crust deploy.crust prod` from
+    // silently doing nothing prod-related, and surfaces shebang operands.
+    if (argv.length > 1) {
+      process.stderr.write(`crust: script arguments are not supported — got "${argv[1]}"\n`);
+      process.exit(2);
+    }
+    let source: string;
     try {
-      await userCrust.onBeforeStart();
+      source = await Bun.file(flag).text();
     } catch (err) {
-      process.stderr.write(`crust: onBeforeStart error: ${(err as Error).message}\n`);
+      process.stderr.write(`crust: cannot read ${flag}: ${(err as Error).message}\n`);
+      process.exit(127);
     }
+    const ctx = await bootstrapCtx();
+    await shutdown(await runLines(source, ctx));
   }
+
+  if (!process.stdin.isTTY) {
+    // Piped stdin: `echo 'range(1,3)' | crust`. Read to EOF FIRST, then run —
+    // pure-shell lines inherit fd 0, so draining the pipe up front means
+    // child sh processes see EOF instead of eating script text. The editor
+    // never installs its stdin listener on this path.
+    const source = await Bun.stdin.text();
+    const ctx = await bootstrapCtx();
+    await shutdown(await runLines(source, ctx));
+  }
+
+  const ctx = await bootstrapCtx(await loadHistory());
 
   while (true) {
     const uc = (globalThis as { crust?: UserCrustGlobals }).crust;

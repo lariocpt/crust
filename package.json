@@ -1,7 +1,25 @@
 {
   "name": "crust",
-  "version": "0.1.0-dev",
-  "description": "A Bun-powered shell with first-class pipelines and devops primitives",
+  "version": "0.2.0-dev",
+  "description": "Pipeline-first devops toolkit built on Bun: OpenAPI mock server, fixture & load testing, process orchestration, link checking — one stream model, one binary",
+  "license": "MIT",
+  "author": "Lario Borges",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lariocpt/crust.git"
+  },
+  "homepage": "https://github.com/lariocpt/crust#readme",
+  "bugs": "https://github.com/lariocpt/crust/issues",
+  "keywords": [
+    "bun",
+    "devops",
+    "pipeline",
+    "load-testing",
+    "mock-server",
+    "openapi",
+    "testing",
+    "cli"
+  ],
   "type": "module",
   "bin": {
     "crust": "./bin/crust"

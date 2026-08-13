@@ -1,10 +1,14 @@
 # crust
 
-A Bun-powered shell with first-class pipelines and devops primitives. Globs, HTTP verbs, parallel workers, and TypeScript lambdas all compose under a single `|` / `.pipe()` abstraction.
+A pipeline-first devops toolkit built on Bun, shipped as one binary. A
+spec-driven OpenAPI mock server, fixture and load-test runners, a process
+orchestrator, and a link checker — every tool composes on the same
+`|` / `.pipe()` stream, driven from an interactive REPL, a `crust -c`
+one-liner, or a `.crust` script.
 
-Battle-tested by dogfooding against a real 97-operation API (a production API):
-406 fixtures, spec-driven mocking for two clients, and the load pipelines
-below — all run through the released binary.
+Battle-tested by dogfooding against a real 97-operation production API:
+406 generated fixtures, spec-driven mocking for two client apps, and the
+load pipelines below — all run through the released binary.
 
 ## Install
 
@@ -35,14 +39,15 @@ read fixtures/*.json | POST :3000/users | expect 201
 test-pipes --target smoke.pipes --bail
 
 # Generate the negative-test matrix (401/403/404 + per-field 400s) from a spec
+# (copy examples/gen-setup.ts as your starting --setup module)
 gen-fixtures --swagger ./openapi.json --out tests/gen --setup ./tests/gen-setup.ts
 test-fixture --target 'tests/gen/*.gen.crust.ts' --threads 8
 
 # Load testing
 range(0, 10000) | parallel 100 | GET :3000/health | expect 200 | stats
 
-# Log mining
-**/*.log | (l => l.includes('ERROR')) | wc -l
+# Log mining — grep splits files into lines, filter applies the TS predicate
+read **/*.log | grep ERROR | filter (l => !l.includes('healthcheck')) | wc -l
 
 # One dev tail — merge every dev process, auto-restart the flaky one
 procs({web: "bun run dev", api: {cmd: "bun api.ts", restart: true}}) | (l => `[${l.proc}] ${l.line}`)
@@ -56,6 +61,13 @@ turns any fixture into a stress run with p50/p95/p99 reports —
 serves an OpenAPI spec example-first so clients run without their backend;
 `--stateful` makes it remember what you POST.
 
+## What crust is not
+
+Not a login shell and not a bash replacement — plain shell lines are
+delegated to `sh -c` untouched; there is no job control (`Ctrl-Z`,
+`fg`/`bg`) and plain `FOO=x` assignments don't persist (use `export` or
+`capture`). The full list lives in [Limits](docs/USAGE.md#limits-in-v01).
+
 ## Docs
 
 - [docs/USAGE.md](docs/USAGE.md) — user-facing reference: sources, transforms, sinks, builtins, editor keybindings, `init.ts` configuration, examples, limits.
@@ -67,5 +79,5 @@ serves an OpenAPI spec example-first so clients run without their backend;
 ```bash
 bun install
 bun test          # red/green TDD harness
-bun src/index.ts  # try the shell
+bun src/index.ts  # try the REPL
 ```

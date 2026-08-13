@@ -393,6 +393,32 @@ export function captureEnv<T>(
   );
 }
 
+// `filter (l => ...)` — keep items whose predicate is truthy (plain JS
+// truthiness: 0, "", null, undefined, false are dropped). Async predicates
+// are awaited. An empty upstream (or an empty result) passes silently —
+// filter is selection, not assertion; `assert` is the stage that fails on
+// empty.
+export function filterStage<T>(fn: (x: T) => unknown, sourceText?: string): PipelineStage<T, T> {
+  const src = sourceText ? ` in ${sourceText}` : "";
+  return pipelineStage<T, T>((input) =>
+    Pipeline.of(
+      (async function* () {
+        let count = 0;
+        for await (const item of input.lines()) {
+          count++;
+          let keep: unknown;
+          try {
+            keep = await fn(item);
+          } catch (err) {
+            throw new Error(`filter: item ${count} threw${src} — ${(err as Error).message}`);
+          }
+          if (keep) yield item;
+        }
+      })(),
+    ),
+  );
+}
+
 interface StatsAcc {
   latencies: number[];
   status: Record<string, number>;

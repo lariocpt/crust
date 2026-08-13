@@ -1,9 +1,13 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 
 const ENTRY = `${import.meta.dir}/../src/index.ts`;
 
-async function runCli(args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
+async function runCli(
+  args: string[],
+  stdin?: string,
+): Promise<{ code: number; stdout: string; stderr: string }> {
   const proc = Bun.spawn(["bun", ENTRY, ...args], {
+    stdin: stdin === undefined ? "ignore" : Buffer.from(stdin),
     stdout: "pipe",
     stderr: "pipe",
     env: {
@@ -88,6 +92,12 @@ describe("crust CLI", () => {
     expect(r.code).toBe(4);
   });
 
+  test("-c skips # comments and runs filter stages", async () => {
+    const r = await runCli(["-c", "# a comment\nrange(1,6) | filter (n => n % 2 === 0)"]);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toBe("2\n4\n6\n");
+  });
+
   test("-c 'tail <path>' streams the last N lines through the pipeline", async () => {
     const { mkdtemp, writeFile, rm } = await import("node:fs/promises");
     const { tmpdir } = await import("node:os");
@@ -138,5 +148,74 @@ describe("crust CLI", () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("script files and piped stdin", () => {
+  const { mkdtempSync, writeFileSync, rmSync } = require("node:fs") as typeof import("node:fs");
+  const { tmpdir } = require("node:os") as typeof import("node:os");
+  const { join } = require("node:path") as typeof import("node:path");
+
+  const dir = mkdtempSync(join(tmpdir(), "crust-cli-script-"));
+  const script = join(dir, "demo.crust");
+  writeFileSync(
+    script,
+    "#!/usr/bin/env crust\n# comment line\n\nrange(1,6) | filter (n => n % 2 === 0)\necho done\n",
+  );
+  const failing = join(dir, "failing.crust");
+  writeFileSync(failing, "true\nexit 4\necho never\n");
+  const session = join(dir, "session.crust");
+  writeFileSync(session, "export CRUST_SRC_TEST=hello\n");
+
+  afterAll(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("runs a script file: shebang and comments skipped, fail-fast exit 0", async () => {
+    const r = await runCli([script]);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toBe("2\n4\n6\ndone\n");
+  });
+
+  test("script fail-fast: exits with the failing line's code, later lines skipped", async () => {
+    const r = await runCli([failing]);
+    expect(r.code).toBe(4);
+    expect(r.stdout).not.toContain("never");
+  });
+
+  test("nonexistent script exits 127 naming the path", async () => {
+    const r = await runCli([join(dir, "nope.crust")]);
+    expect(r.code).toBe(127);
+    expect(r.stderr).toContain("nope.crust");
+  });
+
+  test("script arguments are rejected with exit 2", async () => {
+    const r = await runCli([script, "prod"]);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toContain("not supported");
+  });
+
+  test("piped stdin runs lines and exits 0 — no prompt bytes on stdout", async () => {
+    const r = await runCli([], "range(1,3) | filter (n => n > 1)\n");
+    expect(r.code).toBe(0);
+    expect(r.stdout).toBe("2\n3\n");
+  });
+
+  test("piped stdin fail-fast propagates the exit code", async () => {
+    const r = await runCli([], "false\necho never\n");
+    expect(r.code).not.toBe(0);
+    expect(r.stdout).not.toContain("never");
+  });
+
+  test("empty piped stdin exits 0 with no output — the cron/CI case", async () => {
+    const r = await runCli([], "");
+    expect(r.code).toBe(0);
+    expect(r.stdout).toBe("");
+  });
+
+  test("source runs a .crust file in the shared session", async () => {
+    const r = await runCli(["-c", `source ${session}\necho $CRUST_SRC_TEST`]);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toBe("hello\n");
   });
 });

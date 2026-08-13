@@ -1,14 +1,14 @@
 # crust — usage
 
-A Bun-powered shell with first-class pipelines. Shell commands, TypeScript lambdas, HTTP verbs, globs, and parallel workers all compose under one `|` / `.pipe()` model. v0.1.
+A pipeline-first devops toolkit built on Bun. Shell commands, TypeScript lambdas, HTTP verbs, globs, and parallel workers all compose under one `|` / `.pipe()` model; the mock server, fixture runners, and load pipelines are builtins on that same stream. v0.2.
 
-**Mental model:** crust is effectively an inline JavaScript global-scope script runner in Bun, shell-flavoured. Every line you type runs in a Bun context where `Pipeline`, `range`, `GET`/`POST`, `parallel`, `$` (Bun.$), and anything you registered in `~/.config/crust/init.ts` are globals. Shell commands and TS lambdas are equal citizens; both are stages on the same pipeline.
+**Mental model:** every crust line is an inline JavaScript global-scope script run in Bun. Whether it arrives from the REPL, `crust -c`, piped stdin, or a `.crust` file, the line runs in a Bun context where `Pipeline`, `range`, `GET`/`POST`, `parallel`, `$` (Bun.$), and anything you registered in `~/.config/crust/init.ts` are globals. Shell commands and TS lambdas are equal citizens; both are stages on the same pipeline.
 
 ## Contents
 
 - [Install](#install)
 - [Hello world](#hello-world)
-- [One-liner mode](#one-liner-mode)
+- [One-liners, scripts, and stdin](#one-liners-scripts-and-stdin)
 - [The Pipeline model](#the-pipeline-model)
 - [Shell-line syntax](#shell-line-syntax)
 - [CI gates: thresholds, baselines, exit codes](#ci-gates-thresholds-baselines-exit-codes)
@@ -29,29 +29,21 @@ A Bun-powered shell with first-class pipelines. Shell commands, TypeScript lambd
 
 ## Install
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/lariocpt/crust/main/install.sh | bash
-```
-
-The installer puts crust in `~/.crust/`, installs Bun if missing, copies a starter config to `~/.config/crust/init.ts`, and (with sudo) registers `~/.crust/bin/crust` in `/etc/shells`.
-
-Then launch:
+crust is published to the LAN artifact plane. Either channel resolves the
+same prebuilt binary and verifies its sha256:
 
 ```bash
-~/.crust/bin/crust
+curl -fsSL https://apps.in.drlario.org/install.sh | bash -s -- crust
+npm i -g crust --registry https://npm.in.drlario.org
 ```
 
-Or set it as your terminal's shell. In COSMIC Terminal: **Settings → Profiles → Command → `~/.crust/bin/crust`**.
+Then launch `crust` for the REPL — or skip straight to
+[one-liners and scripts](#one-liners-scripts-and-stdin) and call it from bash/zsh/fish; crust is
+not a login shell and doesn't want to be one.
 
-To make it your login shell:
+## One-liners, scripts, and stdin
 
-```bash
-chsh -s ~/.crust/bin/crust
-```
-
-## One-liner mode
-
-Crust is designed to be useful even if you don't make it your daily shell. Call it from bash/zsh/fish for the one-liners where its pipeline syntax wins:
+Crust is designed to be called from bash/zsh/fish for the one-liners where its pipeline syntax wins — and the same fail-fast runner powers `.crust` script files and piped stdin:
 
 ```bash
 crust -c 'range(0,99) | parallel 20 | GET :3000/health | expect 200 | stats'
@@ -63,8 +55,10 @@ crust -c 'src/**/*.ts | wc -l'
 
 | Flag | Effect |
 |---|---|
-| `crust` | Interactive REPL (default). |
-| `crust -c <line>` | Run one line and exit. Multi-line strings split on `\n` and are **fail-fast**: crust stops at the first failing line and exits with *its* code (previously a later success masked an earlier failure). |
+| `crust` | Interactive REPL (default, when stdin is a TTY). |
+| `crust <file.crust>` | Run a script file and exit. Blank lines and `#` comments are skipped (so a `#!/usr/bin/env crust` shebang works), and execution is **fail-fast**: crust stops at the first failing line and exits with *its* code. Positional script arguments are not supported — extra arguments are rejected (exit 2). An unreadable file exits 127. |
+| `cmd \| crust` | With stdin piped, crust reads it to EOF and runs the lines exactly like a script file — same comment handling, same fail-fast exit codes. Because stdin is drained up front, shell stages inside the script see EOF on their stdin. |
+| `crust -c <line>` | Run one line and exit. Multi-line strings split on `\n`, skip blanks and `#` comments, and are **fail-fast**: crust stops at the first failing line and exits with *its* code (previously a later success masked an earlier failure). |
 | `crust -h`, `--help` | Show usage. |
 | `crust -V`, `--version` | Show version. |
 
@@ -93,7 +87,7 @@ Every command in crust produces a stream — a `Pipeline<T>`. Stages compose und
 | Role | What it does | Examples |
 |---|---|---|
 | **Source** | Produces a stream | `ls`, `range(0,9)`, `**/*.ts`, `GET <url>` |
-| **Transform** | Stream-in, stream-out | shell command, `(x => …)`, `POST <url>` |
+| **Transform** | Stream-in, stream-out | shell command, `(x => …)`, `filter (x => …)`, `POST <url>` |
 | **Sink** | Stream-in, value-out | stdout (default), `write`, `dest` |
 
 The shell parser classifies each `|`-separated stage by looking at its first token:
@@ -108,6 +102,7 @@ The shell parser classifies each `|`-separated stage by looking at its first tok
 | Starts with `tail <path>` (with optional `-F` / `-n N`) | Native `tail` source |
 | Starts with `(` and contains `=>` | TypeScript lambda |
 | Starts with `assert (` | Assert stage — falsy or empty upstream fails the pipeline |
+| Starts with `filter (` | Filter stage — keeps items whose predicate is truthy; falsy items (`0`, `""`, `null`…) are dropped, async predicates awaited, an empty result passes silently |
 | Matches `capture NAME [(fn)]` | Capture stage — writes `process.env.NAME` for later lines |
 | Matches `expect NNN` or `expect Nxx` | Expect stage — status equality or class (`2xx`…`5xx`) |
 | Matches `stats [--every N] [--out f.json]` | Stats stage (unknown flags fall through to shell) |
@@ -235,13 +230,25 @@ ignores SIGTERM can't wedge the shutdown or the restart loop.
 
 ```bash
 … | grep TODO                              # any shell command
-… | (line => line.toUpperCase())           # TS lambda
+… | (line => line.toUpperCase())           # TS lambda (maps every item)
+… | filter (line => line.includes('ERR'))  # keep items whose predicate is truthy
 … | tr '[:lower:]' '[:upper:]'             # standard pipes work
 … | POST :3000/users                       # per-item HTTP POST (body = item)
 … | DELETE :3000/users/:id                 # per-item DELETE
 … | GET :3000/health                       # per-item timed GET (item = trigger)
 … | POST $BASE/api/things -H "authorization: Bearer $TOKEN"   # headers + env vars
 ```
+
+Three lambda-shaped stages, three different jobs — pick by what a falsy
+result should mean:
+
+| Stage | Falsy result means | Empty upstream |
+|---|---|---|
+| `(x => …)` | nothing special — the value is emitted as-is (a plain lambda **maps**, it never drops) | passes |
+| `filter (x => …)` | the item is **dropped** (plain JS truthiness: `0`, `""`, `null`, `undefined` all drop) | passes |
+| `assert (x => …)` | the **pipeline fails** naming the item | **fails** |
+
+Async predicates are awaited in all three.
 
 `GET` as a transform fires one request per upstream item and yields
 `{ status, ms, url }` timing records (bodies are drained, not kept) — pair it
@@ -297,11 +304,11 @@ load 60s 25/s | parallel 25 | GET :3000/health | stats --every 5
   `status` didn't match the code or class (`2xx` = 200–299). Items with no
   numeric `status` count as mismatches.
 - `assert (x => expr)` — per-item predicate; a **falsy** result fails the
-  pipeline naming the item. Unlike a plain lambda (which maps), and unlike
-  `expect`, an **empty upstream also fails** ("no items reached") — the
-  sql-returned-zero-rows silent pass is exactly the trap this closes. Async
-  predicates are awaited, so `assert (async s => …)` can read files or hit
-  the DB.
+  pipeline naming the item. Unlike a plain lambda (which maps), unlike
+  `filter` (which drops), and unlike `expect`, an **empty upstream also
+  fails** ("no items reached") — the sql-returned-zero-rows silent pass is
+  exactly the trap this closes. Async predicates are awaited, so
+  `assert (async s => …)` can read files or hit the DB.
 - `capture NAME (fn)` — runs `fn` on each item and writes the result to
   `process.env.NAME` (last item wins; omit the lambda to capture the item
   itself — objects are JSON-stringified). Items pass through unchanged.
@@ -430,7 +437,7 @@ export FOO=bar    # set env var
 alias g=git       # define alias (also: alias g='git status')
 alias             # list aliases
 unalias g
-source <file>     # .sh runs in sh; .ts/.js dynamically imported
+source <file>     # .ts/.js imported; anything else runs line-by-line in this session
 history           # list this session's lines
 exit [code]
 help
@@ -615,7 +622,7 @@ The TS-test ecosystem owns the name `expect`. Crust exports the API name as `exp
 | `export KEY=value` | Sets `process.env[KEY]`. Multiple `KEY=value` pairs accepted. Bare `export` lists. |
 | `alias name='cmd'` | Adds an alias. Bare `alias` lists. Quotes optional. Expansion: first word only. |
 | `unalias name` | Removes an alias. |
-| `source file` | `.sh` files run via `sh`; `.ts`/`.js` dynamically imported. |
+| `source file` | `.ts`/`.js`/`.mjs` dynamically imported; anything else (`.crust`) runs line-by-line through the crust parser **in this session** — aliases, `export`s, and `capture`s persist. To run a bash script, run it with `sh` instead. |
 | `history` | Numbered list of this session's lines. Persistent at `~/.local/share/crust/history`. |
 | `dotenv [--config p] [--append]` | Loads `.env` files into the session. Tracks history, supports `dotenv status` and `dotenv clear`. See [dotenv](#dotenv). |
 | `test-fixture --target g [--out p] [--threads N] [--count N] [--timeout ms] [--bail]` | Runs `.crust.ts` HTTP fixtures. See [test-fixture](#test-fixture). |
@@ -903,6 +910,17 @@ every app-specific detail and must export:
   it has a different name (`/api/buildings/{id}`).
 - `JSON_HEADERS: Record<string, string>` — plain unauthenticated JSON
   headers, used for role `"none"`.
+
+A complete runnable module to copy lives at
+[`examples/gen-setup.ts`](../examples/gen-setup.ts).
+
+**If you get `generated 0 cases`:** derivation keys off **documented
+responses**, not `securitySchemes` — 401 needs a documented `401` whose
+description says the caller is not authenticated ("not authenticated" /
+"log in"; a login endpoint's bad-credentials 401 deliberately doesn't
+count), 403 needs `scopeParam` plus a documented `403`, 404 needs non-scope
+path params plus a documented `404`, and the 400 matrix needs a JSON
+request-body schema plus a documented `400`.
 
 Exit codes: `0` generated, `1` generation error (including a setup module
 missing `scopeParam`), `2` bad args.
@@ -1345,10 +1363,13 @@ const summary = await load([{ durMs: 10_000, rps: 100 }])
 
 ```bash
 read **/*.log | grep ERROR | wc -l
+read **/*.log | grep ERROR | filter (l => !l.includes('healthcheck')) | wc -l
 ```
 
 (`read` streams file **contents** into `grep` — a bare `**/*.log` glob
-yields *paths*, so `grep` would match against the filenames and count 0.)
+yields *paths*, so `grep` would match against the filenames and count 0.
+After a shell stage like `grep`, items are individual lines, which is what
+makes the `filter` predicate per-line.)
 
 ### Build artifacts (using a globally-installed bundler via init.ts)
 
@@ -1374,7 +1395,16 @@ echo src/index.ts | bundle
 Honest about what doesn't work yet:
 
 - **No job control.** No `Ctrl-Z`, no `fg`/`bg`, no `&` background jobs.
-- **No multi-line input / heredocs.**
+- **No multi-line input / heredocs** in the REPL editor.
+- **Plain `FOO=x` assignments don't persist** across lines — each shell line
+  is its own `sh -c`. Use `export FOO=x` (builtin) or `capture`.
+- **No positional script arguments.** `crust file.crust prod` is rejected —
+  there is no `$1`/`$@` plumbing yet; parameterize via environment variables.
+- **Shell stages see EOF on stdin** in script/piped mode (stdin is drained
+  before the first line runs).
+- **`source` doesn't run bash scripts.** Non-`.ts`/`.js` files are parsed as
+  crust lines; multi-line bash constructs (`if`/`fi`, loops) won't survive
+  line-by-line execution — run those with `sh file.sh`.
 - **No `$(...)` substitution across stages.** Within a single shell stage it works (delegated to `sh`).
 - **No `|>` operator and no `[0..9]` range literal.** Need a Bun loader; v0.2.
 - **No syntax highlighting in the editor.** v0.1.5.

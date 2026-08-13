@@ -16,7 +16,8 @@ detected), runnable by test-pipes. --no-flows suppresses it.
 The --setup module carries the app-specific part (auth, scope substitution).
 Required exports: shared(), headersFor(ctx, role), resolvePath(ctx, template),
 scopeParam, JSON_HEADERS; optional scopeRoots. See the contract doc at the
-top of src/genFixtures/generate.ts.
+top of src/genFixtures/generate.ts, and examples/gen-setup.ts in the crust
+repo for a complete runnable module to copy.
 `;
 
 export async function runCli(args: string[]): Promise<number> {
@@ -53,6 +54,17 @@ export async function runCli(args: string[]): Promise<number> {
     process.stdout.write(
       `generated ${result.totalCases} cases across ${result.files.length} files -> ${result.outDir}\n`,
     );
+    if (result.totalCases === 0) {
+      process.stdout.write(
+        "hint: cases derive from DOCUMENTED responses, not securitySchemes — " +
+          "401 needs a documented 401 whose description says the caller is not " +
+          'authenticated ("not authenticated" / "log in"), 403 needs scopeParam ' +
+          "plus a documented 403, 404 needs non-scope path params plus a " +
+          "documented 404, and the 400 matrix needs a JSON request-body schema " +
+          "plus a documented 400. See docs/USAGE.md §gen-fixtures and " +
+          "examples/gen-setup.ts.\n",
+      );
+    }
     if (result.flowFile) {
       process.stdout.write(`generated ${result.flowCount} CRUD flows -> ${result.flowFile}\n`);
     } else if (flows) {

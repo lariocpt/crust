@@ -150,6 +150,7 @@ function buildSource(kind: StageKind, ctx?: Context): Pipeline<unknown> {
     case "expect":
     case "stats":
     case "assert":
+    case "filter":
     case "capture":
       throw new Error(`${kind.kind} cannot be a source — needs upstream items`);
     case "time":
@@ -252,6 +253,10 @@ function applyStage(
         })(),
       );
     }
+    case "filter":
+      return input.pipe(
+        transforms.filterStage(evalLambda(kind.source), kind.source) as never,
+      ) as Pipeline<unknown>;
     case "stats":
       return input.pipe(
         transforms.statsStage(kind.everySec, kind.out ? expandEnv(kind.out) : undefined) as never,

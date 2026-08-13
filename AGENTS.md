@@ -1,7 +1,8 @@
 # crust — agent guide
 
-A Bun-powered shell, compiled to a single binary. TypeScript, `bun:test`,
-Biome, husky + lint-staged.
+A pipeline-first devops toolkit with an interactive REPL and `.crust` script
+runner, compiled to a single Bun binary. TypeScript, `bun:test`, Biome,
+husky + lint-staged.
 
 ## Architecture (read these before touching the pipeline)
 

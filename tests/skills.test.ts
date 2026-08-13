@@ -39,6 +39,7 @@ describe("embedded skills", () => {
     "load",
     "read",
     "assert",
+    "filter",
     "GET",
     "POST",
     "PUT",

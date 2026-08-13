@@ -42,8 +42,11 @@ procs({ db: {cmd: "docker compose up pg", ready: "port:5432"}, api: {cmd: "bun a
 ## Log mining on the merged stream
 
 ```crust
-procs({api: "bun api.ts", worker: "bun worker.ts"}) | (l => { try { return JSON.parse(l.line) } catch { return { level: 30, msg: l.line, proc: l.proc } } }) | (e => e.level >= 40 ? "WARN+ " + (e.msg ?? "") : null)
+procs({api: "bun api.ts", worker: "bun worker.ts"}) | (l => { try { return JSON.parse(l.line) } catch { return { level: 30, msg: l.line, proc: l.proc } } }) | filter (e => e.level >= 40) | (e => "WARN+ " + (e.msg ?? ""))
 ```
+
+(`filter` drops the sub-WARN entries; a plain lambda with `: null` would
+print a literal `null` line for every one of them.)
 
 Objects printed to stdout are JSON lines — pipe the whole thing into
 `pino-pretty` via a shell stage, or count errors with `grep`/`wc`.
