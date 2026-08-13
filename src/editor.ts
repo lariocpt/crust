@@ -9,20 +9,33 @@ const queue: string[] = [];
 let pendingResolve: ((s: string | null) => void) | null = null;
 let stdinClosed = false;
 let listening = false;
+let interruptWatcher: (() => void) | null = null;
+
+// Exported for tests — the raw-mode data path with no tty attached.
+export function handleStdinData(chunk: Buffer | string): void {
+  const str = typeof chunk === "string" ? chunk : chunk.toString("utf8");
+  if (pendingResolve) {
+    const r = pendingResolve;
+    pendingResolve = null;
+    r(str);
+    return;
+  }
+  // No readLine pending — a line is RUNNING. Raw mode stays on, so Ctrl-C
+  // arrives here as byte 0x03 instead of a SIGINT. With a watcher armed
+  // that byte means "cancel": drop the typeahead queue AND this chunk (the
+  // user is cancelling, not typing) and fire once per chunk.
+  if (interruptWatcher && str.includes("\x03")) {
+    queue.length = 0;
+    interruptWatcher();
+    return;
+  }
+  queue.push(str);
+}
 
 function ensureListening(): void {
   if (listening) return;
   listening = true;
-  process.stdin.on("data", (chunk: Buffer | string) => {
-    const str = typeof chunk === "string" ? chunk : chunk.toString("utf8");
-    if (pendingResolve) {
-      const r = pendingResolve;
-      pendingResolve = null;
-      r(str);
-    } else {
-      queue.push(str);
-    }
-  });
+  process.stdin.on("data", handleStdinData);
   process.stdin.on("end", () => {
     stdinClosed = true;
     if (pendingResolve) {
@@ -31,6 +44,31 @@ function ensureListening(): void {
       r(null);
     }
   });
+}
+
+// Watch for Ctrl-C while a line runs. Single slot — the REPL is sequential,
+// so the latest register wins (the logs session deliberately overrides
+// runLine's watcher this way). Returns a dispose that only clears the slot
+// if it still holds THIS callback.
+export function onInterrupt(cb: () => void): () => void {
+  ensureListening();
+  const prev = interruptWatcher;
+  interruptWatcher = cb;
+  return () => {
+    if (interruptWatcher === cb) interruptWatcher = prev;
+  };
+}
+
+// Hand the terminal to an inherit-stdio child: cooked mode + paused editor
+// so the child sees line-buffered input and the tty delivers real signals
+// (Ctrl-C → SIGINT to the foreground process group). Returns the restore.
+export function suspendEditor(): () => void {
+  process.stdin.setRawMode?.(false);
+  process.stdin.pause();
+  return () => {
+    process.stdin.setRawMode?.(true);
+    process.stdin.resume();
+  };
 }
 
 function getChunk(): Promise<string | null> {

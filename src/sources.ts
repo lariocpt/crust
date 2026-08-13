@@ -1,5 +1,6 @@
 import { stat } from "node:fs/promises";
 import { file, Glob } from "bun";
+import { interruptPromise, isInterrupted } from "./interrupt";
 import { Pipeline } from "./pipeline";
 import { awaitReady, formatReadyTarget, parseReadyTarget, type ReadyTarget } from "./readiness";
 import { HttpTimeoutError, isTimeoutError, labelBodyTimeout } from "./transforms";
@@ -218,7 +219,10 @@ async function* tailOne(
   if (!follow) return;
 
   while (true) {
-    await Bun.sleep(pollMs);
+    // Race the poll sleep against the REPL interrupt bus: a queued
+    // `.return()` can't wake a parked generator, so Ctrl-C must.
+    await Promise.race([Bun.sleep(pollMs), interruptPromise()]);
+    if (isInterrupted()) return;
     let s: Awaited<ReturnType<typeof stat>>;
     try {
       s = await stat(path);

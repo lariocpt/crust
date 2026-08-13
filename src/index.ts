@@ -2,7 +2,7 @@
 import pkg from "../package.json" with { type: "json" };
 import { renderBuiltinList } from "./builtins";
 import { type CrustGlobal, loadConfig } from "./config";
-import { readLine } from "./editor";
+import { onInterrupt, readLine, suspendEditor } from "./editor";
 import { appendHistory, loadHistory } from "./history";
 import { defaultPrompt } from "./prompt";
 import { runLine, runLines } from "./runLine";
@@ -140,7 +140,7 @@ async function main(): Promise<void> {
 
     if (!line.trim()) continue;
     await appendHistory(line, ctx.history);
-    await runLine(line, ctx);
+    await runLine(line, ctx, { onInterrupt, suspend: suspendEditor });
   }
 }
 

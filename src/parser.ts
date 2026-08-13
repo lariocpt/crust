@@ -6,6 +6,7 @@
 
 import { expandEnv, splitArgs } from "./args";
 import { formatItem } from "./format";
+import { registerChild } from "./interrupt";
 import { classify, tokenize } from "./lexer";
 import { Pipeline } from "./pipeline";
 import * as sources from "./sources";
@@ -312,18 +313,26 @@ function shellSource(cmd: string): Pipeline<unknown> {
         // Live env so `capture`d $VARs from earlier lines reach sh.
         env: { ...process.env },
       });
-      const decoder = new TextDecoder();
-      let buf = "";
-      // @ts-expect-error — Bun.spawn returns a ReadableStream on stdout
-      for await (const chunk of proc.stdout as ReadableStream<Uint8Array>) {
-        buf += decoder.decode(chunk, { stream: true });
-        const lines = buf.split("\n");
-        buf = lines.pop() ?? "";
-        for (const line of lines) yield line;
+      // REPL Ctrl-C kills the child through the bus; the finally kill also
+      // reaps it when a downstream stage stops iterating early.
+      const unregister = registerChild(() => proc.kill());
+      try {
+        const decoder = new TextDecoder();
+        let buf = "";
+        // @ts-expect-error — Bun.spawn returns a ReadableStream on stdout
+        for await (const chunk of proc.stdout as ReadableStream<Uint8Array>) {
+          buf += decoder.decode(chunk, { stream: true });
+          const lines = buf.split("\n");
+          buf = lines.pop() ?? "";
+          for (const line of lines) yield line;
+        }
+        buf += decoder.decode();
+        if (buf) yield buf;
+        await proc.exited;
+      } finally {
+        unregister();
+        proc.kill();
       }
-      buf += decoder.decode();
-      if (buf) yield buf;
-      await proc.exited;
     })(),
   );
 }
@@ -338,28 +347,36 @@ function shellTransform(input: Pipeline<unknown>, cmd: string): Pipeline<unknown
         // Live env so `capture`d $VARs from earlier lines reach sh.
         env: { ...process.env },
       });
+      const unregister = registerChild(() => proc.kill());
+      try {
+        const writePromise = (async () => {
+          const writer = proc.stdin as FileSink;
+          for await (const item of input.lines()) {
+            writer.write(formatItem(item) + "\n");
+          }
+          await writer.end();
+        })();
+        // An early exit (Ctrl-C, downstream break) can kill the child while
+        // the writer is mid-stream — that rejection is the cancellation.
+        writePromise.catch(() => {});
 
-      const writePromise = (async () => {
-        const writer = proc.stdin as FileSink;
-        for await (const item of input.lines()) {
-          writer.write(formatItem(item) + "\n");
+        const decoder = new TextDecoder();
+        let buf = "";
+        // @ts-expect-error — Bun.spawn returns a ReadableStream on stdout
+        for await (const chunk of proc.stdout as ReadableStream<Uint8Array>) {
+          buf += decoder.decode(chunk, { stream: true });
+          const lines = buf.split("\n");
+          buf = lines.pop() ?? "";
+          for (const line of lines) yield line;
         }
-        await writer.end();
-      })();
-
-      const decoder = new TextDecoder();
-      let buf = "";
-      // @ts-expect-error — Bun.spawn returns a ReadableStream on stdout
-      for await (const chunk of proc.stdout as ReadableStream<Uint8Array>) {
-        buf += decoder.decode(chunk, { stream: true });
-        const lines = buf.split("\n");
-        buf = lines.pop() ?? "";
-        for (const line of lines) yield line;
+        buf += decoder.decode();
+        if (buf) yield buf;
+        await proc.exited;
+        await writePromise;
+      } finally {
+        unregister();
+        proc.kill();
       }
-      buf += decoder.decode();
-      if (buf) yield buf;
-      await proc.exited;
-      await writePromise;
     })(),
   );
 }
