@@ -16,7 +16,9 @@ whose stages are all ordinary commands is handed to `sh -c` untouched.
 | `range(0, 9)` | numbers 0..9 inclusive, one item each |
 | `**/*.ts` | glob source — file paths |
 | `read fixtures/*.json` | whole-file contents, one item per file (sorted; zero matches = error) |
-| `tail -F app.log` | native tail source (`-n N`, `-F` follow) |
+| `tail -F app.log` | native tail source (`-n N`, `-F` follow); the `-n N` cut is a bounded backward read, safe on huge files |
+| `stdin` (alias `-`) | piped-stdin source, one item per line — `docker logs -f X \| crust -c 'stdin \| …'`. Source position only. Bare `cmd \| crust` treats stdin as a SCRIPT, so data pipes need `-c` |
+| `grep ERROR` mid-pipeline | native line-buffered grep (`-i`/`-v`/`-F`, ONE pattern) — follow streams don't stall on grep's 4KB pipe buffer. Combined/unknown flags, two positionals, any `$`, `\`, or `[[:` = exact system grep via sh; first-stage grep = file grep via sh |
 | `load 30s 100/s` | paced load ticks (see the crust-load-testing skill) |
 | `{"name": "x"}` | JSON-literal source — ONE parsed item (the request body). Invalid JSON is a hard error |
 | `GET :3000/path` | HTTP. First stage: one `Response`. Mid-pipeline: per-item timed `{status, ms, url}` |
@@ -86,7 +88,19 @@ sql "SELECT count(*)::int AS c FROM users WHERE email = $1" "a@b.c" | assert (r 
 
 # fan out any per-item work
 read fixtures/*.json | parallel 8 | POST :3000/users | expect 2xx
+
+# follow a log live — native grep emits each match immediately
+tail -n 0 -F app.log | grep ERROR
+
+# any command's output as a source (run under `crust -c`, data piped in)
+stdin | (l => JSON.parse(l)) | filter (e => e.level >= 40) | (e => e.msg)
 ```
+
+To ITERATE on filters over one held live stream, use the `logs` builtin
+(`logs tail -n 0 -F app.log`, `logs procs({…})`, `logs docker logs -f c`):
+every line typed at its prompt is a fragment like the ones above, run over
+a buffer of the recent past and then live; Ctrl-C once ends the view and
+flushes terminal stages (bare `stats` prints there), `exit` leaves.
 
 ## Traps
 
@@ -101,8 +115,12 @@ read fixtures/*.json | parallel 8 | POST :3000/users | expect 2xx
   fn is a parse error; so is a trailing `parallel N`.
 - A glob source yields PATHS; `read <glob>` yields file CONTENTS. `POST`ing
   a glob posts path strings.
-- Builtins (`test-pipes`, `mock-server`, …) cannot be piped — a builtin line
-  must contain no `|`.
+- Builtins (`test-pipes`, `mock-server`, `logs`, …) cannot be piped — a
+  builtin line must contain no `|`.
+- Native grep patterns are JS regexes: quoted `'a|b'` ALTERNATES (ERE)
+  where BRE grep matched the literal — use `grep -F 'a|b'` for the literal.
+- `stdin` is single-shot per process: inside a bare `cmd | crust` script it
+  errors (the pipe was already consumed as the script itself).
 - In `… | expect 200 | stats`, a failing expect throws at drain BEFORE stats
   emits — gate status inside a stats assert instead if you need the summary.
 

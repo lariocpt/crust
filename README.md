@@ -49,6 +49,14 @@ range(0, 10000) | parallel 100 | GET :3000/health | expect 200 | stats
 # Log mining — grep splits files into lines, filter applies the TS predicate
 read **/*.log | grep ERROR | filter (l => !l.includes('healthcheck')) | wc -l
 
+# Any command's output as a source — and native grep keeps follow streams live
+docker logs -f my-app | crust -c 'stdin | (l => JSON.parse(l)) | filter (e => e.level >= 40)'
+tail -n 0 -F app.log | grep ERROR
+
+# Interactive log search — hold one live stream, iterate on filters against
+# its buffered past + live future (every query is ordinary pipeline grammar)
+logs docker logs -f my-app
+
 # One dev tail — merge every dev process, auto-restart the flaky one
 procs({web: "bun run dev", api: {cmd: "bun api.ts", restart: true}}) | (l => `[${l.proc}] ${l.line}`)
 ```
@@ -64,9 +72,10 @@ serves an OpenAPI spec example-first so clients run without their backend;
 ## What crust is not
 
 Not a login shell and not a bash replacement — plain shell lines are
-delegated to `sh -c` untouched; there is no job control (`Ctrl-Z`,
-`fg`/`bg`) and plain `FOO=x` assignments don't persist (use `export` or
-`capture`). The full list lives in [Limits](docs/USAGE.md#limits-in-v01).
+delegated to `sh -c` untouched; `Ctrl-C` cancels the running line but there
+is no `Ctrl-Z`/`fg`/`bg`/`&` job control, and plain `FOO=x` assignments
+don't persist (use `export` or `capture`). The full list lives in
+[Limits](docs/USAGE.md#limits-in-v01).
 
 ## Docs
 

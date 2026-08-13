@@ -45,6 +45,8 @@ describe("embedded skills", () => {
     "PUT",
     "PATCH",
     "DELETE",
+    "stdin",
+    "grep",
   ]);
 
   test("every fenced crust example line classifies against the live grammar", () => {

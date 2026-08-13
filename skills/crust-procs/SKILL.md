@@ -51,6 +51,13 @@ print a literal `null` line for every one of them.)
 Objects printed to stdout are JSON lines — pipe the whole thing into
 `pino-pretty` via a shell stage, or count errors with `grep`/`wc`.
 
+To iterate on these filters WITHOUT restarting the dev stack, hold it in a
+`logs` session instead: `logs procs({api: "bun api.ts", worker: "bun
+worker.ts"})` keeps the group running and buffers its recent output; each
+line you type (`filter (l => l.proc === "api")`, `(l => l.line) | grep -i
+error`) runs over the buffer, then live until Ctrl-C. Items stay `{proc,
+line, ts}` objects. `exit`/Ctrl-D tears the group down (SIGTERM→SIGKILL).
+
 ## wait — readiness as a one-liner (CI's friend)
 
 ```crust
@@ -70,7 +77,8 @@ in CI), and `.pipes` files. Env-expanded args work:
 
 - procs is source-only (first stage) and spec keys must be unique names.
 - The merged stream never ends while a `restart: true` child keeps
-  respawning — consume it with `for await`/pipe and stop with Ctrl-C, or
-  bound it with a downstream condition.
+  respawning — consume it with `for await`/pipe, bound it with a downstream
+  condition, or stop it with Ctrl-C: at the REPL that cancels the running
+  line and tears the whole process group down (SIGTERM, then SIGKILL).
 - `FORCE_COLOR=0` is forced on children so lines stay parseable.
 - Redirecting `procs(...) > file` writes each item as its JSON line.

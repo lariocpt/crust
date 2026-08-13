@@ -20,6 +20,7 @@ A pipeline-first devops toolkit built on Bun. Shell commands, TypeScript lambdas
 - [gen-fixtures](#gen-fixtures)
 - [mock-server](#mock-server)
 - [verify-web-links](#verify-web-links)
+- [logs — interactive log searching](#logs--interactive-log-searching)
 - [Editor keybindings](#editor-keybindings)
 - [Configuration (`init.ts`)](#configuration-initts)
 - [Examples](#examples)
@@ -57,7 +58,7 @@ crust -c 'src/**/*.ts | wc -l'
 |---|---|
 | `crust` | Interactive REPL (default, when stdin is a TTY). |
 | `crust <file.crust>` | Run a script file and exit. Blank lines and `#` comments are skipped (so a `#!/usr/bin/env crust` shebang works), and execution is **fail-fast**: crust stops at the first failing line and exits with *its* code. Positional script arguments are not supported — extra arguments are rejected (exit 2). An unreadable file exits 127. |
-| `cmd \| crust` | With stdin piped, crust reads it to EOF and runs the lines exactly like a script file — same comment handling, same fail-fast exit codes. Because stdin is drained up front, shell stages inside the script see EOF on their stdin. |
+| `cmd \| crust` | With stdin piped, crust reads it to EOF and runs the lines exactly like a script file — same comment handling, same fail-fast exit codes. Because stdin is drained up front, shell stages inside the script see EOF on their stdin. Piping **data** (not a program) is the [`stdin` source](#reading-piped-stdin-stdin-source)'s job: `docker logs -f app \| crust -c 'stdin \| grep ERROR'`. |
 | `crust -c <line>` | Run one line and exit. Multi-line strings split on `\n`, skip blanks and `#` comments, and are **fail-fast**: crust stops at the first failing line and exits with *its* code (previously a later success masked an earlier failure). |
 | `crust -h`, `--help` | Show usage. |
 | `crust -V`, `--version` | Show version. |
@@ -136,6 +137,7 @@ read fixtures/*.json              # whole-file contents, one item per file
 procs({web: "bun run dev", api: "bun api.ts"})   # merge long-lived processes
 load 30s 100/s                    # paced ticks: 100/s for 30s (load runs)
 load 10s 50/s, 30s 200/s          # ramp: comma-separated phases, one stream
+stdin                             # piped stdin, line by line (alias: -)
 ```
 
 `read <path|glob>` yields each matched file's **entire contents** as one item
@@ -182,7 +184,10 @@ smoke-load and soak tooling, not a distributed load rig.
 `procs({name: "command", …})` spawns each command and streams
 `{ proc, stream, line }` for every stdout/stderr line (plus an `exit`
 marker), merged as lines arrive — the "one dev tail" source. Children are
-killed when the pipeline ends or crust gets SIGINT/SIGTERM.
+killed when the pipeline ends or crust gets SIGINT/SIGTERM — and at the
+REPL, `Ctrl-C` on a running `procs` line delivers exactly that: the whole
+process group is torn down (SIGTERM, then SIGKILL for stragglers) and the
+prompt comes back.
 
 A spec value can also be an object — `{cmd, env?, restart?, ready?, after?}`:
 
@@ -249,6 +254,31 @@ result should mean:
 | `assert (x => …)` | the **pipeline fails** naming the item | **fails** |
 
 Async predicates are awaited in all three.
+
+**`grep` mid-pipeline is native and line-buffered.** GNU grep block-buffers
+~4KB when writing into a pipe, which used to stall `tail -F app.log | grep
+ERROR` until enough matches accumulated. The safe subset now runs as a
+native stage that emits each match immediately:
+
+```bash
+tail -F app.log | grep ERROR               # streams matches as they happen
+range(1, 20) | (n => `item-${n}`) | grep 'item-1[0-9]'
+… | grep -i error                          # case-insensitive
+… | grep -v healthcheck                    # invert
+… | grep -F "a.b"                          # fixed string, no regex
+```
+
+Native handles `-i`, `-v`, `-F`, `-E` (a no-op — JS regexes are ERE-shaped)
+with exactly **one** pattern argument, matching against the same formatted
+text a shell grep would have received. Everything else keeps exact `grep`
+semantics via `sh`: bare `grep`, combined or unknown flags (`-iv`, `-c`,
+`--color`), two positionals (that's a file grep), any `$` in the stage (env
+expansion is sh's job), backslash escapes, POSIX classes (`[[:digit:]]`),
+and patterns JS's regex engine rejects (`*.log`). Pure shell lines
+(`ps aux | grep node`) and first-stage grep (`grep ERROR app.log`) always
+use the system binary, byte-for-byte. One divergence to know: a quoted
+`'a|b'` pattern alternates (ERE) where plain BRE grep matched the literal
+`a|b` — write `grep -F 'a|b'` for the literal.
 
 `GET` as a transform fires one request per upstream item and yields
 `{ status, ms, url }` timing records (bodies are drained, not kept) — pair it
@@ -427,7 +457,34 @@ With multiple inputs, each file is tracked independently — every file gets its
 
 Unrecognized flags (`-c`, `--pid`, etc.) fall back to the system `tail` via shell, so `tail -c 200 app.log` and `tail --help` still work as expected. Bare `tail` with no path also falls through to shell.
 
+The initial `-n N` cut is a **bounded read**: crust scans backward from the
+end of the file in 64KB blocks to find where the last-N-lines window starts
+and reads only that window — `tail -n 10` on a multi-GB log reads a few KB,
+and `tail -n 0 -F` reads nothing at all before following.
+
 Polling interval is 200ms by default. From the TS API: `tail(paths, { lines, follow, pollMs })` where `paths` is a string or string[] (globs expanded automatically) — see [TypeScript API](#typescript-api).
+
+### Reading piped stdin (`stdin` source)
+
+`stdin` (alias `-`) in source position streams whatever is piped into crust,
+line by line — the bridge between any Unix command and the pipeline grammar:
+
+```bash
+docker logs -f my-app | crust -c 'stdin | grep ERROR'
+docker logs -f my-app | crust -c 'stdin | (l => JSON.parse(l)) | filter (e => e.level >= 40) | (e => e.msg)'
+journalctl -f -o json | crust -c 'stdin | (l => JSON.parse(l)) | filter (e => e.PRIORITY <= 3) | (e => e.MESSAGE)'
+kubectl get pods -o name | crust -c 'stdin | (p => p.replace("pod/", ""))'
+```
+
+A trailing line without a final newline is still emitted. `stdin` is only a
+source — mid-pipeline it errors.
+
+**The bare-pipe trap:** `cmd | crust` (no `-c`, no script file) treats piped
+stdin as **lines to run** — it reads to EOF first, so `docker logs -f app |
+crust` would sit forever consuming an endless "script". When the pipe
+carries *data*, pass the program via `-c` (or a script file) as above; crust
+detects the already-drained pipe and says so instead of hanging. On a TTY
+with nothing piped, `stdin` errors immediately.
 
 ### Builtins
 
@@ -630,6 +687,7 @@ The TS-test ecosystem owns the name `expect`. Crust exports the API name as `exp
 | `gen-fixtures --swagger s --out d --setup m [--no-flows]` | Generates negative-case `.crust.ts` fixtures and CRUD flow `.pipes` suites from an OpenAPI spec. See [gen-fixtures](#gen-fixtures). |
 | `mock-server --swagger <url-or-path> [--port N] [--host addr] [--stateful] [--state <path\|url>] [--seed <file>] [--validate] [--proxy <upstream>]` | Boots a `Bun.serve` instance that mocks every operation in an OpenAPI 3.x spec; `--stateful` adds a CRUD layer, `--state` persists it to sqlite/postgres, `--seed` inserts boot data, `--validate` rejects spec-violating requests with 422, `--proxy` turns it into a validation proxy in front of a real upstream. See [mock-server](#mock-server). |
 | `skills <list\|install> [--global] [--force]` | Claude agent skills shipped in the binary. See [Agent skills](#agent-skills). |
+| `logs [--buffer N] <source>` | Interactive log searcher: holds a `tail -F`/`procs(...)`/shell-command stream, buffers the last N items, and every typed line is a pipeline fragment run over the buffer then live. See [logs](#logs--interactive-log-searching). |
 | `exit [code]` | Exits crust with optional code (default 0). |
 | `help` | Lists builtins. |
 
@@ -1177,6 +1235,56 @@ verify-web-links --base-url https://example.com --fixtures site/*.meta.crust.ts
 
 Exit codes: `0` all clear, `1` verification failures (broken links, missing anchors, redirect chains, OG image issues, meta mismatches), `2` bad args / unreachable sitemap.
 
+### logs — interactive log searching
+
+`logs` holds a live source open and buffers its recent past, so you can
+**iterate on filters without restarting the tail**. Each line typed at the
+`logs>` prompt is an ordinary pipeline fragment — the whole shell grammar is
+the query language — run first over the buffered history (retro), then over
+the live stream until Ctrl-C:
+
+```bash
+logs tail -n 0 -F app.log            # follow a file (globs work too)
+logs procs({web: "bun run dev", api: "bun api.ts"})   # hold a process group
+logs docker logs -f my-container     # any shell command's stdout
+logs --buffer 50000 tail -F big.log  # deeper history (default 10k, cap 1M)
+```
+
+A session:
+
+```
+logs> grep ERROR                     # matches from the buffer, then live ones
+-- live --
+^C
+logs> (l => JSON.parse(l)) | filter (e => e.level >= 40) | stats --every 5
+-- live --
+^C
+logs> buffer
+buffer: 4211/10000 items (pushed 4211, evicted 0)
+logs> exit
+```
+
+Rules of the road:
+
+- **A fragment runs twice** — once over the buffer snapshot, once over the
+  live stream — so side-effecting stages fire twice: append with `>>`, not
+  `>`, and know that a `POST` fragment re-sends buffered matches.
+- **Ctrl-C once** ends the live view *gracefully*: the stream finishes, so
+  terminal stages flush — a query ending in bare `stats` prints its summary
+  exactly then. **Ctrl-C twice** hard-cancels a stuck query. The session
+  survives both; `exit` or Ctrl-D tears down the held source (procs get the
+  SIGTERM→SIGKILL escalation).
+- The live view is a bounded queue (1024): if a query can't keep up, the
+  oldest pending items are dropped and the drop count is **reported**.
+- Query errors print and re-prompt; they never kill the session or the
+  held source. `clear` empties the buffer; `buffer` shows usage; `help`
+  lists everything.
+- `procs` items are `{proc, line, ts}` **objects** — `(l => l.line)`
+  extracts text, `filter (l => l.proc === "web")` selects a stream.
+- The `logs` line itself takes no pipes or redirections (put a complex
+  command in a script); interactive-only — with piped stdin use
+  `cmd | crust -c 'stdin | …'` instead (exit 2 points you there).
+
 ### Built-in functions
 
 Crust ships a small set of `crust.fn`-registered helpers. They work as both pipeline stages (`echo … | base64`) and one-shot sources (`base64 hello`). User-defined `crust.fn(...)` calls in `init.ts` override these by name.
@@ -1231,7 +1339,7 @@ The line editor runs in raw mode (TTY-only). Reading from a pipe also works — 
 | `Ctrl-U` | Delete to start of line |
 | `Ctrl-K` | Delete to end of line |
 | `Ctrl-L` | Clear screen |
-| `Ctrl-C` | Cancel line, fresh prompt |
+| `Ctrl-C` | At the prompt: clear the line, fresh prompt. **While a line runs: cancel it** — the pipeline/builtin stops (exit 130), children are killed, the prompt returns. In a `logs` session: end the live view (once = graceful flush, twice = hard cancel). |
 | `Ctrl-D` | EOF — exit if line is empty |
 | `Tab` | Complete `$PATH` command at start-of-stage, file path elsewhere |
 | `Enter` | Submit line |
@@ -1284,8 +1392,10 @@ crust.onExit = async (code) => {
 // Register handlers for OS signals. Multiple handlers per signal are allowed
 // and all fire in registration order. The process.on listener is only
 // installed on first registration for that signal, so signals you don't opt
-// into keep their default disposition (notably: Ctrl-C in the REPL still
-// goes through the editor as before).
+// into keep their default disposition. Note on SIGINT: at the REPL prompt
+// Ctrl-C stays inside the editor (no signal), but Ctrl-C while a line RUNS
+// fires an in-process SIGINT as part of cancelling it — a registered
+// SIGINT handler will observe those cancellations.
 crust.onSignal("SIGUSR1", () => {
   console.error("reloading config…");
 });
@@ -1362,14 +1472,24 @@ const summary = await load([{ durMs: 10_000, rps: 100 }])
 ### Log mining
 
 ```bash
+# On-disk sweep: read streams file CONTENTS (a bare **/*.log glob yields
+# PATHS — grep would match filenames and count 0).
 read **/*.log | grep ERROR | wc -l
 read **/*.log | grep ERROR | filter (l => !l.includes('healthcheck')) | wc -l
+
+# Live: native grep is line-buffered, so follow streams don't stall.
+tail -F app.log | grep ERROR
+
+# Anything that writes to a pipe becomes a source via stdin:
+docker logs -f my-app | crust -c 'stdin | (l => JSON.parse(l)) | filter (e => e.level >= 40) | (e => e.msg)'
+
+# Iterating on filters? Hold the stream once, query it repeatedly:
+logs docker logs -f my-app        # then: grep ERROR / filter (…) / stats --every 5
 ```
 
-(`read` streams file **contents** into `grep` — a bare `**/*.log` glob
-yields *paths*, so `grep` would match against the filenames and count 0.
 After a shell stage like `grep`, items are individual lines, which is what
-makes the `filter` predicate per-line.)
+makes the `filter` predicate per-line. See [logs](#logs--interactive-log-searching)
+for the interactive session.
 
 ### Build artifacts (using a globally-installed bundler via init.ts)
 
@@ -1394,7 +1514,10 @@ echo src/index.ts | bundle
 
 Honest about what doesn't work yet:
 
-- **No job control.** No `Ctrl-Z`, no `fg`/`bg`, no `&` background jobs.
+- **Partial job control.** `Ctrl-C` cancels the running line at the REPL
+  (pipelines, builtins, and inherit-stdio shell children all stop; exit
+  130), but there is no `Ctrl-Z` suspend — pressing it suspends crust
+  *together with* its child — and no `fg`/`bg`/`&` background jobs.
 - **No multi-line input / heredocs** in the REPL editor.
 - **Plain `FOO=x` assignments don't persist** across lines — each shell line
   is its own `sh -c`. Use `export FOO=x` (builtin) or `capture`.
