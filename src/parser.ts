@@ -126,6 +126,10 @@ function buildSource(kind: StageKind, ctx?: Context): Pipeline<unknown> {
       throw new Error(`${kind.verb} cannot be a source — needs upstream items`);
     case "shell":
       return shellSource(kind.text);
+    case "grep":
+      // Source-position grep is a FILE grep (`grep ERROR app.log` reads no
+      // stdin) — always the system binary, byte-for-byte.
+      return shellSource(kind.raw);
     case "json": {
       // One item: the parsed JSON literal (env vars expanded first, so
       // {"token":"$TOKEN"} works in shorthand fixtures).
@@ -257,6 +261,8 @@ function applyStage(
       return input.pipe(
         transforms.filterStage(evalLambda(kind.source), kind.source) as never,
       ) as Pipeline<unknown>;
+    case "grep":
+      return input.pipe(transforms.grepStage(kind) as never) as Pipeline<unknown>;
     case "stats":
       return input.pipe(
         transforms.statsStage(kind.everySec, kind.out ? expandEnv(kind.out) : undefined) as never,

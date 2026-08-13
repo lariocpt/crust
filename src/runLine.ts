@@ -49,7 +49,10 @@ export async function runLine(line: string, ctx: Context): Promise<number> {
     const tokens = tokenize(expanded);
     const isPureShell = tokens.every((t) => {
       const kind = classify(t.text);
-      if (kind.kind !== "shell") return false;
+      // grep counts as shell here: a pure shell line (`ps aux | grep node`)
+      // must keep inherit-stdio `sh -c` byte-for-byte. The native stage only
+      // engages mid-pipeline in MIXED pipelines — where block-buffering bites.
+      if (kind.kind !== "shell" && kind.kind !== "grep") return false;
       const h = t.text.trim().split(/\s+/)[0]!;
       return !ctx.functions.has(h);
     });

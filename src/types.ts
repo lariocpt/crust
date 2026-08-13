@@ -23,6 +23,15 @@ export type StageKind =
   | { kind: "json"; source: string }
   | { kind: "assert"; source: string }
   | { kind: "filter"; source: string }
+  | {
+      kind: "grep";
+      /** untouched stage text — the shell escape hatch for source position */
+      raw: string;
+      pattern: string;
+      ignoreCase: boolean;
+      invert: boolean;
+      fixed: boolean;
+    }
   | { kind: "capture"; name: string; source: string | null }
   | { kind: "readsrc"; pattern: string }
   | { kind: "parallel"; n: number }

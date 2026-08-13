@@ -203,7 +203,56 @@ export function classify(text: string): StageKind {
   const tailKind = classifyTail(t);
   if (tailKind) return tailKind;
 
+  const grepKind = classifyGrep(t);
+  if (grepKind) return grepKind;
+
   return { kind: "shell", text: t };
+}
+
+// Recognize the safe subset of `grep` and route it to a native line-buffered
+// stage — GNU grep block-buffers ~4KB when its stdout is a pipe, which stalls
+// `tail -F | grep ERROR` follow streams indefinitely. Native = flags -i/-v/-F
+// (-E is a no-op: JS regexes are ERE-shaped) and exactly ONE pattern arg.
+// Everything else falls back to sh so file-grep, combined flags, env
+// expansion ($PAT), BRE escapes, and POSIX classes keep their exact grep
+// semantics. `raw` carries the untouched stage text for those fallbacks and
+// for source position (a first-stage grep is a file grep — always shell).
+function classifyGrep(t: string): StageKind | null {
+  if (!/^grep\s+\S/.test(t)) return null;
+  // sh expands $VARs in shell stages; the native stage doesn't. Any dollar
+  // anywhere in the stage keeps it on the shell path.
+  if (t.includes("$")) return null;
+
+  const parts = splitArgs(t);
+  let ignoreCase = false;
+  let invert = false;
+  let fixed = false;
+  let ere = false;
+  const positionals: string[] = [];
+  for (let i = 1; i < parts.length; i++) {
+    const p = parts[i]!;
+    if (p === "-i") ignoreCase = true;
+    else if (p === "-v") invert = true;
+    else if (p === "-F") fixed = true;
+    else if (p === "-E") ere = true;
+    else if (p.startsWith("-"))
+      return null; // unknown/combined flag → sh
+    else positionals.push(p);
+  }
+  if (positionals.length !== 1) return null; // 2+ positionals = file grep
+  if (fixed && ere) return null; // grep errors on -F -E; let it
+  const pattern = positionals[0]!;
+  if (!fixed) {
+    // Regex dialects diverge exactly where escapes and POSIX classes live —
+    // don't reinterpret those, and never native-compile what JS rejects.
+    if (pattern.includes("\\") || pattern.includes("[[:")) return null;
+    try {
+      new RegExp(pattern);
+    } catch {
+      return null;
+    }
+  }
+  return { kind: "grep", raw: t, pattern, ignoreCase, invert, fixed };
 }
 
 // `stats [--every N[s]] [--out file.json]` — null on any unknown flag so the

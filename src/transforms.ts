@@ -1,4 +1,36 @@
+import { formatItem } from "./format";
 import { Pipeline, type PipelineStage, pipelineStage } from "./pipeline";
+
+// Native `grep` over pipeline items — line-buffered where sh grep block-
+// buffers into a pipe. Matches against formatItem(item) (exactly the bytes
+// sh-grep would have received on stdin) and yields the FORMATTED string, so
+// downstream stages see the same shape either way. No `g` flag: grep is a
+// per-line boolean, and a sticky lastIndex would make it stateful.
+export function grepStage(opts: {
+  pattern: string;
+  ignoreCase: boolean;
+  invert: boolean;
+  fixed: boolean;
+}): PipelineStage<unknown, string> {
+  let test: (line: string) => boolean;
+  if (opts.fixed) {
+    const needle = opts.ignoreCase ? opts.pattern.toLowerCase() : opts.pattern;
+    test = (line) => (opts.ignoreCase ? line.toLowerCase() : line).includes(needle);
+  } else {
+    const re = new RegExp(opts.pattern, opts.ignoreCase ? "i" : "");
+    test = (line) => re.test(line);
+  }
+  return pipelineStage<unknown, string>((input) =>
+    Pipeline.of(
+      (async function* () {
+        for await (const item of input.lines()) {
+          const line = formatItem(item);
+          if (test(line) !== opts.invert) yield line;
+        }
+      })(),
+    ),
+  );
+}
 
 // True when an error came from an AbortSignal.timeout firing.
 export function isTimeoutError(err: unknown): boolean {
