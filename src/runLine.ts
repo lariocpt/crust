@@ -5,6 +5,15 @@ import { classify, tokenize } from "./lexer";
 import { parse } from "./parser";
 import type { Context } from "./types";
 
+// Write with honest backpressure: Bun's stdout.write returns false when the
+// pipe buffer is full and queues the rest — exiting at that moment truncates
+// output (observed: a 4MB item cut to 64KB). Awaiting "drain" after every
+// false return keeps the queue empty, so process.exit can never eat output.
+function writeStdout(s: string): Promise<void> | undefined {
+  if (process.stdout.write(s)) return undefined;
+  return new Promise((res) => process.stdout.once("drain", () => res()));
+}
+
 // REPL terminal hooks, passed only by the interactive loop. Scripts, -c and
 // piped stdin never construct one, so those paths are structurally unchanged.
 export interface ReplTty {
@@ -117,7 +126,8 @@ export async function runLine(line: string, ctx: Context, tty?: ReplTty): Promis
         const drain = (async () => {
           let res = await gen.next();
           while (!res.done) {
-            process.stdout.write(formatItem(res.value) + "\n");
+            const w = writeStdout(`${formatItem(res.value)}\n`);
+            if (w) await w;
             res = await gen.next();
           }
         })();
@@ -139,7 +149,8 @@ export async function runLine(line: string, ctx: Context, tty?: ReplTty): Promis
     } else {
       const pipeline = parse(expanded)(ctx);
       for await (const item of pipeline.lines()) {
-        process.stdout.write(formatItem(item) + "\n");
+        const w = writeStdout(`${formatItem(item)}\n`);
+        if (w) await w;
       }
       return 0;
     }

@@ -219,3 +219,19 @@ describe("script files and piped stdin", () => {
     expect(r.stdout).toBe("hello\n");
   });
 });
+
+test("items larger than the pipe buffer are not truncated on exit", async () => {
+  const { mkdtemp, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const dir = await mkdtemp(join(tmpdir(), "crust-flush-"));
+  try {
+    const big = join(dir, "one-line.txt");
+    await Bun.write(big, "x".repeat(1_000_000)); // single line, no newline
+    const r = await runCli(["-c", `read ${big}`]);
+    expect(r.code).toBe(0);
+    expect(r.stdout.length).toBe(1_000_001); // content + trailing \n
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
