@@ -34,6 +34,7 @@ export type StageKind =
     }
   | { kind: "capture"; name: string; source: string | null }
   | { kind: "readsrc"; pattern: string }
+  | { kind: "stdin" }
   | { kind: "parallel"; n: number }
   | { kind: "expect"; matcher: number | string }
   | { kind: "stats"; everySec?: number; out?: string }

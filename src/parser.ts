@@ -138,6 +138,8 @@ function buildSource(kind: StageKind, ctx?: Context): Pipeline<unknown> {
     }
     case "readsrc":
       return sources.readAll(kind.pattern) as Pipeline<unknown>;
+    case "stdin":
+      return sources.stdin() as Pipeline<unknown>;
     case "load":
       return sources.load(kind.phases) as Pipeline<unknown>;
     case "procs": {
@@ -274,6 +276,7 @@ function applyStage(
     case "parallel":
     case "json":
     case "readsrc":
+    case "stdin":
     case "load":
       throw new Error(`${kind.kind} cannot appear as a non-first stage`);
     case "time":

@@ -134,6 +134,13 @@ export function classify(text: string): StageKind {
     return { kind: "readsrc", pattern: readMatch[1]!.trim() };
   }
 
+  // `stdin` (or the tail/cat-style `-`) streams piped stdin line by line —
+  // `docker logs -f app | crust -c 'stdin | grep ERROR'`. Bare words only;
+  // `stdin foo` still shells out.
+  if (t === "stdin" || t === "-") {
+    return { kind: "stdin" };
+  }
+
   if (t.startsWith("(") && t.includes("=>")) {
     return { kind: "lambda", source: t };
   }

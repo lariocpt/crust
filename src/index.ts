@@ -6,6 +6,7 @@ import { readLine } from "./editor";
 import { appendHistory, loadHistory } from "./history";
 import { defaultPrompt } from "./prompt";
 import { runLine, runLines } from "./runLine";
+import { markStdinConsumed } from "./sources";
 import type { Context } from "./types";
 
 interface UserCrustGlobals {
@@ -111,6 +112,7 @@ async function main(): Promise<void> {
     // pure-shell lines inherit fd 0, so draining the pipe up front means
     // child sh processes see EOF instead of eating script text. The editor
     // never installs its stdin listener on this path.
+    markStdinConsumed("the script (bare `cmd | crust` treats piped stdin as lines to RUN)");
     const source = await Bun.stdin.text();
     const ctx = await bootstrapCtx();
     await shutdown(await runLines(source, ctx));

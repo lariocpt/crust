@@ -4,6 +4,41 @@ import { Pipeline } from "./pipeline";
 import { awaitReady, formatReadyTarget, parseReadyTarget, type ReadyTarget } from "./readiness";
 import { HttpTimeoutError, isTimeoutError, labelBodyTimeout } from "./transforms";
 
+// Set when index.ts consumes stdin as a SCRIPT (the bare `cmd | crust`
+// form reads the pipe to EOF before running a line) so a `stdin |` stage in
+// that script gets a targeted error instead of hanging on a drained pipe.
+let stdinConsumedBy: string | null = null;
+export function markStdinConsumed(reason: string): void {
+  stdinConsumedBy = reason;
+}
+
+export function stdin(): Pipeline<string> {
+  return Pipeline.of(
+    (async function* () {
+      if (process.stdin.isTTY) {
+        throw new Error(
+          "stdin: nothing is piped — this source reads a pipe, e.g. `docker logs -f app | crust -c 'stdin | grep ERROR'`",
+        );
+      }
+      if (stdinConsumedBy) {
+        throw new Error(
+          `stdin: already read to EOF as ${stdinConsumedBy} — pipe the DATA in and pass the program via -c or a script file: \`cmd | crust -c 'stdin | …'\``,
+        );
+      }
+      const decoder = new TextDecoder();
+      let buf = "";
+      for await (const chunk of Bun.stdin.stream()) {
+        buf += decoder.decode(chunk as Uint8Array, { stream: true });
+        const lines = buf.split("\n");
+        buf = lines.pop() ?? "";
+        for (const line of lines) yield line;
+      }
+      buf += decoder.decode();
+      if (buf) yield buf;
+    })(),
+  );
+}
+
 export function range(start: number, end: number): Pipeline<number> {
   return Pipeline.of(
     (async function* () {
