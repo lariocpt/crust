@@ -1290,6 +1290,12 @@ Rules of the road:
   lists everything.
 - `procs` items are `{proc, stream, line}` **objects** — `(l => l.line)`
   extracts text, `filter (l => l.proc === "web")` selects a stream.
+- Fragments end in shell stages, so pretty-rendering is just another
+  stage: `grep api_request | node_modules/.bin/pino-pretty --colorize
+  --singleLine` pretty-prints the buffered past AND the live stream
+  (`--colorize` forces ANSI through the pipe). For `procs` sources,
+  normalize the object first — see the pino-pretty recipe in
+  [Log mining](#log-mining).
 - The `logs` line itself takes no pipes or redirections (put a complex
   command in a script); interactive-only — with piped stdin use
   `cmd | crust -c 'stdin | …'` instead (exit 2 points you there).
