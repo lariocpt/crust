@@ -117,6 +117,39 @@ async function expandTailPaths(inputs: string[]): Promise<string[]> {
   return out;
 }
 
+const TAIL_SCAN_BLOCK_BYTES = 64 * 1024;
+
+// Find the byte offset where the last-n-lines window starts, reading fixed
+// blocks backward from EOF. Byte-safe for UTF-8 (0x0A never appears in a
+// continuation byte); a newline at size-1 terminates the last line rather
+// than starting one, so it is skipped. Returns 0 at BOF; `size` when n<=0.
+export async function findTailWindowStart(
+  path: string,
+  size: number,
+  n: number,
+  blockBytes = TAIL_SCAN_BLOCK_BYTES,
+): Promise<number> {
+  if (n <= 0 || size === 0) return size;
+  let end = size;
+  let seen = 0;
+  let skipLast = true; // the trailing newline of a terminated final line
+  while (end > 0) {
+    const start = Math.max(0, end - blockBytes);
+    const bytes = new Uint8Array(await file(path).slice(start, end).arrayBuffer());
+    for (let i = bytes.length - 1; i >= 0; i--) {
+      if (bytes[i] !== 0x0a) continue;
+      if (skipLast && start + i === size - 1) {
+        skipLast = false;
+        continue;
+      }
+      seen++;
+      if (seen === n) return start + i + 1;
+    }
+    end = start;
+  }
+  return 0;
+}
+
 async function* tailOne(
   path: string,
   initialLines: number,
@@ -129,12 +162,18 @@ async function* tailOne(
 
   try {
     const s0 = await stat(path);
-    const text = await file(path).slice(0, s0.size).text();
     offset = s0.size;
     currentIno = s0.ino;
     if (initialLines > 0) {
+      // Bounded initial cut: scan backward for the window start instead of
+      // reading the whole file (a multi-GB log used to become a multi-GB
+      // string here). lines:0 reads nothing at all.
+      const from = await findTailWindowStart(path, s0.size, initialLines);
+      const text = await file(path).slice(from, s0.size).text();
       const all = text.split("\n");
       if (all.length > 0 && all[all.length - 1] === "") all.pop();
+      // slice(-N) stays as a belt-and-braces guard: correctness must not
+      // depend on the scanner being exact at block edges.
       for (const line of all.slice(-initialLines)) yield line;
     }
   } catch (err) {

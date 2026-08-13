@@ -814,3 +814,68 @@ describe("load batch emission", () => {
     expect(msg).toContain("dropped");
   });
 });
+
+describe("findTailWindowStart (bounded tail scan)", () => {
+  const tmp = async (content: string) => {
+    const { mkdtemp } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const d = await mkdtemp(join(tmpdir(), "crust-tw-"));
+    const p = join(d, "f.log");
+    await Bun.write(p, content);
+    return { p, size: content.length, d };
+  };
+
+  test("unit matrix with 8-byte blocks", async () => {
+    const { rm } = await import("node:fs/promises");
+    const { findTailWindowStart } = await import("../src/sources");
+    const cases: Array<[string, number, number]> = [
+      // [content, n, expected start offset]
+      ["a\nb\nc\n", 1, 4], // last line "c"
+      ["a\nb\nc\n", 2, 2],
+      ["a\nb\nc\n", 3, 0],
+      ["a\nb\nc\n", 9, 0], // n > lines → BOF
+      ["a\nb\nc", 1, 4], // unterminated final line
+      ["abcdefghij\nklmnopqrst\nuvwxyz\n", 2, 11], // window spans blocks
+      ["0123456\n89abcde\n", 1, 8], // newline exactly at a block edge (i=7)
+      ["xxxxxxxxxxxxxxxxxxxxxxxx\nyy\n", 1, 25], // line longer than a block
+      ["\n\n\n", 2, 1], // file of newlines: lines are "", ""
+      ["", 1, 0],
+    ];
+    for (const [content, n, expected] of cases) {
+      const { p, size, d } = await tmp(content);
+      try {
+        expect(await findTailWindowStart(p, size, n, 8)).toBe(expected);
+      } finally {
+        await rm(d, { recursive: true, force: true });
+      }
+    }
+  });
+
+  test("n<=0 returns size (reads nothing)", async () => {
+    const { rm } = await import("node:fs/promises");
+    const { findTailWindowStart } = await import("../src/sources");
+    const { p, size, d } = await tmp("a\nb\n");
+    try {
+      expect(await findTailWindowStart(p, size, 0)).toBe(size);
+    } finally {
+      await rm(d, { recursive: true, force: true });
+    }
+  });
+
+  test("e2e: tail lines:N on a multi-MB file matches a JS reference", async () => {
+    const { rm } = await import("node:fs/promises");
+    const lines: string[] = [];
+    for (let i = 0; i < 60_000; i++) lines.push(`line-${i}-${"x".repeat(30)}`);
+    const content = `${lines.join("\n")}\n`; // ~2.2MB
+    const { p, d } = await tmp(content);
+    try {
+      for (const n of [1, 10, 5000]) {
+        const got = await tail(p, { lines: n }).collect();
+        expect(got).toEqual(lines.slice(-n));
+      }
+    } finally {
+      await rm(d, { recursive: true, force: true });
+    }
+  });
+});
