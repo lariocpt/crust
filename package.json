@@ -1,7 +1,7 @@
 {
   "name": "crust",
   "version": "0.2.0-dev",
-  "description": "Pipeline-first devops toolkit built on Bun: OpenAPI mock server, fixture & load testing, process orchestration, link checking — one stream model, one binary",
+  "description": "Pipeline-first devops toolkit built on Bun: OpenAPI mock server, fixture & load testing, process orchestration, link checking \u2014 one stream model, one binary",
   "license": "MIT",
   "author": "Lario Borges",
   "repository": {
@@ -27,6 +27,7 @@
   "scripts": {
     "test": "bun test",
     "test:watch": "bun test --watch",
+    "typecheck": "tsc --noEmit",
     "dev": "bun src/index.ts",
     "build:shell": "bun build --compile --minify --bytecode --outfile bin/crust-bin src/index.ts",
     "build:fixture": "bun build --compile --minify --bytecode --outfile bin/crust-test-fixture src/testFixture/cli.ts",
