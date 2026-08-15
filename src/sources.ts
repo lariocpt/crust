@@ -49,26 +49,82 @@ export function range(start: number, end: number): Pipeline<number> {
   );
 }
 
+// One scan for every glob surface, so they agree on ordering and on what a
+// missing directory means.
+//
+// Sorted: a pipeline over a glob has to be reproducible run to run — the bare
+// glob source used to emit raw directory order while `read`/`lines` sorted.
+// A missing directory yields NOTHING rather than throwing: Bun's Glob raises a
+// bare `ENOENT … open '/nonexistent/deeper/ '` (note the mangled pattern) for
+// an absolute path, while the relative form just came back empty — so the same
+// mistake produced a friendly "no files matched" or a cryptic ENOENT depending
+// only on whether you typed a leading slash.
+async function scanGlob(pattern: string): Promise<string[]> {
+  const paths: string[] = [];
+  try {
+    for await (const f of new Glob(pattern).scan({ cwd: process.cwd(), absolute: false })) {
+      paths.push(f);
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+  }
+  paths.sort();
+  return paths;
+}
+
 export function glob(pattern: string): Pipeline<string> {
-  const g = new Glob(pattern);
   return Pipeline.of(
     (async function* () {
-      for await (const f of g.scan({ cwd: process.cwd(), absolute: false })) {
-        yield f;
-      }
+      for (const f of await scanGlob(pattern)) yield f;
     })(),
   );
 }
 
+// Stream a file's lines without ever holding the whole file.
+//
+// `text()` + `split("\n")` materialised the file as one string AND as an array
+// of every line — measured at ~1.4x the file size, so a 224MB log peaked at
+// 329MB and `lines f | grep …` at 982MB, where the equivalent shell pipeline
+// used 6MB. Chunked slice() reads are flat in file size (8/91/90 MB for
+// 20/224/448 MB) and are also 25% FASTER than the old form (0.152s vs 0.204s
+// on 224MB), so there is no tradeoff to weigh. `Bun.file().stream()` was the
+// obvious alternative and measured worse (98MB, 0.264s).
+const READ_CHUNK = 256 * 1024;
+// JSC's max string length is ~2GB; refuse well before the unhelpful failure.
+const MAX_WHOLE_FILE = 512 * 1024 * 1024;
+
+async function* fileLines(path: string): AsyncGenerator<string> {
+  const f = file(path);
+  const size = f.size;
+  const decoder = new TextDecoder();
+  let buf = "";
+  for (let off = 0; off < size; off += READ_CHUNK) {
+    const bytes = new Uint8Array(
+      await f.slice(off, Math.min(off + READ_CHUNK, size)).arrayBuffer(),
+    );
+    buf += decoder.decode(bytes, { stream: true });
+    const parts = buf.split("\n");
+    buf = parts.pop() ?? "";
+    for (const part of parts) yield part;
+  }
+  buf += decoder.decode();
+  // Trailing empty string means the file ended with a newline — that is a
+  // terminator, not a line.
+  if (buf.length > 0) yield buf;
+}
+
 export function read(path: string): Pipeline<string> {
-  return Pipeline.of(
-    (async function* () {
-      const text = await file(path).text();
-      const lines = text.split("\n");
-      if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
-      for (const line of lines) yield line;
-    })(),
-  );
+  return Pipeline.of(fileLines(path));
+}
+
+// Reading zero files IS a mistake — unlike a bare glob, which legitimately
+// enumerates nothing — so this is the surface that turns an empty scan into an
+// error, and now does so for absolute patterns too.
+async function matchFiles(pattern: string, label: string): Promise<string[]> {
+  if (!/[*?[\]{}]/.test(pattern)) return [pattern];
+  const paths = await scanGlob(pattern);
+  if (paths.length === 0) throw new Error(`${label}: no files matched ${pattern}`);
+  return paths;
 }
 
 // Whole-file contents, one item per matched file (vs read(), which streams
@@ -77,20 +133,34 @@ export function read(path: string): Pipeline<string> {
 export function readAll(pattern: string): Pipeline<string> {
   return Pipeline.of(
     (async function* () {
-      const looksGlob = /[*?[\]{}]/.test(pattern);
-      const paths: string[] = [];
-      if (looksGlob) {
-        const g = new Glob(pattern);
-        for await (const f of g.scan({ cwd: process.cwd(), absolute: false })) {
-          paths.push(f);
+      for (const p of await matchFiles(pattern, "read")) {
+        const f = Bun.file(p);
+        // readAll's contract IS one whole-file item (`read fixtures/*.json |
+        // POST …` posts each file as a body), so this one cannot stream. Say
+        // which file blew up and point at the streaming source, instead of
+        // failing later with a bare "Out of memory" naming nothing.
+        if (f.size > MAX_WHOLE_FILE) {
+          throw new Error(
+            `read: ${p} is ${(f.size / 1024 / 1024).toFixed(0)}MB — too large to hold as one item; ` +
+              "use `lines` to stream it line by line",
+          );
         }
-        paths.sort();
-      } else {
-        paths.push(pattern);
+        yield await f.text();
       }
-      if (paths.length === 0) throw new Error(`read: no files matched ${pattern}`);
-      for (const p of paths) {
-        yield await Bun.file(p).text();
+    })(),
+  );
+}
+
+// One item per LINE across every matched file — what `lines **/*.log` builds.
+// The shell `read` stage yields whole files, which reads identically on a
+// terminal but means a downstream `filter (l => …)` sees one giant string; this
+// is the source to reach for when you want lines. Trailing empty line is
+// dropped, matching read().
+export function readLines(pattern: string): Pipeline<string> {
+  return Pipeline.of(
+    (async function* () {
+      for (const p of await matchFiles(pattern, "lines")) {
+        yield* fileLines(p);
       }
     })(),
   );
@@ -275,32 +345,66 @@ async function* tailOne(
 // Merge N async generators into one stream. Yields each value as soon as any
 // upstream produces it (non-deterministic order across sources). Used by
 // multi-file tail so `tail a.log b.log` behaves like `tail -f a.log b.log`.
-async function* mergeAsync<T>(gens: AsyncGenerator<T>[]): AsyncGenerator<T> {
-  type Slot = {
-    idx: number;
-    gen: AsyncGenerator<T>;
-    pending: Promise<{ idx: number; res: IteratorResult<T> }>;
+// Fan several async generators into one stream, in arrival order.
+//
+// Each pull attaches EXACTLY ONE continuation, which pushes its result onto a
+// ready queue and wakes a single shared waiter. The previous shape re-ran
+// `Promise.race([...active].map(s => s.pending))` on every iteration, attaching
+// a fresh `.then` to every slot each time — including slots that never settle.
+// That is the normal shape of `procs`, which merges [stdout, stderr, exit] and
+// whose exit slot cannot settle while the process runs, so one reaction record
+// accumulated per line per idle slot and was retained until that promise
+// settled. Measured on a consumer that kept nothing: +46MB heap at 50k lines,
+// +63MB at 200k, +113MB at 400k — unbounded growth in the two features
+// (`procs`, `logs procs {…}`) designed to run for days.
+export async function* mergeAsync<T>(gens: AsyncGenerator<T>[]): AsyncGenerator<T> {
+  const ready: { idx: number; res: IteratorResult<T> }[] = [];
+  let wake: (() => void) | null = null;
+  let live = gens.length;
+
+  const pull = (idx: number): void => {
+    gens[idx]!.next().then(
+      (res) => {
+        ready.push({ idx, res });
+        wake?.();
+        wake = null;
+      },
+      (err) => {
+        ready.push({ idx, res: { done: true, value: undefined as never } });
+        pendingError ??= err;
+        wake?.();
+        wake = null;
+      },
+    );
   };
-  const slots: Slot[] = gens.map((gen, idx) => ({
-    idx,
-    gen,
-    pending: gen.next().then((res) => ({ idx, res })),
-  }));
-  const active = new Set(slots);
+  let pendingError: unknown;
+
   try {
-    while (active.size > 0) {
-      const winner = await Promise.race([...active].map((s) => s.pending));
-      const slot = slots[winner.idx]!;
-      if (winner.res.done) {
-        active.delete(slot);
+    for (let i = 0; i < gens.length; i++) pull(i);
+    while (live > 0) {
+      while (ready.length === 0) {
+        await new Promise<void>((r) => {
+          wake = r;
+        });
+      }
+      const { idx, res } = ready.shift()!;
+      if (pendingError !== undefined) throw pendingError;
+      if (res.done) {
+        live--;
         continue;
       }
-      yield winner.res.value;
-      slot.pending = slot.gen.next().then((res) => ({ idx: slot.idx, res }));
+      yield res.value;
+      pull(idx);
     }
   } finally {
-    for (const s of slots) {
-      void s.gen.return?.(undefined as unknown as T);
+    for (const g of gens) {
+      // Deliberately NOT awaited: a generator parked on a poll sleep (tailOne,
+      // readyGen) only settles its return() when that sleep ends, so awaiting
+      // here deadlocks teardown. But `void promise` leaves a rejection
+      // unhandled, which exits the process 1 on an otherwise successful run —
+      // so attach a catch and drop it.
+      const closing = g.return?.(undefined as unknown as T);
+      if (closing) closing.catch(() => {});
     }
   }
 }
@@ -325,7 +429,11 @@ export function GET(url: string, opts?: RequestInit, timeoutMs?: number): Pipeli
         if (minted && isTimeoutError(err)) {
           throw new HttpTimeoutError("GET", url, timeoutMs!);
         }
-        throw err;
+        // Same labelling as the transform path: name the request that failed.
+        const hostHint = url.startsWith("/")
+          ? ' — no host in the URL (did an env var expand to ""? use `:3000/path` for localhost)'
+          : "";
+        throw new Error(`GET ${url}: ${(err as Error).message}${hostHint}`);
       }
     })(),
   );
@@ -552,15 +660,21 @@ export function procs(
         // biome-ignore lint/suspicious/noExplicitAny: ReadableStream async iteration
         for await (const chunk of readable as any) {
           buf += decoder.decode(chunk, { stream: true });
-          let nl = buf.indexOf("\n");
-          while (nl !== -1) {
-            const line = buf.slice(0, nl).replace(/\r$/, "");
-            buf = buf.slice(nl + 1);
-            if (line.length > 0) yield { proc: name, stream, line };
-            nl = buf.indexOf("\n");
+          // split/pop, matching stdin(), tailOne() and the shell stages — the
+          // hand-rolled indexOf/slice loop this replaces was the only splitter
+          // in crust that DROPPED blank lines, which mangles the output of
+          // every tool that uses them structurally (vite, tsc --watch, docker
+          // compose). grepStage's comment already states blank lines must
+          // survive; procs was the outlier.
+          const parts = buf.split("\n");
+          buf = parts.pop() ?? "";
+          for (const part of parts) {
+            yield { proc: name, stream, line: part.replace(/\r$/, "") };
           }
         }
-        if (buf.length > 0) yield { proc: name, stream, line: buf };
+        buf += decoder.decode();
+        // A trailing partial line (no final newline) is still a line.
+        if (buf.length > 0) yield { proc: name, stream, line: buf.replace(/\r$/, "") };
       }
 
       // Probe readiness alongside the child's output streams. Every poll
@@ -684,7 +798,10 @@ export function procs(
               stream: "exit",
               line: `restarting in ${backoff}ms`,
             };
-            await new Promise((r) => setTimeout(r, backoff));
+            // Raced against killSignal like every other sleep here: parked in
+            // a backoff, a Ctrl-C could not be seen and the prompt took up to
+            // the full 2s to come back.
+            await Promise.race([Bun.sleep(backoff), killSignal.promise]);
             if (killed) return;
             backoff = Math.min(backoff * 2, 2000);
           }
@@ -770,7 +887,21 @@ export function load(
             break;
           }
           if (now < ideal) {
-            await Bun.sleep(ideal - now);
+            // Never sleep sub-millisecond. Above 1000/s every slot is less than
+            // 1ms away, and Bun.sleep(0.3) degenerates to a minimum-resolution
+            // timer — the loop then re-entered as fast as the event loop could
+            // turn, burning a whole CPU core at a rate INDEPENDENT of rps
+            // (measured: 5.1s of CPU per 6s wall at 1000/s, 3000/s and
+            // 10000/s alike, versus 0.42s for the same 36k requests from a
+            // burst source). That is not just waste: the client is
+            // CPU-saturated, so the latency numbers the load runner exists to
+            // produce are wrong.
+            //
+            // Sleeping a full millisecond instead makes one wake carry
+            // ceil(rps/1000) slots, which the inner drain loop below already
+            // emits in a batch. The schedule is unchanged — slots are still
+            // pinned to phaseStart + k*interval — only the wake granularity is.
+            await Bun.sleep(Math.max(1, ideal - now));
             now = performance.now();
           }
           // Emit EVERY due slot before sleeping again — one ~1ms wakeup can

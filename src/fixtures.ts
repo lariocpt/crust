@@ -56,8 +56,9 @@ export function diff(path: string, expected: unknown, actual: unknown): FixtureF
           return [{ path, expected: "<async predicate in sync diff — use diffAsync>", actual }];
         }
         ok = !!r;
-      } catch {
-        ok = false;
+      } catch (err) {
+        // Same honesty rule as diffAsync: a thrown matcher is a broken test.
+        return [{ path, expected: `<predicate threw: ${(err as Error).message}>`, actual }];
       }
       return ok ? [] : [{ path, expected: "<predicate>", actual }];
     }
@@ -77,7 +78,7 @@ export function diff(path: string, expected: unknown, actual: unknown): FixtureF
     const failures: FixtureFailure[] = [];
     const len = Math.max(expected.length, actual.length);
     for (let i = 0; i < len; i++) {
-      failures.push(...diff(`${path}[${i}]`, expected[i], actual[i]));
+      for (const f of diff(`${path}[${i}]`, expected[i], actual[i])) failures.push(f);
     }
     return failures;
   }
@@ -85,7 +86,7 @@ export function diff(path: string, expected: unknown, actual: unknown): FixtureF
   const exp = expected as Record<string, unknown>;
   const act = actual as Record<string, unknown>;
   for (const k of Object.keys(exp)) {
-    failures.push(...diff(`${path}.${k}`, exp[k], act[k]));
+    for (const f of diff(`${path}.${k}`, exp[k], act[k])) failures.push(f);
   }
   return failures;
 }
@@ -108,8 +109,11 @@ export async function diffAsync(
       try {
         const r = fn(actual, ctx);
         ok = !!(isThenable(r) ? await r : r);
-      } catch {
-        ok = false;
+      } catch (err) {
+        // A matcher that THREW is a broken test, not a failing one. Reporting
+        // it as a plain "<predicate>" mismatch hid the TypeError and made a bug
+        // in the assertion indistinguishable from a genuine regression.
+        return [{ path, expected: `<predicate threw: ${(err as Error).message}>`, actual }];
       }
       return ok ? [] : [{ path, expected: "<predicate>", actual }];
     }
@@ -123,7 +127,8 @@ export async function diffAsync(
     const failures: FixtureFailure[] = [];
     const len = Math.max(expected.length, actual.length);
     for (let i = 0; i < len; i++) {
-      failures.push(...(await diffAsync(`${path}[${i}]`, expected[i], actual[i], ctx)));
+      for (const f of await diffAsync(`${path}[${i}]`, expected[i], actual[i], ctx))
+        failures.push(f);
     }
     return failures;
   }
@@ -131,7 +136,7 @@ export async function diffAsync(
   const exp = expected as Record<string, unknown>;
   const act = actual as Record<string, unknown>;
   for (const k of Object.keys(exp)) {
-    failures.push(...(await diffAsync(`${path}.${k}`, exp[k], act[k], ctx)));
+    for (const f of await diffAsync(`${path}.${k}`, exp[k], act[k], ctx)) failures.push(f);
   }
   return failures;
 }

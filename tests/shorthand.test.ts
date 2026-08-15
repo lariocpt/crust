@@ -107,7 +107,7 @@ describe("shorthand pipelines end-to-end", () => {
       `{"a":1} | POST ${base}/echo | (r => r.json()) | capture CAP_METHOD (j => j.method)`,
     );
     expect(out).toHaveLength(1);
-    expect(process.env.CAP_METHOD).toBe("POST");
+    expect(String(process.env.CAP_METHOD)).toBe("POST");
     // The next line sees $CAP_METHOD at parse time — the chaining contract.
     const echoed = await drain(
       `{"was":"$CAP_METHOD"} | assert (r => r.was === "POST") | (r => r.was)`,

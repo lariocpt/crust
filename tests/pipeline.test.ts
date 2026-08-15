@@ -84,7 +84,7 @@ describe("Pipeline — terminal ops", () => {
   });
 
   test("json() parses concatenated stream", async () => {
-    expect(await Pipeline.of(['{"x":1}']).json()).toEqual({ x: 1 });
+    expect(await Pipeline.of(['{"x":1}']).json<{ x: number }>()).toEqual({ x: 1 });
   });
 });
 

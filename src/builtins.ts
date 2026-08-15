@@ -1,4 +1,4 @@
-import { splitArgs } from "./args";
+import { FlagError, type FlagSpec, parseFlags, splitArgs } from "./args";
 import type { Context } from "./types";
 
 export type Builtin = (rawArgs: string, ctx: Context) => Promise<number> | number;
@@ -125,32 +125,37 @@ const helpBuiltin: Builtin = () => {
   return 0;
 };
 
+const DOTENV_USAGE = `dotenv [<path>] [-a] | dotenv status | dotenv clear
+
+  <path>            .env file to load (default: ./.env), or --config <path>
+  -a, --append      keep values already set instead of overwriting
+  status | list     show load history
+  clear             restore the pre-first-load snapshot
+`;
+
+export const DOTENV_SPEC: FlagSpec = {
+  config: { type: "string", positional: 0 },
+  append: { short: "a", type: "boolean" },
+};
+
 const dotenvBuiltin: Builtin = async (rawArgs, ctx) => {
   const parts = splitArgs(rawArgs.trim());
   if (parts[0] === "status" || parts[0] === "list") return dotenvStatus(ctx);
   if (parts[0] === "clear") return dotenvClear(ctx);
 
-  let configPath = "./.env";
-  let append = false;
-  for (let i = 0; i < parts.length; i++) {
-    const p = parts[i]!;
-    if (p === "--append") {
-      append = true;
-    } else if (p === "--config") {
-      const next = parts[++i];
-      if (!next) {
-        process.stderr.write("dotenv: --config requires a path\n");
-        return 2;
-      }
-      configPath = next;
-    } else if (p.startsWith("--config=")) {
-      configPath = p.slice("--config=".length);
-    } else {
-      process.stderr.write(`dotenv: unknown arg '${p}'\n`);
-      return 2;
+  try {
+    const { values, rest, help } = parseFlags(parts, DOTENV_SPEC);
+    if (help) {
+      process.stdout.write(DOTENV_USAGE);
+      return 0;
     }
+    if (rest.length > 0) throw new FlagError(`unexpected argument "${rest[0]}"`);
+    const configPath = (values.config as string | undefined) ?? "./.env";
+    return dotenvLoad(ctx, configPath, values.append === true ? "append" : "overwrite");
+  } catch (err) {
+    process.stderr.write(`dotenv: ${(err as Error).message}\n${DOTENV_USAGE}`);
+    return 2;
   }
-  return dotenvLoad(ctx, configPath, append ? "append" : "overwrite");
 };
 
 async function dotenvLoad(

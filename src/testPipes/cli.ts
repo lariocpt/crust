@@ -1,7 +1,8 @@
 import { relative } from "node:path";
+import { FlagError, type FlagSpec, parseFlags } from "../args";
 import { runPipes } from "./runner";
 
-const USAGE = `test-pipes --target <file|glob> [--bail] [--timeout <ms>] [--setup <module>]
+const USAGE = `test-pipes <file|glob> [-b] [-t <ms>] [-s <module>]
 
 Run .pipes files: one shorthand fixture pipeline per line.
   # comments and blank lines are skipped
@@ -16,9 +17,19 @@ Before a file runs, its setup module is imported and its default export
 awaited: --setup <module>, else a sibling <name>.setup.ts. Setup seeds
 process.env — that's how lines get $TOKEN-style values.
 
-  --bail           stop at the first failing line
-  --timeout <ms>   fail any line that runs longer
+  -b, --bail            stop at the first failing line
+  -t, --timeout <ms>    fail any line that runs longer
+  -s, --setup <module>  setup module (default: sibling <name>.setup.ts)
+
+The target may also be given as --target <file|glob>.
 `;
+
+export const SPEC: FlagSpec = {
+  target: { type: "string", positional: 0 },
+  bail: { short: "b", type: "boolean" },
+  timeout: { short: "t", type: "number" },
+  setup: { short: "s", type: "string" },
+};
 
 export async function runCli(args: string[]): Promise<number> {
   let target: string | undefined;
@@ -26,30 +37,24 @@ export async function runCli(args: string[]): Promise<number> {
   let timeoutMs: number | undefined;
   let setup: string | undefined;
 
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i]!;
-    if (a === "-h" || a === "--help") {
+  try {
+    const { values, rest, help } = parseFlags(args, SPEC);
+    if (help) {
       process.stdout.write(USAGE);
       return 0;
     }
-    if (a === "--target") target = args[++i];
-    else if (a.startsWith("--target=")) target = a.slice(9);
-    else if (a === "--bail") bail = true;
-    else if (a === "--timeout") timeoutMs = parseInt(args[++i] ?? "", 10);
-    else if (a.startsWith("--timeout=")) timeoutMs = parseInt(a.slice(10), 10);
-    else if (a === "--setup") setup = args[++i];
-    else if (a.startsWith("--setup=")) setup = a.slice(8);
-    else {
-      process.stderr.write(`test-pipes: unknown argument ${a}\n${USAGE}`);
-      return 2;
-    }
-  }
-  if (!target) {
-    process.stderr.write(`test-pipes: --target is required\n${USAGE}`);
+    if (rest.length > 0) throw new FlagError(`unexpected argument "${rest[0]}"`);
+    target = values.target as string | undefined;
+    bail = values.bail === true;
+    timeoutMs = values.timeout as number | undefined;
+    setup = values.setup as string | undefined;
+  } catch (err) {
+    process.stderr.write(`test-pipes: ${(err as Error).message}\n${USAGE}`);
     return 2;
   }
-  if (timeoutMs !== undefined && !Number.isFinite(timeoutMs)) {
-    process.stderr.write("test-pipes: --timeout expects a number of ms\n");
+
+  if (!target) {
+    process.stderr.write(`test-pipes: a target file or glob is required\n${USAGE}`);
     return 2;
   }
 

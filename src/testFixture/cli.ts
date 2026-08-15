@@ -1,26 +1,40 @@
 #!/usr/bin/env bun
 import { extname } from "node:path";
+import { FlagError, type FlagSpec, parseFlags } from "../args";
 import { renderJson, renderMarkdown, renderText } from "./report";
 import { runFixtures } from "./runner";
 
-const USAGE = `test-fixture --target <file|glob> [--out <path>] [--threads N] [--count N] [--timeout <ms>] [--bail]
+const USAGE = `test-fixture <file|glob> [-o <path>] [-j N] [-n N] [-t <ms>] [-b]
 
 Run .crust.ts fixture files. Each file exports a Fixture (or array) with
 { input, output } objects. Fields whose value is a 0-arg function are
 resolved at run time; functions in 'output' with one or more arguments
 are matcher predicates over the actual value.
 
-  --count N      run each fixture N times (stress mode). Combine with
-                 --threads to drive concurrency. Reports p50/p95/p99
-                 latency, mean/min/max, and status-code distribution
-                 when N > 1. Use the 'random' helper inside fixtures
-                 (import { random } from "crust/testFixture/random")
-                 to vary inputs across iterations.
-  --timeout <ms> fail any fixture whose request runs longer (a fixture's
-                 own input.signal wins over this).
-  --bail         stop starting new fixtures after the first fail/error;
-                 in-flight fixtures finish.
+  -n, --count N     run each fixture N times (stress mode). Combine with
+                    --threads to drive concurrency. Reports p50/p95/p99
+                    latency, mean/min/max, and status-code distribution
+                    when N > 1. Use the 'random' helper inside fixtures
+                    (import { random } from "crust/testFixture/random")
+                    to vary inputs across iterations.
+  -j, --threads N   concurrency
+  -o, --out <path>  report file; .json/.md pick the format
+  -t, --timeout <ms> fail any fixture whose request runs longer (a fixture's
+                    own input.signal wins over this).
+  -b, --bail        stop starting new fixtures after the first fail/error;
+                    in-flight fixtures finish.
+
+The target may also be given as --target <file|glob>.
 `;
+
+export const SPEC: FlagSpec = {
+  target: { type: "string", positional: 0 },
+  out: { short: "o", type: "string" },
+  threads: { short: "j", type: "number" },
+  count: { short: "n", type: "number" },
+  timeout: { short: "t", type: "number" },
+  bail: { short: "b", type: "boolean" },
+};
 
 export async function runCli(args: string[]): Promise<number> {
   let target: string | undefined;
@@ -30,64 +44,26 @@ export async function runCli(args: string[]): Promise<number> {
   let timeoutMs: number | undefined;
   let bail = false;
 
-  function intFlag(value: string | undefined, name: string): number | null {
-    const n = parseInt(value ?? "", 10);
-    if (!Number.isFinite(n)) {
-      process.stderr.write(`test-fixture: ${name} requires an integer\n`);
-      return null;
-    }
-    return n;
-  }
-
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i]!;
-    if (a === "-h" || a === "--help") {
+  try {
+    const { values, rest, help } = parseFlags(args, SPEC);
+    if (help) {
       process.stdout.write(USAGE);
       return 0;
     }
-    if (a === "--target") {
-      target = args[++i];
-    } else if (a.startsWith("--target=")) {
-      target = a.slice("--target=".length);
-    } else if (a === "--out") {
-      out = args[++i];
-    } else if (a.startsWith("--out=")) {
-      out = a.slice("--out=".length);
-    } else if (a === "--threads") {
-      const n = intFlag(args[++i], "--threads");
-      if (n === null) return 2;
-      threads = n;
-    } else if (a.startsWith("--threads=")) {
-      const n = intFlag(a.slice("--threads=".length), "--threads");
-      if (n === null) return 2;
-      threads = n;
-    } else if (a === "--count") {
-      const n = intFlag(args[++i], "--count");
-      if (n === null) return 2;
-      count = n;
-    } else if (a.startsWith("--count=")) {
-      const n = intFlag(a.slice("--count=".length), "--count");
-      if (n === null) return 2;
-      count = n;
-    } else if (a === "--timeout") {
-      const n = intFlag(args[++i], "--timeout");
-      if (n === null) return 2;
-      timeoutMs = n;
-    } else if (a.startsWith("--timeout=")) {
-      const n = intFlag(a.slice("--timeout=".length), "--timeout");
-      if (n === null) return 2;
-      timeoutMs = n;
-    } else if (a === "--bail") {
-      bail = true;
-    } else {
-      process.stderr.write(`test-fixture: unknown arg '${a}'\n`);
-      return 2;
-    }
+    if (rest.length > 0) throw new FlagError(`unexpected argument "${rest[0]}"`);
+    target = values.target as string | undefined;
+    out = values.out as string | undefined;
+    threads = (values.threads as number | undefined) ?? 1;
+    count = (values.count as number | undefined) ?? 1;
+    timeoutMs = values.timeout as number | undefined;
+    bail = values.bail === true;
+  } catch (err) {
+    process.stderr.write(`test-fixture: ${(err as Error).message}\n${USAGE}`);
+    return 2;
   }
 
   if (!target) {
-    process.stderr.write("test-fixture: --target is required\n");
-    process.stderr.write(USAGE);
+    process.stderr.write(`test-fixture: a target file or glob is required\n${USAGE}`);
     return 2;
   }
 

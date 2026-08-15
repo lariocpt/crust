@@ -93,7 +93,7 @@ async function drainWithTimeout(line: string, ctx: Context, timeoutMs?: number):
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
-      void iter.return?.(undefined as never);
+      iter.return?.(undefined as never)?.catch(() => {});
       reject(new Error(`timed out after ${timeoutMs}ms`));
     }, timeoutMs);
   });

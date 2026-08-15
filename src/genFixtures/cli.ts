@@ -1,6 +1,13 @@
+import { FlagError, type FlagSpec, parseFlags } from "../args";
 import { generateFixtures } from "./generate";
 
-const USAGE = `gen-fixtures --swagger <path> --out <dir> --setup <module> [--no-flows]
+// The canonical invocation in the README, the docs and every skill passes
+// exactly these two paths, so they are the defaults rather than required
+// flags: `gen-fixtures ./openapi.json` is the whole command.
+const DEFAULT_OUT = "tests/gen";
+const DEFAULT_SETUP = "./tests/gen-setup.ts";
+
+const USAGE = `gen-fixtures <spec> [-o <dir>] [-s <module>] [--no-flows]
 
 Generate negative-case HTTP fixtures from an OpenAPI 3.x spec: 401 for
 auth-gated ops, 403 for scope-gated ops, 404 for unknown ids, per-field
@@ -18,34 +25,45 @@ Required exports: shared(), headersFor(ctx, role), resolvePath(ctx, template),
 scopeParam, JSON_HEADERS; optional scopeRoots. See the contract doc at the
 top of src/genFixtures/generate.ts, and examples/gen-setup.ts in the crust
 repo for a complete runnable module to copy.
+
+  -o, --out <dir>       output directory (default: ${DEFAULT_OUT})
+  -s, --setup <module>  setup module (default: ${DEFAULT_SETUP})
+      --no-flows        skip the CRUD flow suite
+
+The spec may also be given as --swagger <path>.
 `;
+
+export const SPEC: FlagSpec = {
+  swagger: { type: "string", positional: 0 },
+  out: { short: "o", type: "string" },
+  setup: { short: "s", type: "string" },
+  "no-flows": { type: "boolean" },
+};
 
 export async function runCli(args: string[]): Promise<number> {
   let swagger: string | undefined;
-  let out: string | undefined;
-  let setup: string | undefined;
+  let out = DEFAULT_OUT;
+  let setup = DEFAULT_SETUP;
   let flows = true;
 
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i]!;
-    if (a === "-h" || a === "--help") {
+  try {
+    const { values, rest, help } = parseFlags(args, SPEC);
+    if (help) {
       process.stdout.write(USAGE);
       return 0;
     }
-    if (a === "--swagger") swagger = args[++i];
-    else if (a.startsWith("--swagger=")) swagger = a.slice(10);
-    else if (a === "--out") out = args[++i];
-    else if (a.startsWith("--out=")) out = a.slice(6);
-    else if (a === "--setup") setup = args[++i];
-    else if (a.startsWith("--setup=")) setup = a.slice(8);
-    else if (a === "--no-flows") flows = false;
-    else {
-      process.stderr.write(`gen-fixtures: unknown argument ${a}\n${USAGE}`);
-      return 2;
-    }
+    if (rest.length > 0) throw new FlagError(`unexpected argument "${rest[0]}"`);
+    swagger = values.swagger as string | undefined;
+    out = (values.out as string | undefined) ?? DEFAULT_OUT;
+    setup = (values.setup as string | undefined) ?? DEFAULT_SETUP;
+    flows = values["no-flows"] !== true;
+  } catch (err) {
+    process.stderr.write(`gen-fixtures: ${(err as Error).message}\n${USAGE}`);
+    return 2;
   }
-  if (!swagger || !out || !setup) {
-    process.stderr.write(`gen-fixtures: --swagger, --out and --setup are all required\n${USAGE}`);
+
+  if (!swagger) {
+    process.stderr.write(`gen-fixtures: an OpenAPI spec path is required\n${USAGE}`);
     return 2;
   }
 

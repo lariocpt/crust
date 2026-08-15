@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { FlagError, type FlagSpec, parseFlags } from "../args";
 import { crawl, extractFragment, stripFragment } from "./crawler";
 import { diff, loadMetaFixtures } from "./metaFixtures";
 import { renderJson, renderText } from "./report";
@@ -7,20 +8,25 @@ import type { Failure, MetaFixture, VerifyOpts, VerifyReport } from "./types";
 
 const DEFAULT_UA = "crust-verify-web-links/0.1";
 
-const USAGE = `verify-web-links (--site-map-url <url|path> | --base-url <url>) [options]
+const USAGE = `verify-web-links <url|sitemap> [options]
 
 Crawl a site from its sitemap, verify every link is reachable, and
 optionally diff Open Graph / meta tags against .crust.ts fixtures.
 
-  --site-map-url <src>     URL (http://, https://) or local path to a sitemap.xml.
+The positional argument is the site: anything ending .xml (or containing
+"sitemap") is treated as a sitemap, otherwise as a base URL to crawl from.
+Pass --sitemap / --base-url explicitly to override that guess.
+
+  --sitemap <src>          URL (http://, https://) or local path to a sitemap.xml.
                            Mutually exclusive with --base-url.
+                           (--site-map-url is accepted as an alias.)
   --base-url <url>         Auto-discover the sitemap: probe /robots.txt for
                            Sitemap: lines, then fall back to /sitemap.xml and /sitemap-index.xml.
   --fixtures <glob>        .crust.ts fixture file or glob exporting
                            { url, meta: { ... } } (or array). Each fixture's
                            meta is diffed against the page's extracted meta.
-  --concurrency N          parallel fetches (default 4).
-  --timeout ms             per-request timeout (default 10000).
+  -c, --concurrency N      parallel fetches (default 4).
+  -t, --timeout ms         per-request timeout (default 10000).
   --user-agent <s>         User-Agent header (default crust-verify-web-links/0.1).
   --max-depth N            recursion depth for internal pages (default 5).
   --no-recurse             only verify URLs listed in the sitemap; do not crawl
@@ -189,6 +195,30 @@ function collectFailures(
   return failures;
 }
 
+export const SPEC: FlagSpec = {
+  // A bare URL is the common case. A sitemap is recognisable by its shape, so
+  // the two mutually-exclusive source flags collapse into one positional.
+  source: { type: "string", positional: 0 },
+  "site-map-url": { type: "string" },
+  sitemap: { type: "string" },
+  "base-url": { type: "string" },
+  fixtures: { type: "string" },
+  concurrency: { short: "c", type: "number" },
+  timeout: { short: "t", type: "number" },
+  "user-agent": { type: "string" },
+  "max-depth": { type: "number" },
+  "max-pages": { type: "number" },
+  exclude: { type: "string", repeat: true },
+  "no-recurse": { type: "boolean" },
+  "no-anchors": { type: "boolean" },
+  "no-redirect-warnings": { type: "boolean" },
+  "include-external": { type: "boolean" },
+  "no-progress": { type: "boolean" },
+  json: { type: "boolean" },
+};
+
+const looksLikeSitemap = (v: string): boolean => /\.xml($|\?)/i.test(v) || /sitemap/i.test(v);
+
 function parseArgs(args: string[]): VerifyOpts | number {
   let sitemapUrl: string | undefined;
   let baseUrl: string | undefined;
@@ -201,114 +231,48 @@ function parseArgs(args: string[]): VerifyOpts | number {
   let checkAnchors = true;
   let redirectWarnings = true;
   let includeExternal = false;
-  const exclude: string[] = [];
+  let exclude: string[] = [];
   let progress = true;
   let maxPages = 0;
   let json = false;
 
-  function intFlag(value: string | undefined, name: string): number | null {
-    const n = parseInt(value ?? "", 10);
-    if (!Number.isFinite(n)) {
-      process.stderr.write(`verify-web-links: ${name} requires an integer\n`);
-      return null;
-    }
-    return n;
-  }
-
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i]!;
-    if (a === "-h" || a === "--help") {
+  try {
+    const { values, rest, help } = parseFlags(args, SPEC);
+    if (help) {
       process.stdout.write(USAGE);
       return 0;
     }
-    const [key, inlineVal] = splitFlag(a);
-    const consume = (): string | undefined => (inlineVal !== undefined ? inlineVal : args[++i]);
+    if (rest.length > 0) throw new FlagError(`unexpected argument "${rest[0]}"`);
 
-    switch (key) {
-      case "--site-map-url":
-        sitemapUrl = consume();
-        break;
-      case "--base-url":
-        baseUrl = consume();
-        break;
-      case "--fixtures":
-        fixtures = consume();
-        break;
-      case "--concurrency": {
-        const n = intFlag(consume(), "--concurrency");
-        if (n === null) return 2;
-        if (n < 1) {
-          process.stderr.write("verify-web-links: --concurrency must be >= 1\n");
-          return 2;
-        }
-        concurrency = n;
-        break;
-      }
-      case "--timeout": {
-        const n = intFlag(consume(), "--timeout");
-        if (n === null) return 2;
-        if (n < 1) {
-          process.stderr.write("verify-web-links: --timeout must be >= 1\n");
-          return 2;
-        }
-        timeoutMs = n;
-        break;
-      }
-      case "--user-agent":
-        userAgent = consume() ?? userAgent;
-        break;
-      case "--max-depth": {
-        const n = intFlag(consume(), "--max-depth");
-        if (n === null) return 2;
-        if (n < 0) {
-          process.stderr.write("verify-web-links: --max-depth must be >= 0\n");
-          return 2;
-        }
-        maxDepth = n;
-        break;
-      }
-      case "--no-recurse":
-        recurse = false;
-        break;
-      case "--no-anchors":
-        checkAnchors = false;
-        break;
-      case "--no-redirect-warnings":
-        redirectWarnings = false;
-        break;
-      case "--include-external":
-        includeExternal = true;
-        break;
-      case "--exclude": {
-        const v = consume();
-        if (!v) {
-          process.stderr.write("verify-web-links: --exclude requires a value\n");
-          return 2;
-        }
-        exclude.push(v);
-        break;
-      }
-      case "--max-pages": {
-        const n = intFlag(consume(), "--max-pages");
-        if (n === null) return 2;
-        if (n < 0) {
-          process.stderr.write("verify-web-links: --max-pages must be >= 0\n");
-          return 2;
-        }
-        maxPages = n;
-        break;
-      }
-      case "--no-progress":
-        progress = false;
-        break;
-      case "--json":
-        json = true;
-        break;
-      default:
-        process.stderr.write(`verify-web-links: unknown arg '${a}'\n`);
-        process.stderr.write(USAGE);
-        return 2;
+    sitemapUrl = (values["site-map-url"] ?? values.sitemap) as string | undefined;
+    baseUrl = values["base-url"] as string | undefined;
+    const source = values.source as string | undefined;
+    if (source !== undefined) {
+      if (looksLikeSitemap(source)) sitemapUrl ??= source;
+      else baseUrl ??= source;
     }
+
+    fixtures = values.fixtures as string | undefined;
+    concurrency = (values.concurrency as number | undefined) ?? 4;
+    timeoutMs = (values.timeout as number | undefined) ?? 10000;
+    userAgent = (values["user-agent"] as string | undefined) ?? DEFAULT_UA;
+    maxDepth = (values["max-depth"] as number | undefined) ?? 5;
+    maxPages = (values["max-pages"] as number | undefined) ?? 0;
+    exclude = (values.exclude as string[] | undefined) ?? [];
+    recurse = values["no-recurse"] !== true;
+    checkAnchors = values["no-anchors"] !== true;
+    redirectWarnings = values["no-redirect-warnings"] !== true;
+    includeExternal = values["include-external"] === true;
+    progress = values["no-progress"] !== true;
+    json = values.json === true;
+
+    if (concurrency < 1) throw new FlagError("--concurrency must be >= 1");
+    if (timeoutMs < 1) throw new FlagError("--timeout must be >= 1");
+    if (maxDepth < 0) throw new FlagError("--max-depth must be >= 0");
+    if (maxPages < 0) throw new FlagError("--max-pages must be >= 0");
+  } catch (err) {
+    process.stderr.write(`verify-web-links: ${(err as Error).message}\n${USAGE}`);
+    return 2;
   }
 
   if (sitemapUrl && baseUrl) {
@@ -318,8 +282,7 @@ function parseArgs(args: string[]): VerifyOpts | number {
     return 2;
   }
   if (!sitemapUrl && !baseUrl) {
-    process.stderr.write("verify-web-links: --site-map-url or --base-url is required\n");
-    process.stderr.write(USAGE);
+    process.stderr.write(`verify-web-links: a sitemap URL or a base URL is required\n${USAGE}`);
     return 2;
   }
 
@@ -340,12 +303,6 @@ function parseArgs(args: string[]): VerifyOpts | number {
     maxPages,
     json,
   };
-}
-
-function splitFlag(arg: string): [string, string | undefined] {
-  const eq = arg.indexOf("=");
-  if (eq === -1) return [arg, undefined];
-  return [arg.slice(0, eq), arg.slice(eq + 1)];
 }
 
 if (import.meta.main) {

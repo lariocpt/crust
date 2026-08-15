@@ -91,7 +91,6 @@ async function runLogsInner(rawArgs: string, ctx: Context): Promise<number> {
       source = (async function* () {
         const decoder = new TextDecoder();
         let buf = "";
-        // @ts-expect-error — Bun.spawn returns a ReadableStream on stdout
         for await (const chunk of proc.stdout as ReadableStream<Uint8Array>) {
           buf += decoder.decode(chunk, { stream: true });
           const lines = buf.split("\n");
@@ -123,7 +122,7 @@ async function runLogsInner(rawArgs: string, ctx: Context): Promise<number> {
       source = { [Symbol.asyncIterator]: () => iter };
       teardown = () => {
         controller.abort();
-        void iter.return?.(undefined);
+        iter.return?.(undefined)?.catch(() => {});
       };
       break;
     }
@@ -141,7 +140,7 @@ async function runLogsInner(rawArgs: string, ctx: Context): Promise<number> {
       // escalation, then its streams end and the pump completes.
       teardown = () => {
         process.emit("SIGINT");
-        void iter.return?.(undefined);
+        iter.return?.(undefined)?.catch(() => {});
       };
       note =
         'items are {proc, stream, line} objects — try (l => l.line) or filter (l => l.proc === "web")';
@@ -160,7 +159,7 @@ async function runLogsInner(rawArgs: string, ctx: Context): Promise<number> {
       const iter = pipeline.lines()[Symbol.asyncIterator]();
       source = { [Symbol.asyncIterator]: () => iter };
       teardown = () => {
-        void iter.return?.(undefined);
+        iter.return?.(undefined)?.catch(() => {});
       };
       break;
     }

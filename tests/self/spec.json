@@ -1,0 +1,72 @@
+{
+  "openapi": "3.0.0",
+  "info": { "title": "crust self-test", "version": "1" },
+  "paths": {
+    "/health": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "ok",
+            "content": { "application/json": { "example": { "status": "up" } } }
+          }
+        }
+      }
+    },
+    "/items": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "list",
+            "content": {
+              "application/json": {
+                "schema": { "type": "array", "items": { "$ref": "#/components/schemas/Item" } },
+                "example": []
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": { "schema": { "$ref": "#/components/schemas/Item" } }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "created",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Item" } }
+            }
+          }
+        }
+      }
+    },
+    "/items/{id}": {
+      "get": {
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "one",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Item" } }
+            }
+          },
+          "404": { "description": "not found" }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Item": {
+        "type": "object",
+        "required": ["name"],
+        "properties": { "id": { "type": "string" }, "name": { "type": "string" } }
+      }
+    }
+  }
+}

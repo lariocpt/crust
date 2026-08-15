@@ -257,7 +257,7 @@ describe("LogsSession", () => {
       h.driver.end();
     })();
     const code = await done;
-    expect(liveAfterBoom).toBe(false);
+    expect(liveAfterBoom as boolean | null).toBe(false);
     expect(code).toBe(0);
     expect(h.stderr()).toContain("boom");
     expect(h.stdout()).toContain("one\n"); // second query retro output

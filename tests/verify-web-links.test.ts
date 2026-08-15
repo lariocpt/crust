@@ -24,7 +24,7 @@ async function runCli(args: string[]): Promise<{ code: number; stdout: string; s
   return { code: proc.exitCode ?? -1, stdout, stderr };
 }
 
-let server: Server;
+let server: Server<unknown>;
 let base: string;
 
 function xml(body: string): Response {
@@ -131,7 +131,7 @@ describe("verify-web-links CLI", () => {
   test("missing args exit 2", async () => {
     const r = await runCli([]);
     expect(r.code).toBe(2);
-    expect(r.stderr).toContain("--site-map-url or --base-url is required");
+    expect(r.stderr).toContain("a sitemap URL or a base URL is required");
   });
 
   test("mutually exclusive site-map + base url exits 2", async () => {
@@ -290,7 +290,7 @@ describe("verify-web-links CLI", () => {
   test("--exclude without a value exits 2", async () => {
     const r = await runCli(["--site-map-url", `${base}/sitemap-good.xml`, "--exclude"]);
     expect(r.code).toBe(2);
-    expect(r.stderr).toContain("--exclude requires a value");
+    expect(r.stderr).toContain("--exclude needs a value");
   });
 
   test("--json emits machine-readable output", async () => {

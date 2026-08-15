@@ -1,3 +1,4 @@
+import { rename } from "node:fs/promises";
 import { formatItem } from "./format";
 import { Pipeline, type PipelineStage, pipelineStage } from "./pipeline";
 
@@ -32,6 +33,26 @@ export function grepStage(opts: {
           for (const line of formatItem(item).split("\n")) {
             if (test(line) !== opts.invert) yield line;
           }
+        }
+      })(),
+    ),
+  );
+}
+
+// Split multi-line items into one item per line: `read f.json | lines`.
+// This is grepStage's splitting half without the predicate — it is the reason
+// `read **/*.log | grep ERROR | filter (…)` works while swapping grep and
+// filter silently does not. Drops a trailing empty line (matching read() and
+// the `lines` source); grep deliberately keeps it, because grep mirrors what
+// the sh child saw on its stdin.
+export function linesStage(): PipelineStage<unknown, string> {
+  return pipelineStage<unknown, string>((input) =>
+    Pipeline.of(
+      (async function* () {
+        for await (const item of input.lines()) {
+          const ls = formatItem(item).split("\n");
+          if (ls.length > 0 && ls[ls.length - 1] === "") ls.pop();
+          for (const line of ls) yield line;
         }
       })(),
     ),
@@ -105,7 +126,7 @@ async function httpRequest(
     if (typeof body === "string") {
       init.body = body;
     } else if (body instanceof Uint8Array || body instanceof ArrayBuffer) {
-      init.body = body as BodyInit;
+      init.body = body as Bun.BodyInit;
     } else {
       init.body = JSON.stringify(body);
       const headers = new Headers(opts?.headers);
@@ -123,7 +144,13 @@ async function httpRequest(
     if (minted && isTimeoutError(err)) {
       throw new HttpTimeoutError(method, url, timeoutMs!);
     }
-    throw err;
+    // Bun's message ("Unable to connect. Is the computer able to access the
+    // url?") names nothing, so a failing pipeline gave no clue WHICH request
+    // died. The timeout path above has always been labelled; this matches it.
+    const hostHint = url.startsWith("/")
+      ? ' — no host in the URL (did an env var expand to ""? use `:3000/path` for localhost)'
+      : "";
+    throw new Error(`${method} ${url}: ${(err as Error).message}${hostHint}`);
   }
 }
 
@@ -232,6 +259,12 @@ export function parallel<T, U>(n: number, fn: (x: T) => U | Promise<U>): Pipelin
         const settled: U[] = [];
         const inFlight = new Set<Promise<void>>();
         let notify: (() => void) | null = null;
+        // First worker rejection wins, and it is HELD rather than thrown from
+        // the task: nothing awaits these tasks, so a rejecting one used to be
+        // dropped on the floor — the item vanished and the run still exited 0
+        // (an all-throwing load test reported success). The drain loop rethrows
+        // it once the already-settled results have been yielded.
+        const state: { failure: { err: unknown } | null } = { failure: null };
         const wake = () => {
           notify?.();
           notify = null;
@@ -240,8 +273,14 @@ export function parallel<T, U>(n: number, fn: (x: T) => U | Promise<U>): Pipelin
         const start = (item: T) => {
           let task!: Promise<void>;
           task = (async () => {
-            const r = await fn(item);
-            settled.push(r);
+            try {
+              settled.push(await fn(item));
+            } catch (err) {
+              state.failure ??= { err };
+            }
+            // Wake on both paths: a failure must interrupt the pool's parked
+            // await exactly like a result does, or the loop sleeps until some
+            // other task happens to finish.
             wake();
           })().finally(() => {
             inFlight.delete(task);
@@ -256,35 +295,50 @@ export function parallel<T, U>(n: number, fn: (x: T) => U | Promise<U>): Pipelin
         // through the pacing sleep while finished results pile up unyielded —
         // collapsing stats --every windows into a final-millisecond dump.
         let pendingNext: Promise<IteratorResult<T>> | null = null;
-        while (!sourceDone || inFlight.size > 0 || settled.length > 0 || pendingNext !== null) {
-          // Drain finished results first — this is what streams them.
-          while (settled.length > 0) {
-            yield settled.shift()!;
-          }
-          if (!sourceDone && inFlight.size < n) {
-            pendingNext ??= iter.next();
-            const settledFirst = await Promise.race([
-              pendingNext.then(() => false),
-              new Promise<boolean>((r) => {
-                notify = () => r(true);
-              }),
-            ]);
-            notify = null;
-            if (settledFirst) continue; // a result landed — drain it first
-            const next = await pendingNext; // already resolved
-            pendingNext = null;
-            if (next.done) {
-              sourceDone = true;
+        try {
+          while (!sourceDone || inFlight.size > 0 || settled.length > 0 || pendingNext !== null) {
+            // Drain finished results first — this is what streams them.
+            while (settled.length > 0) {
+              yield settled.shift()!;
+            }
+            // Then fail. Yielding what already succeeded before rethrowing
+            // mirrors the non-parallel path, where `range | (x => throw at 3)`
+            // emits 0,1,2 and then fails. Still-running tasks are abandoned.
+            if (state.failure) throw state.failure.err;
+            if (!sourceDone && inFlight.size < n) {
+              pendingNext ??= iter.next();
+              const settledFirst = await Promise.race([
+                pendingNext.then(() => false),
+                new Promise<boolean>((r) => {
+                  notify = () => r(true);
+                }),
+              ]);
+              notify = null;
+              if (settledFirst) continue; // a result landed — drain it first
+              const next = await pendingNext; // already resolved
+              pendingNext = null;
+              if (next.done) {
+                sourceDone = true;
+                continue;
+              }
+              start(next.value);
               continue;
             }
-            start(next.value);
-            continue;
+            if (inFlight.size > 0 && settled.length === 0) {
+              await new Promise<void>((r) => {
+                notify = r;
+              });
+              notify = null;
+            }
           }
-          if (inFlight.size > 0 && settled.length === 0) {
-            await new Promise<void>((r) => {
-              notify = r;
-            });
-            notify = null;
+        } finally {
+          // Release the upstream whether we finished, threw, or the consumer
+          // walked away (`| head -3`). Teardown noise must not mask the real
+          // error on the way out.
+          try {
+            await iter.return?.(undefined as never);
+          } catch {
+            /* upstream already closed or has no return() */
           }
         }
       })(),
@@ -457,19 +511,92 @@ export function filterStage<T>(fn: (x: T) => unknown, sourceText?: string): Pipe
   );
 }
 
+// Latency percentiles from a bounded histogram rather than every sample.
+//
+// Retaining each latency cost ~60 bytes/sample held for the whole run (+124MB
+// at 3.6M) AND made summarize() copy+sort the CUMULATIVE array on every
+// window: 9ms at 100k, 71ms at 1M, 282ms at 3.6M. Per-window that is
+// O(windows x n log n) — a 1000rps/30min soak with `--every 5` spent ~25s, and
+// a 5000rps/1h soak ~97s, blocking the SAME event loop that issues the requests
+// and reads their bodies. A load runner that stalls itself for 1.6s reports
+// those stalls as the server's latency, which is the failure the pacer fix in
+// the previous round existed to prevent.
+//
+// Buckets are sub-millisecond up to 100ms, then progressively coarser, so a
+// percentile is exact to within one bucket width. Deterministic by
+// construction — the same run always reports the same number, which matters
+// because these figures gate CI (a reservoir sample would not be).
+// ~4000 bounds at 4 bytes each is ~16KB per accumulator — nothing next to the
+// 124MB of retained samples it replaces — so resolution is bought generously:
+// 0.1ms below 100ms, 1ms below 1s, 10ms below 10s. A reported percentile is the
+// bucket's UPPER bound, so it never claims the service was faster than it was.
+const BUCKET_BOUNDS: number[] = (() => {
+  const b: number[] = [];
+  for (let v = 1; v < 1000; v++) b.push(Number((v / 10).toFixed(1))); // 0.1ms → <100ms
+  for (let v = 100; v < 1000; v++) b.push(v); // 1ms → <1s
+  for (let v = 1000; v < 10_000; v += 10) b.push(v); // 10ms → <10s
+  for (let v = 10_000; v <= 300_000; v += 100) b.push(v); // 100ms → 5min
+  return b;
+})();
+
+function bucketFor(ms: number): number {
+  // Binary search for the first bound >= ms.
+  let lo = 0;
+  let hi = BUCKET_BOUNDS.length - 1;
+  if (ms > BUCKET_BOUNDS[hi]!) return BUCKET_BOUNDS.length; // overflow bucket
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (BUCKET_BOUNDS[mid]! >= ms) hi = mid;
+    else lo = mid + 1;
+  }
+  return lo;
+}
+
 interface StatsAcc {
-  latencies: number[];
+  /** counts per latency bucket; index BUCKET_BOUNDS.length is the overflow */
+  buckets: Int32Array;
+  /** exact running total, so the mean stays exact */
+  sumMs: number;
+  /** how many items carried a numeric .ms */
+  samples: number;
+  maxMs: number;
   status: Record<string, number>;
   count: number;
 }
 
+function newAcc(): StatsAcc {
+  return {
+    buckets: new Int32Array(BUCKET_BOUNDS.length + 1),
+    sumMs: 0,
+    samples: 0,
+    maxMs: 0,
+    status: {},
+    count: 0,
+  };
+}
+
+function observe(acc: StatsAcc, ms: number): void {
+  acc.buckets[bucketFor(ms)]!++;
+  acc.sumMs += ms;
+  acc.samples++;
+  if (ms > acc.maxMs) acc.maxMs = ms;
+}
+
 function summarize(acc: StatsAcc, wallMs: number): Record<string, unknown> {
-  const sorted = [...acc.latencies].sort((a, b) => a - b);
-  const pct = (p: number): number =>
-    sorted.length === 0
-      ? 0
-      : (sorted[Math.min(sorted.length - 1, Math.floor((p / 100) * sorted.length))] ?? 0);
-  const mean = sorted.length ? sorted.reduce((a, b) => a + b, 0) / sorted.length : 0;
+  // Nearest-rank over the histogram. The old index was
+  // `Math.floor((p/100) * n)`, biased high — p99 of 100 samples was always the
+  // maximum, and p50 of 4 was the 3rd value.
+  const pct = (p: number): number => {
+    if (acc.samples === 0) return 0;
+    const target = Math.max(1, Math.ceil((p / 100) * acc.samples));
+    let seen = 0;
+    for (let i = 0; i < acc.buckets.length; i++) {
+      seen += acc.buckets[i]!;
+      if (seen >= target) return BUCKET_BOUNDS[i] ?? acc.maxMs;
+    }
+    return acc.maxMs;
+  };
+  const mean = acc.samples ? acc.sumMs / acc.samples : 0;
   return {
     count: acc.count,
     wallMs: Math.round(wallMs),
@@ -501,10 +628,10 @@ export function statsStage(
       (async function* () {
         const startedAt = new Date().toISOString();
         const t0 = performance.now();
-        const total: StatsAcc = { latencies: [], status: {}, count: 0 };
+        const total: StatsAcc = newAcc();
         const urls = new Set<string>();
         const windows: Record<string, unknown>[] = [];
-        let win: StatsAcc = { latencies: [], status: {}, count: 0 };
+        let win: StatsAcc = newAcc();
         let winStart = t0;
         let winNo = 0;
         // Written after EVERY window flush, not only at the end: a window-
@@ -520,15 +647,27 @@ export function statsStage(
             summary: summarize(total, performance.now() - t0),
           };
           if (everySec) doc.windows = windows;
-          await Bun.write(out, `${JSON.stringify(doc, null, 2)}\n`);
+          // Write-then-rename: this file is rewritten on EVERY window and is
+          // exactly what CI uploads, so a Ctrl-C (or a window-level threshold
+          // assert abandoning the generator) mid-write left invalid JSON there.
+          const tmp = `${out}.tmp`;
+          await Bun.write(tmp, `${JSON.stringify(doc, null, 2)}\n`);
+          await rename(tmp, out);
         };
         for await (const item of input.lines()) {
           const u = (item as { url?: unknown }).url;
           if (typeof u === "string") urls.add(u);
-          for (const acc of [total, win]) {
-            acc.count++;
-            acc.status[item.status] = (acc.status[item.status] ?? 0) + 1;
-            if (typeof item.ms === "number") acc.latencies.push(item.ms);
+          // Unrolled: `for (const acc of [total, win])` allocated a
+          // two-element array per item in the one loop that runs at full
+          // request rate (213ms vs 66ms over 3M items).
+          const st = String(item.status);
+          total.count++;
+          win.count++;
+          total.status[st] = (total.status[st] ?? 0) + 1;
+          win.status[st] = (win.status[st] ?? 0) + 1;
+          if (typeof item.ms === "number") {
+            observe(total, item.ms);
+            observe(win, item.ms);
           }
           if (everySec && performance.now() - winStart >= everySec * 1000) {
             winNo++;
@@ -536,7 +675,7 @@ export function statsStage(
             windows.push(w);
             await flush();
             yield w;
-            win = { latencies: [], status: {}, count: 0 };
+            win = newAcc();
             winStart = performance.now();
           }
         }
@@ -549,7 +688,15 @@ export function statsStage(
         }
         const summary = summarize(total, performance.now() - t0);
         await flush();
-        yield everySec ? { final: true, ...summary } : summary;
+        // A summary of nothing is TAGGED rather than silently plausible. It
+        // used to be indistinguishable from a healthy run — {count: 0, p95: 0}
+        // sailed through `assert (s => s.p95 < 200)`, so a CI gate that issued
+        // zero requests passed green. `assert` rejects an `empty` summary (see
+        // parser.ts), which closes that without making an empty stream fatal
+        // everywhere: a `logs` query whose retro buffer is empty, or an
+        // exploratory `… | stats`, still works.
+        const tagged = total.count === 0 ? { ...summary, empty: true } : summary;
+        yield everySec ? { final: true, ...tagged } : tagged;
       })(),
     ),
   );

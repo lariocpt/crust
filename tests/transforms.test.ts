@@ -213,7 +213,7 @@ describe("captureEnv", () => {
 
   test("nullish captured value throws naming the source", async () => {
     const p = Pipeline.of([{ id: "a" }])
-      .pipe(captureEnv("CAP_T", (x: { idd?: string }) => x.idd, "(x => x.idd)"))
+      .pipe(captureEnv("CAP_T", (x: { id: string; idd?: string }) => x.idd, "(x => x.idd)"))
       .collect();
     await expect(p).rejects.toThrow("capture CAP_T: got undefined from (x => x.idd) — item 1");
   });

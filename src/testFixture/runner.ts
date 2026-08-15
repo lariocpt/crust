@@ -206,6 +206,7 @@ async function runOne(
           : schema;
       rawOutput = rest as typeof rawOutput;
     }
+    assertKnownOutputKeys(rawOutput);
     const input = (await resolveDeep(rawInput, setupCtx, true)) as Record<string, unknown>;
     const expected = (await resolveDeep(rawOutput, setupCtx, false)) as Record<string, unknown>;
     const actual = await performRequest(input, timeoutMs);
@@ -282,6 +283,51 @@ async function resolveDeep(value: unknown, ctx: unknown, callUnary: boolean): Pr
     out[k] = await resolveDeep(v, ctx, callUnary);
   }
   return out;
+}
+
+// performRequest returns exactly these; `schema` is the reserved key handled
+// before this runs. An unknown key here is always a mistake, and it used to be
+// a SILENT one: diffAsync walks Object.keys(expected) against actual[k], so a
+// misspelled key resolved to undefined and any predicate that didn't
+// dereference its argument returned truthy — `output: {dta: (d) => true}`
+// reported a PASS. `input` takes `body` while `output` takes `data`, so this is
+// an easy slip to make.
+const KNOWN_OUTPUT_KEYS = ["data", "headers", "schema", "status"];
+
+function editDistance(a: string, b: string): number {
+  const prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    let diag = prev[0]!;
+    prev[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const next = Math.min(prev[j]! + 1, prev[j - 1]! + 1, diag + (a[i - 1] === b[j - 1] ? 0 : 1));
+      diag = prev[j]!;
+      prev[j] = next;
+    }
+  }
+  return prev[b.length]!;
+}
+
+function assertKnownOutputKeys(rawOutput: unknown): void {
+  if (!rawOutput || typeof rawOutput !== "object" || Array.isArray(rawOutput)) return;
+  for (const key of Object.keys(rawOutput as Record<string, unknown>)) {
+    if (KNOWN_OUTPUT_KEYS.includes(key)) continue;
+    // `body` is too far from `data` for edit distance to catch, yet it is the
+    // single most likely slip: the REQUEST field is `input.body`, the RESPONSE
+    // body is `output.data`.
+    const hint =
+      key === "body"
+        ? ' — the response body is "data" ("body" is the request field)'
+        : nearestKey(key);
+    throw new Error(`output.${key}: unknown key${hint} (valid: ${KNOWN_OUTPUT_KEYS.join(", ")})`);
+  }
+}
+
+function nearestKey(key: string): string {
+  const near = KNOWN_OUTPUT_KEYS.map((k) => [k, editDistance(key, k)] as const)
+    .filter(([, d]) => d <= 3)
+    .sort((x, y) => x[1] - y[1])[0];
+  return near ? ` — did you mean "${near[0]}"?` : "";
 }
 
 async function performRequest(

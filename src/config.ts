@@ -1,7 +1,7 @@
 import { registerBuiltinFns } from "./builtinFns";
 import { discoverGlobals } from "./discover";
 import { Pipeline } from "./pipeline";
-import { GET, glob, load, range, read } from "./sources";
+import { GET, glob, load, procs, range, read, readAll, readLines, tail } from "./sources";
 import {
   captureEnv,
   DELETE,
@@ -61,11 +61,20 @@ export async function loadConfig(ctx: Context, configPath?: string): Promise<voi
     },
   };
 
+  // Keep this list in step with the "Crust exposes these as globals" table in
+  // docs/USAGE.md — tests/globals.test.ts asserts the two agree. `readAll` and
+  // `tail` were documented but never injected, so every documented `tail(...)`
+  // example threw ReferenceError inside an init.ts (which crust then reported
+  // as a warning and carried on from, exit 0).
   const g = globalThis as Record<string, unknown>;
   g.Pipeline = Pipeline;
   g.range = range;
   g.glob = glob;
   g.read = read;
+  g.readAll = readAll;
+  g.readLines = readLines;
+  g.tail = tail;
+  g.procs = procs;
   g.GET = GET;
   g.POST = POST;
   g.PUT = PUT;

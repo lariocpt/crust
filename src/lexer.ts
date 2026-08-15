@@ -78,8 +78,12 @@ export function classify(text: string): StageKind {
     let timeoutMs: number | undefined;
     for (let i = 1; i < parts.length; i++) {
       const p = parts[i]!;
-      if (p === "-H" && i + 1 < parts.length) {
-        headers.push(parts[++i]!);
+      if (p === "-H") {
+        // A missing value used to fall off the end of the loop and vanish,
+        // taking the header with it.
+        const raw = parts[++i];
+        if (raw === undefined) throw new Error('http: -H requires a "Key: value" header');
+        headers.push(raw);
         continue;
       }
       if (p === "--timeout" || p.startsWith("--timeout=")) {
@@ -90,7 +94,12 @@ export function classify(text: string): StageKind {
       }
       // An http stage can't fall back to shell (the verb regex already
       // committed), so a typo'd flag must be loud, not silently dropped.
-      if (p.startsWith("--")) {
+      //
+      // This tested `--` only, so every SINGLE-dash flag fell through the loop
+      // and disappeared without a word: `-t 1ms` was ignored (the request ran
+      // untimed and passed), and a curl-muscle-memory `-h "authorization: …"`
+      // dropped the auth header, turning into a 401 blamed on the server.
+      if (p.startsWith("-")) {
         throw new Error(`http: unknown flag "${p}" — supported: -H, --timeout`);
       }
     }
@@ -129,9 +138,22 @@ export function classify(text: string): StageKind {
     return { kind: "capture", name: captureMatch[1]!, source: captureMatch[2] ?? null };
   }
 
-  const readMatch = t.match(/^read\s+(.+)$/);
+  const readMatch = t.match(/^read(?:\s+(.+))?$/);
   if (readMatch) {
-    return { kind: "readsrc", pattern: readMatch[1]!.trim() };
+    // Bare `read` used to fall through to POSIX `read`, which exits 1 with no
+    // output whatsoever — the least helpful failure in the grammar. `lines`
+    // already names what it needs; this matches it.
+    return { kind: "readsrc", pattern: readMatch[1]?.trim() ?? "" };
+  }
+
+  // `lines <glob>` is the line-oriented file source; bare `lines` splits
+  // whatever is upstream into one item per line. It is the answer to `read`
+  // yielding whole-file items, which looks identical on a terminal but makes
+  // `filter (l => …)` match against the entire file. No `lines` binary exists
+  // on a normal system, so nothing is shadowed (`split` would have been).
+  const linesMatch = t.match(/^lines(?:\s+(.+))?$/);
+  if (linesMatch) {
+    return { kind: "lines", pattern: linesMatch[1]?.trim() ?? null };
   }
 
   // `stdin` (or the tail/cat-style `-`) streams piped stdin line by line —

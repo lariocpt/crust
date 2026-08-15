@@ -1,10 +1,29 @@
 import { afterAll } from "bun:test";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import v8 from "node:v8";
 
 const OUT_DIR = resolve(process.cwd(), ".crust/heap");
 const TOP_N = 10;
+// Every `bun test` wrote a ~680KB snapshot and nothing ever removed one; the
+// directory had reached 226 files / 279MB. Keep a short history — enough to
+// diff a regression against the previous few runs — and drop the rest.
+const KEEP_SNAPSHOTS = 5;
+
+function pruneSnapshots(): void {
+  try {
+    const files = readdirSync(OUT_DIR)
+      .filter((f) => f.endsWith(".heapsnapshot"))
+      .map((f) => {
+        const p = resolve(OUT_DIR, f);
+        return { p, mtime: statSync(p).mtimeMs };
+      })
+      .sort((a, b) => b.mtime - a.mtime);
+    for (const stale of files.slice(KEEP_SNAPSHOTS)) rmSync(stale.p, { force: true });
+  } catch {
+    /* pruning is best-effort — never fail a test run over housekeeping */
+  }
+}
 
 const startedAt = performance.now();
 const rssAtStart = process.memoryUsage.rss();
@@ -39,12 +58,18 @@ function emitReport(): void {
   try {
     const elapsedMs = performance.now() - startedAt;
     const mem = process.memoryUsage();
+    // Two heap walks, deliberately: Bun's JSC-format snapshot is the only one
+    // carrying the class histogram below, while v8.writeHeapSnapshot produces
+    // the devtools-loadable file the docs tell you to open. Measured together
+    // at roughly 100-130ms on this suite's ~40k-node heap — ~1.5% of the run,
+    // which is the price of both artifacts.
     const snap = Bun.generateHeapSnapshot() as HeapSnapshot;
 
     mkdirSync(OUT_DIR, { recursive: true });
     const stamp = new Date().toISOString().replace(/[:.]/g, "-");
     const file = resolve(OUT_DIR, `tests-${stamp}.heapsnapshot`);
     const written = v8.writeHeapSnapshot(file);
+    pruneSnapshots();
 
     const top = topClasses(snap, TOP_N);
     const lines: string[] = [];

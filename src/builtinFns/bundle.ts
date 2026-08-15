@@ -1,39 +1,67 @@
+import { FlagError, type FlagSpec, parseFlags } from "../args";
+
+// `bundle` is the last flag surface that hand-rolled its own loop, so it kept
+// the value-swallow bug the tool builtins were cured of: `--outdir` did
+// `String(args[++i])` with no guard, so `bundle x.ts --outdir --minify` used
+// the literal string "--minify" as the output directory and cheerfully created
+// one on disk.
+const SPEC: FlagSpec = {
+  outdir: { type: "string" },
+  outfile: { short: "o", type: "string" },
+  target: { type: "string" },
+  sourcemap: { type: "string" },
+  minify: { short: "m", type: "boolean" },
+};
+
+const TARGETS = ["browser", "bun", "node"] as const;
+const SOURCEMAPS = ["none", "inline", "external", "linked"] as const;
+
 export async function bundle(...args: unknown[]): Promise<unknown> {
-  const positionals: string[] = [];
+  // Called mid-pipeline the parser passes the upstream item first; a string
+  // item is an entrypoint, anything else is not ours to interpret.
+  const argv = args.filter((a): a is string => typeof a === "string");
+
+  let entrypoints: string[];
   let outdir: string | undefined;
   let outfile: string | undefined;
-  let target: "browser" | "bun" | "node" = "bun";
+  let target: (typeof TARGETS)[number] = "bun";
   let minify = false;
-  let sourcemap: "none" | "inline" | "external" | "linked" = "none";
+  let sourcemap: (typeof SOURCEMAPS)[number] = "none";
 
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i];
-    if (typeof a !== "string") continue;
-    if (a === "--outdir") outdir = String(args[++i]);
-    else if (a.startsWith("--outdir=")) outdir = a.slice("--outdir=".length);
-    else if (a === "--outfile") outfile = String(args[++i]);
-    else if (a.startsWith("--outfile=")) outfile = a.slice("--outfile=".length);
-    else if (a === "--target") target = String(args[++i]) as typeof target;
-    else if (a.startsWith("--target=")) target = a.slice("--target=".length) as typeof target;
-    else if (a === "--minify") minify = true;
-    else if (a === "--sourcemap") sourcemap = "linked";
-    else if (a.startsWith("--sourcemap="))
-      sourcemap = a.slice("--sourcemap=".length) as typeof sourcemap;
-    else if (a.startsWith("--")) throw new Error(`bundle: unknown flag '${a}'`);
-    else positionals.push(a);
+  try {
+    // A bare `--sourcemap` has always meant "linked". parseFlags requires a
+    // value for a string flag, so normalise the shorthand rather than teach the
+    // parser about optional values.
+    const normalised = argv.map((a) => (a === "--sourcemap" ? "--sourcemap=linked" : a));
+    const { values, rest } = parseFlags(normalised, SPEC);
+    entrypoints = rest;
+    outdir = values.outdir as string | undefined;
+    outfile = values.outfile as string | undefined;
+    minify = values.minify === true;
+
+    const t = values.target as string | undefined;
+    if (t !== undefined) {
+      if (!(TARGETS as readonly string[]).includes(t)) {
+        throw new FlagError(`--target must be one of ${TARGETS.join(", ")} — got "${t}"`);
+      }
+      target = t as typeof target;
+    }
+    const sm = values.sourcemap as string | undefined;
+    if (sm !== undefined) {
+      if (!(SOURCEMAPS as readonly string[]).includes(sm)) {
+        throw new FlagError(`--sourcemap must be one of ${SOURCEMAPS.join(", ")} — got "${sm}"`);
+      }
+      sourcemap = sm as typeof sourcemap;
+    }
+  } catch (err) {
+    throw new Error(`bundle: ${(err as Error).message}`);
   }
 
-  if (positionals.length === 0) {
+  if (entrypoints.length === 0) {
     throw new Error("bundle: need at least one entrypoint");
   }
 
-  const result = await Bun.build({
-    entrypoints: positionals,
-    outdir,
-    target,
-    minify,
-    sourcemap,
-  });
+  const result = await Bun.build({ entrypoints, outdir, target, minify, sourcemap });
 
   if (!result.success) {
     const msgs = result.logs.map((l) => l.message).join("\n");
