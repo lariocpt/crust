@@ -20,6 +20,32 @@ husky + lint-staged.
 - `new Function` evaluation of user-typed lambdas is deliberate (the user's
   own terminal is the trust boundary) — don't "fix" it.
 
+## Design rules (v0.2 — apply these to anything new)
+
+1. **crust must never report a false pass.** A tool that exits 0 on failure is
+   worse than a slow one. Errors propagate: a lambda that throws under
+   `parallel` fails the line, a spawned shell stage's nonzero exit becomes the
+   line's exit code (the `| head -3` early-exit exemption stays), an unknown
+   fixture `output` key is an error not a silently-undefined matcher, and a
+   matcher that throws is reported as `predicate threw`, not as a mismatch.
+   `tests/honest-failure.test.ts` is the contract — every case there failed
+   before, and its controls exist so a fix can't just make everything fail.
+2. **The primary argument is positional, and one parser owns every CLI.**
+   `parseFlags(argv, spec)` in `src/args.ts` gives all six tool builtins
+   positionals, short flags, `--flag=value`, a value-swallow guard, uniform
+   `--help` and uniform exit 2. Add a flag by extending that CLI's `SPEC`, never
+   by hand-rolling a loop. Legacy long flags (`--target`, `--swagger`,
+   `--config`) stay accepted forever, undocumented.
+3. **Don't grow the grammar; give users the general mechanism.** Aliases expand
+   at the head of every stage (single pass, no rescan), so users shorten what
+   *they* repeat instead of the language carrying a shorthand for each keyword.
+   A new stage keyword must not shadow a real binary — `lines` is free, `split`
+   would have shadowed `/usr/bin/split`.
+
+Corollary for docs: `crust --check '<line>'` parses without running (no I/O, no
+spawn), which is how `tests/docs-lint.test.ts` and the website's CI validate
+every example. If you change the grammar, those go red before users do.
+
 ## Hard constraints
 
 - **The shipped artifact is a compiled Bun binary** (`bun build --compile`).
@@ -38,7 +64,7 @@ husky + lint-staged.
 
 ## Tests
 
-`bun test` — the whole suite runs in ~5s; keep it that way. Every feature
+`bun test` — the whole suite runs in ~9s; keep it in that range. Every feature
 lands with tests (see `tests/test-fixture.test.ts` and
 `tests/pipeline.test.ts` for the harness patterns — throwaway Bun.serve +
 tmpdir fixtures). Pre-commit runs lint-staged (biome) but NOT the suite —
@@ -60,3 +86,9 @@ the pipeline won't compile. Sibling containers can't resolve LAN DNS —
 describe what the binary actually does — this project once advertised a load
 pipeline that didn't parse. If you add or change a capability, update both,
 and never document behavior you haven't run through `bun src/index.ts -c`.
+
+This is now enforced, not just asked for: `tests/docs-lint.test.ts` parses every
+crust line in `docs/USAGE.md` and `README.md`, `tests/skills.test.ts` does the
+same for the embedded skills, and the website's Jenkins `Grammar` stage runs its
+examples through `crust --check` using the binary it already mounts. The website
+is a separate repo and cannot import the lexer — `--check` is what bridges it.

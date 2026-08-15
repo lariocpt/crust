@@ -36,18 +36,18 @@ read fixtures/*.json | POST :3000/users | expect 201
 # A whole CRUD suite as one .pipes file — request, then assert the DB saw it
 #   {"name":"Court"} | POST $BASE/api/buildings -H "authorization: Bearer $TOKEN" | expect 201
 #   sql "SELECT count(*)::int AS c FROM buildings" | assert (r => r.c === 1)
-test-pipes --target smoke.pipes --bail
+test-pipes smoke.pipes -b
 
 # Generate the negative-test matrix (401/403/404 + per-field 400s) from a spec
 # (copy examples/gen-setup.ts as your starting --setup module)
-gen-fixtures --swagger ./openapi.json --out tests/gen --setup ./tests/gen-setup.ts
-test-fixture --target 'tests/gen/*.gen.crust.ts' --threads 8
+gen-fixtures ./openapi.json                       # --out/--setup default to tests/gen
+test-fixture 'tests/gen/*.gen.crust.ts' -j8
 
 # Load testing
 range(0, 10000) | parallel 100 | GET :3000/health | expect 200 | stats
 
-# Log mining — grep splits files into lines, filter applies the TS predicate
-read **/*.log | grep ERROR | filter (l => !l.includes('healthcheck')) | wc -l
+# Log mining — `lines` streams a file line by line (`read` yields whole files)
+lines **/*.log | grep ERROR | filter (l => !l.includes('healthcheck')) | wc -l
 
 # Any command's output as a source — and native grep keeps follow streams live
 docker logs -f my-app | crust -c 'stdin | (l => JSON.parse(l)) | filter (e => e.level >= 40)'
@@ -65,9 +65,10 @@ Fixtures (`test-fixture`) run `.crust.ts` files with `{ input, output }`
 shapes: `setup()` context flows into the request and every matcher, matchers
 may be async (DB side-effect assertions await), and `--count/--threads`
 turns any fixture into a stress run with p50/p95/p99 reports —
-`--timeout/--bail` keep long runs honest. `mock-server --swagger spec.json`
-serves an OpenAPI spec example-first so clients run without their backend;
-`--stateful` makes it remember what you POST.
+`-t/-b` keep long runs honest. `mock-server spec.json` serves an OpenAPI
+spec example-first so clients run without their backend; `--stateful` makes it
+remember what you POST. Every tool builtin takes its primary argument
+positionally; the old `--target`/`--swagger` spellings still work.
 
 ## What crust is not
 
@@ -75,7 +76,7 @@ Not a login shell and not a bash replacement — plain shell lines are
 delegated to `sh -c` untouched; `Ctrl-C` cancels the running line but there
 is no `Ctrl-Z`/`fg`/`bg`/`&` job control, and plain `FOO=x` assignments
 don't persist (use `export` or `capture`). The full list lives in
-[Limits](docs/USAGE.md#limits-in-v01).
+[Limits](docs/USAGE.md#limits-in-v02).
 
 ## Docs
 
