@@ -24,7 +24,7 @@ A pipeline-first devops toolkit built on Bun. Shell commands, TypeScript lambdas
 - [Editor keybindings](#editor-keybindings)
 - [Configuration (`init.ts`)](#configuration-initts)
 - [Examples](#examples)
-- [Limits in v0.1](#limits-in-v01)
+- [Limits in v0.2](#limits-in-v02)
 
 ---
 
@@ -62,6 +62,30 @@ crust -c 'src/**/*.ts | wc -l'
 | `crust -c <line>` | Run one line and exit. Multi-line strings split on `\n`, skip blanks and `#` comments, and are **fail-fast**: crust stops at the first failing line and exits with *its* code (previously a later success masked an earlier failure). |
 | `crust -h`, `--help` | Show usage. |
 | `crust -V`, `--version` | Show version. |
+
+### Checking a line without running it
+
+`crust --check '<line>'` parses and exits — 0 if every line parses, 1 with the
+parse error otherwise. It builds the pipeline but never drains it, and every
+source is lazy, so nothing is opened, fetched or spawned:
+
+```bash
+crust --check 'range(0,999) | parallel 50 | GET :3000/health | expect 200 | stats'
+# ok: 1 line(s) parse
+
+crust --check 'read /nonexistent/*.json | POST :3000/x'   # still ok — no I/O happens
+crust --check 'time warmup | range(1,3)'
+# crust: time: the label must be quoted — did you mean `time "warmup"`?
+```
+
+It also validates BUILTIN invocations against each CLI's own flag spec, so
+`crust --check 'test-pipes --bogus x'` and a `mock-server` with no spec both
+fail — the parser alone treats a builtin line as an opaque shell stage and would
+call either one fine.
+
+That makes it the linter for documented examples: blank lines and `#` comments
+are skipped, so a whole fenced block can be piped in as one argument. crust's
+own suite lints every ```crust example in the shipped agent skills this way.
 
 ## Hello world
 
@@ -125,14 +149,20 @@ What you can type at the prompt today.
 ```bash
 ls                                # any shell command — source if first stage
 range(0, 9)                       # 0..9 inclusive — Pipeline<number>
-**/*.ts                           # glob — Pipeline<string> of paths
+**/*.ts                           # glob — Pipeline<string> of paths, SORTED
 src/*.{ts,tsx}                    # globs support **/*, ?, [abc]
 tail app.log                      # last 10 lines, then done — Pipeline<string>
 tail -n 100 app.log               # custom line count
 tail -F app.log                   # follow mode: stream new lines forever
 GET https://api.example.com/  # → Pipeline<Response> (single item)
 GET :3000/health                  # localhost shorthand
-read fixtures/*.json              # whole-file contents, one item per file
+GET localhost:3000/health         # bare host[:port] — http:// is assumed
+GET example.com/status            # …as is a bare hostname
+# Unknown flags are an ERROR, single-dash included: `-t 2s` is not `--timeout 2s`,
+# and a curl-style lowercase `-h` is not `-H`. Only -H and --timeout are accepted.
+read fixtures/*.json              # whole-file contents, ONE item per file
+lines app.log                     # one item per LINE — what you usually want
+lines **/*.log                    # across every match, sorted
 {"name": "Court"}                 # JSON literal — one parsed item (the request body)
 procs({web: "bun run dev", api: "bun api.ts"})   # merge long-lived processes
 load 30s 100/s                    # paced ticks: 100/s for 30s (load runs)
@@ -231,6 +261,17 @@ SIGTERM'd on teardown, escalating to SIGKILL after 3s — grandchildren
 escalation runs on Ctrl-C and on a ready-timeout kill, so a child that
 ignores SIGTERM can't wedge the shutdown or the restart loop.
 
+> **`read` yields files, `lines` yields lines.** They print identically on a
+> terminal, so the difference is invisible until a downstream stage sees it:
+> `read app.log | filter (l => l.includes('ERR'))` hands the predicate the
+> **entire file** as one string, so it matches if *any* line matches. `grep`
+> hides this because it splits multi-line items internally — which is why
+> `read **/*.log | grep ERROR | filter (…)` works and swapping the last two
+> stages silently does not. Use `lines` when you want lines; keep `read` for
+> `read fixtures/*.json | POST …`, where whole-file items are the request
+> bodies. Bare `lines` mid-pipeline splits whatever is upstream:
+> `read f.json | lines`.
+
 ### Transforms
 
 ```bash
@@ -284,6 +325,14 @@ with exactly **one** pattern argument. Matching is per LINE on the same
 formatted text a shell grep received: multi-line items (`read` whole-file
 contents) are split at their newlines and the matching lines are emitted,
 so `read app.log | grep -v ERROR` behaves exactly like the sh pipe did.
+> **Exit-code difference worth knowing.** The native stage is a *stream
+> filter*: matching nothing yields nothing and the line still exits 0. A stage
+> that falls through to `grep(1)` is a real process, and since v0.2 a shell
+> stage's nonzero exit becomes the line's exit code — so `… | grep -x nope`
+> (unsupported flag → `sh`) exits 1 on no match while `… | grep nope` (native)
+> exits 0. Assert on the data if you need a gate: `… | grep ERROR | stats |
+> assert (s => s.count === 0)`.
+
 Everything else keeps exact `grep` semantics via `sh`: bare `grep` or
 flags with no pattern, combined or unknown flags (`-iv`, `-c`, `--color`),
 `-F` together with `-E` (grep's own error), two positionals (that's a file
@@ -401,6 +450,41 @@ predicate and prints the actual summary —
 and the line exits 1, which `crust -c` propagates (it stops at the first
 failing line).
 
+**What makes a line fail.** As of v0.2 the gate is honest in three more places
+that used to exit 0:
+
+| Situation | Exit |
+|---|---|
+| An `assert` predicate returned falsy, or its upstream was empty | `1` |
+| An `expect` found mismatched statuses at drain | `1` |
+| A stage's lambda **threw** — including under `parallel N` | `1` |
+| `assert` was handed an **empty** `stats` summary (0 items measured) | `1` |
+| An http stage got an unknown flag, including single-dash (`-t`, `-h`) | `1` |
+| A spawned shell stage exited nonzero (`\| tee bad/path`, `\| false`) | that code |
+| A fixture's `output` names an unknown key (`data` misspelled) | `1` |
+| Multi-line `-c`: any line fails | that line's code — fail-fast |
+| Builtin runners: bad args / no files matched | `2` |
+
+Before v0.2 a lambda that threw under `parallel` was silently dropped — an
+entire load run whose handler always threw reported success — and a failing
+shell stage mid-pipeline was discarded outright. A child that exits early
+after closing the pipe (`\| head -3`) is still exit 0, as it should be.
+
+**A gate that measured nothing is not a pass.** `stats` over an empty stream
+emits `{"count": 0, …, "empty": true}` and `assert` refuses it, because
+`{count: 0, p95: 0}` satisfies `s => s.p95 < 200` — so a run that issued zero
+requests (a glob that matched nothing, a filter that dropped everything, a
+server never reached) used to report success. A bare `… | stats` with no
+assertion still prints the tagged summary and exits 0, so exploring stays cheap.
+
+**Percentiles are bucketed, not exact order statistics.** `stats` keeps a fixed
+histogram rather than every sample: memory is constant regardless of run length,
+`p50/p95/p99` are accurate to within a bucket (0.1ms below 100ms, 1ms below 1s),
+and the reported value is the bucket's upper bound — never faster than reality.
+`meanMs` and `count` remain exact. Retaining every sample cost ~124MB at 3.6M
+requests and made each `--every` window re-sort the cumulative array, which
+blocked the load client itself for up to 1.6s per window on a long soak.
+
 **Baselines.** `--out` writes the artifact; an async assert reads it back.
 The "worse than 2× baseline p95 is a failure" gate is one line:
 
@@ -509,6 +593,7 @@ with nothing piped, `stdin` errors immediately.
 ### Builtins
 
 ```bash
+# shell
 cd <dir>          # cd, cd -, cd ~, cd ~/path
 export FOO=bar    # set env var
 alias g=git       # define alias (also: alias g='git status')
@@ -518,9 +603,23 @@ source <file>     # .ts/.js imported; anything else runs line-by-line in this se
 history           # list this session's lines
 exit [code]
 help
+
+# tools (each takes its primary argument positionally)
+dotenv [<path>]                 # load a .env into the session
+test-fixture <glob> [-j N]      # run .crust.ts HTTP fixtures
+test-pipes <glob> [-b]          # run .pipes suites
+gen-fixtures <spec>             # derive negative-case fixtures from an OpenAPI spec
+mock-server <spec> [-p N]       # serve an OpenAPI spec
+verify-web-links <url|sitemap>  # crawl a site for broken links, anchors, meta
+logs <source>                   # interactive log search over a held stream
+skills <list|install>           # install the embedded agent skills
 ```
 
-Builtins run in-process. They dispatch when the first token matches a builtin name **and** the line has no pipe (`|`), redirect (`<`, `>`), or sequencing (`&`, `;`) operators.
+Builtins run in-process. They dispatch when the first token matches a builtin
+name **and** the line has no *unquoted* pipe (`|`), redirect (`<`, `>`), or
+sequencing (`&`, `;`) operator. Quoted ones are fine, which is what makes
+`export DB='postgres://h/d?a=1&b=2'` and `alias two='a | b'` work — before the
+gate understood quotes, both silently did nothing and exited 0.
 
 ---
 
@@ -585,9 +684,11 @@ Pipeline             // class — the unified stream abstraction
 range(start, end)    // source
 glob(pattern)        // source
 read(path)           // source — Pipeline<string> of lines
+readLines(pattern)   // source — lines across every match (the shell's `lines`)
 readAll(pattern)     // source — whole-file contents, one item per matched file
                      // (the shell line's `read <glob>`)
 tail(paths, opts?)   // source — string | string[]; globs expanded; multi-file merges
+procs(spec)          // source — merged child-process streams (the shell's `procs`)
 GET(url, opts?)      // source
 POST(url, opts?)     // transform: Pipeline<T> → Pipeline<Response>
 PUT, PATCH, DELETE   // same shape as POST
@@ -697,15 +798,16 @@ The TS-test ecosystem owns the name `expect`. Crust exports the API name as `exp
 |---|---|
 | `cd [dir]` | `process.chdir`. `cd -` returns to `OLDPWD`. `~` expands to `$HOME`. |
 | `export KEY=value` | Sets `process.env[KEY]`. Multiple `KEY=value` pairs accepted. Bare `export` lists. |
-| `alias name='cmd'` | Adds an alias. Bare `alias` lists. Quotes optional. Expansion: first word only. |
+| `alias name='cmd'` | Adds an alias. Bare `alias` lists. Quotes optional. Expands at the head of **every stage**, so `range(0,99) \| parallel 50 \| hc` resolves `hc`. Single pass — an expansion is not rescanned, so `alias ls='ls -la'` terminates. |
 | `unalias name` | Removes an alias. |
 | `source file` | `.ts`/`.js`/`.mjs` dynamically imported; anything else (`.crust`) runs line-by-line through the crust parser **in this session** — aliases, `export`s, and `capture`s persist. To run a bash script, run it with `sh` instead. |
 | `history` | Numbered list of this session's lines. Persistent at `~/.local/share/crust/history`. |
-| `dotenv [--config p] [--append]` | Loads `.env` files into the session. Tracks history, supports `dotenv status` and `dotenv clear`. See [dotenv](#dotenv). |
-| `test-fixture --target g [--out p] [--threads N] [--count N] [--timeout ms] [--bail]` | Runs `.crust.ts` HTTP fixtures. See [test-fixture](#test-fixture). |
-| `test-pipes --target g [--bail] [--timeout ms] [--setup m]` | Runs `.pipes` files — one shorthand fixture pipeline per line. See [test-pipes](#test-pipes). |
-| `gen-fixtures --swagger s --out d --setup m [--no-flows]` | Generates negative-case `.crust.ts` fixtures and CRUD flow `.pipes` suites from an OpenAPI spec. See [gen-fixtures](#gen-fixtures). |
-| `mock-server --swagger <url-or-path> [--port N] [--host addr] [--stateful] [--state <path\|url>] [--seed <file>] [--validate] [--proxy <upstream>]` | Boots a `Bun.serve` instance that mocks every operation in an OpenAPI 3.x spec; `--stateful` adds a CRUD layer, `--state` persists it to sqlite/postgres, `--seed` inserts boot data, `--validate` rejects spec-violating requests with 422, `--proxy` turns it into a validation proxy in front of a real upstream. See [mock-server](#mock-server). |
+| `dotenv [<path>] [-a]` | Loads `.env` files into the session. Tracks history, supports `dotenv status` and `dotenv clear`. See [dotenv](#dotenv). |
+| `test-fixture <glob> [-o p] [-j N] [-n N] [-t ms] [-b]` | Runs `.crust.ts` HTTP fixtures. See [test-fixture](#test-fixture). |
+| `test-pipes <glob> [-b] [-t ms] [-s m]` | Runs `.pipes` files — one shorthand fixture pipeline per line. See [test-pipes](#test-pipes). |
+| `gen-fixtures <spec> [-o d] [-s m] [--no-flows]` | Generates negative-case `.crust.ts` fixtures and CRUD flow `.pipes` suites from an OpenAPI spec. See [gen-fixtures](#gen-fixtures). |
+| `mock-server <spec> [-p N] [-b addr] [--stateful] [--state <path\|url>] [--seed <file>] [--validate] [--proxy <upstream>]` | Boots a `Bun.serve` instance that mocks every operation in an OpenAPI 3.x spec; `--stateful` adds a CRUD layer, `--state` persists it to sqlite/postgres, `--seed` inserts boot data, `--validate` rejects spec-violating requests with 422, `--proxy` turns it into a validation proxy in front of a real upstream. See [mock-server](#mock-server). |
+| `verify-web-links <url\|sitemap> [-c N] [-t ms] [--fixtures g] [--exclude s]` | Crawls a site from its sitemap (or auto-discovers one from a base URL), verifying every link, anchor and redirect, and diffs Open Graph/meta tags against fixtures. See [verify-web-links](#verify-web-links). |
 | `skills <list\|install> [--global] [--force]` | Claude agent skills shipped in the binary. See [Agent skills](#agent-skills). |
 | `logs [--buffer N] <source>` | Interactive log searcher: holds a `tail -F`/`procs(...)`/shell-command stream, buffers the last N items, and every typed line is a pipeline fragment run over the buffer then live. See [logs](#logs--interactive-log-searching). |
 | `exit [code]` | Exits crust with optional code (default 0). |
@@ -743,7 +845,7 @@ dotenv clear                     # restore process.env to the pre-first-load sna
 
 The prompt shows `[env: N]` after `N` successful loads. Cleared when you run `dotenv clear`. Snapshot is taken lazily on the first ever load; subsequent loads do not re-snapshot, so `clear` always restores back to pristine state.
 
-Supported `.env` syntax: `KEY=value`, `KEY="quoted value"`, `KEY='single quoted'`, leading `export` prefix, `#` comments (whole-line and trailing on unquoted values). Multi-line quoted values and `$FOO` interpolation are not supported in v0.1.
+Supported `.env` syntax: `KEY=value`, `KEY="quoted value"`, `KEY='single quoted'`, leading `export` prefix, `#` comments (whole-line and trailing on unquoted values). Multi-line quoted values and `$FOO` interpolation are not supported in v0.2.
 
 ### test-fixture
 
@@ -1179,7 +1281,7 @@ mock-server --swagger ./openapi.yaml --port 4000 \
   --proxy http://localhost:8080 --report violations.ndjson
 ```
 
-#### Stress mode (`--count`) and randomized inputs
+#### test-fixture stress mode (`--count`) and randomized inputs
 
 `--count N` runs every matched fixture N times. Combined with `--threads`, you get concurrency + volume. When `N > 1` the report adds a stress block per fixture: `p50`, `p95`, `p99`, mean, min, max, plus the status-code distribution. Each result is tagged with its `iter` index so failures point at the offending iteration.
 
@@ -1321,7 +1423,7 @@ Crust ships a small set of `crust.fn`-registered helpers. They work as both pipe
 | `salt [bytes] [hex\|base64\|base64url]` | Cryptographically random bytes. Defaults: 16 bytes, hex. `salt 32 base64`. |
 | `jwt sign \| verify \| decode --secret <s>` | HS256 JWT. Reads `$JWT_SECRET` if `--secret` omitted. Item can be a JSON string (sign) or a token (verify/decode). |
 | `bundle <entry> [--outdir \| --outfile \| --minify \| --sourcemap \| --target=bun\|browser\|node]` | Wraps `Bun.build` for one-shot bundling. With `--outfile`, writes the first artifact and returns `{outfile, bytes}`. |
-| `sql "<query>" [params…]` | Runs a SQL query via Bun's SQL client using `$DATABASE_URL`. As a source, **streams one item per row** (the parser flattens Array results from function-as-source). |
+| `sql "<query>" [params…]` | Runs a SQL query via Bun's SQL client using `$DATABASE_URL`. **Streams one item per row in both positions** — as a source and mid-pipeline. Mid-pipeline the upstream item **binds as the first parameter** when the line declares none, so `range(1,1) \| sql "SELECT … WHERE id = ?"` queries id 1; an explicitly declared parameter still wins. |
 | `wait <target> [--timeout <dur>] [--interval <dur>] [--probe-timeout <dur>]` | Blocks until a target answers, then emits `{target, ready, ms, attempts}`. Target: `:3001/health` / `http(s)://…` (ready = any 2xx) or `port:5432` (TCP connect). Durations like `300ms`/`30s`/`2m` (defaults 30s / 500ms). `--probe-timeout` caps each probe (default `min(interval*4, 2s)`) — raise it for slow-to-accept targets. Not ready in time → error, exit 1 — CI-friendly. |
 
 Examples:
@@ -1536,7 +1638,7 @@ echo src/index.ts | bundle
 
 ---
 
-## Limits in v0.1
+## Limits in v0.2
 
 Honest about what doesn't work yet:
 

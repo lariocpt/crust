@@ -9,11 +9,11 @@ One builtin, four modes, all driven by an OpenAPI 3.x spec (Swagger 2.0
 auto-converts; URL or local json/yaml):
 
 ```
-mock-server --swagger ./openapi.json --port 4000                      # example-first mock
-mock-server --swagger ./openapi.json --port 4000 --stateful           # + in-memory CRUD
-mock-server --swagger ./openapi.json --port 4000 --state ./m.sqlite   # + persistent CRUD (implies --stateful)
-mock-server --swagger ./openapi.json --port 4000 --validate           # + reject bad requests (422)
-mock-server --swagger ./openapi.json --port 4747 --proxy http://localhost:3001   # conformance proxy
+mock-server ./openapi.json -p4000                      # example-first mock
+mock-server ./openapi.json -p4000 --stateful           # + in-memory CRUD
+mock-server ./openapi.json -p4000 --state ./m.sqlite   # + persistent CRUD (implies --stateful)
+mock-server ./openapi.json -p4000 --validate           # + reject bad requests (422)
+mock-server ./openapi.json -p4747 --proxy http://localhost:3001   # conformance proxy
 ```
 
 Builtins can't be piped — run the server in one terminal (or `procs()`), and

@@ -450,7 +450,7 @@ describe("resetState + stop", () => {
         await server.resetState();
         // untouched again: the list is the spec example
         const list = (await (await fetch(`${base}/things`)).json()) as {
-          items: Array<{ name: string }>;
+          items: Array<{ id?: string; name: string }>;
         };
         expect(list.items).toEqual([{ id: "seed", name: "Example" }]);
         if (state !== undefined) {
@@ -587,7 +587,7 @@ describe("envelope-aware CRUD", () => {
       expect(((await got.json()) as { thing: { name: string } }).thing.name).toBe("Crusty");
 
       const list = (await (await fetch(`${base}/api/things`)).json()) as {
-        things: Array<{ id: string }>;
+        things: Array<{ id: string; name?: string }>;
       };
       expect(list.things).toEqual([{ id: body.thing.id, name: "Crusty" }]);
 

@@ -193,7 +193,7 @@ export class LogsSession {
         ]);
         if (who === "cancelled") {
           retroDrain.catch(() => {});
-          void retroIter.return?.(undefined);
+          retroIter.return?.(undefined)?.catch(() => {});
           return;
         }
       } catch (err) {
@@ -246,7 +246,7 @@ export class LogsSession {
         ]);
         if (outcome === "hard") {
           drain.catch(() => {});
-          void iter.return?.(undefined);
+          iter.return?.(undefined)?.catch(() => {});
         } else if (queue.dropped > 0) {
           writeErr(`logs: live view lagged — dropped ${queue.dropped} oldest item(s)\n`);
         }

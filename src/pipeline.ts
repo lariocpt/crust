@@ -58,6 +58,8 @@ export class Pipeline<T> {
     throw new Error("Pipeline.of: unsupported source type");
   }
 
+  pipe<U>(fn: (x: T) => U | Promise<U>): Pipeline<U>;
+  pipe<U>(next: Stage<T, U>): Pipeline<U>;
   pipe<U>(next: Stage<T, U>): Pipeline<U> {
     if (isPipelineStage<T, U>(next)) {
       return next(this);
@@ -114,8 +116,14 @@ export class Pipeline<T> {
     return parts.join("\n");
   }
 
-  lines(): AsyncIterable<T> {
-    return this._iter();
+  lines(): AsyncIterableIterator<T> {
+    // Delegating generator: `yield*` forwards return()/throw() to the source,
+    // so a consumer can cancel the pipeline even when the source was a plain
+    // AsyncIterable rather than a generator.
+    const iter = this._iter();
+    return (async function* () {
+      yield* iter;
+    })();
   }
 
   async json<U = unknown>(): Promise<U> {

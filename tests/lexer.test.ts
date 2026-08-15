@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { classify, tokenize } from "../src/lexer";
+import type { StageKind } from "../src/types";
+
+// classify() returns the whole union; narrow to the http member.
+const httpKind = (k: StageKind): Extract<StageKind, { kind: "http" }> =>
+  k as Extract<StageKind, { kind: "http" }>;
 
 describe("tokenize — top-level pipe splitting", () => {
   test("simple shell pipeline", () => {
@@ -324,8 +329,8 @@ describe("http --timeout", () => {
       headers: [],
       timeoutMs: 5000,
     });
-    expect(classify('POST :3000/x -H "a: b" --timeout=250ms').timeoutMs).toBe(250);
-    expect(classify("GET :3000/x --timeout 2m").timeoutMs).toBe(120_000);
+    expect(httpKind(classify('POST :3000/x -H "a: b" --timeout=250ms')).timeoutMs).toBe(250);
+    expect(httpKind(classify("GET :3000/x --timeout 2m")).timeoutMs).toBe(120_000);
   });
 
   test("malformed duration and unknown --flags throw", () => {

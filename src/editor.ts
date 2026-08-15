@@ -265,8 +265,21 @@ export async function readLine(opts: EditorOpts): Promise<string | null> {
       }
 
       if (code >= 0x20 && code !== 0x7f) {
-        buf = buf.slice(0, cursor) + c + buf.slice(cursor);
-        cursor++;
+        // Consume the whole RUN of printable characters and repaint once.
+        // A paste arrives as a single chunk, and repainting per character made
+        // it O(n²): a 5,000-char paste emitted 5,002 writes and 12.5MB of
+        // terminal traffic (2,507x amplification), which a real emulator then
+        // has to parse and re-lay-out — the visible "pasting stutters" bug.
+        let run = c;
+        while (i + 1 < chunk.length) {
+          const next = chunk[i + 1]!;
+          const nextCode = next.charCodeAt(0);
+          if (nextCode < 0x20 || nextCode === 0x7f) break;
+          run += next;
+          i++;
+        }
+        buf = buf.slice(0, cursor) + run + buf.slice(cursor);
+        cursor += run.length;
         render();
       }
     }

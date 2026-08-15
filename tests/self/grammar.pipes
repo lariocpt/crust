@@ -1,0 +1,30 @@
+# crust checking its own grammar, in its own grammar. No server needed.
+# Every line is a pipeline that must drain without throwing.
+
+# sources
+range(1,5) | assert (n => n >= 1 && n <= 5)
+{"a":1,"b":[1,2]} | assert (o => o.b.length === 2)
+lines tests/self/grammar.pipes | assert (l => typeof l === "string")
+
+# transforms
+range(1,5) | filter (n => n % 2 === 0) | stats | assert (s => s.count === 2)
+range(1,3) | (n => n * 10) | assert (n => n % 10 === 0)
+range(1,4) | parallel 2 | (n => n + 1) | stats | assert (s => s.count === 4)
+range(1,3) | capture SELF_LAST | assert (n => n > 0)
+lines tests/self/grammar.pipes | grep "^range" | assert (l => l.startsWith("range"))
+
+# read yields whole files; lines splits them — the distinction that used to be invisible
+read tests/self/spec.json | stats | assert (s => s.count === 1)
+read tests/self/spec.json | lines | stats | assert (s => s.count > 1)
+
+# decorators and pacing
+time "self-test" | range(1,2) | assert (n => n > 0)
+load 200ms 20/s | assert (t => typeof t.n === "number")
+
+# registered functions
+base64 "hello" | assert (s => s === "aGVsbG8=")
+salt 8 hex | assert (s => s.length === 16)
+jwt sign {"sub":"x"} --secret k | assert (t => t.split(".").length === 3)
+
+# parallel must not swallow a thrown lambda: the item count has to survive
+range(0,4) | parallel 2 | (x => x) | stats | assert (s => s.count === 5)

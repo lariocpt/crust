@@ -1,0 +1,23 @@
+# crust driving a crust mock-server, through crust's own grammar.
+# $BASE is seeded by the bun:test driver (tests/self.test.ts) from the
+# ephemeral port the server actually bound.
+
+GET $BASE/health | expect 200
+GET $BASE/health | (r => r.json()) | assert (b => b.status === "up")
+GET $BASE/health | expect 2xx
+
+# request chaining: create, capture the id, read it back
+{"name":"widget"} | POST $BASE/items | assert (r => r.status === 201) | (r => r.json()) | capture SELF_ID (b => b.id)
+GET $BASE/items/$SELF_ID | expect 200
+GET $BASE/items/$SELF_ID | (r => r.json()) | assert (b => b.name === "widget")
+GET $BASE/items | (r => r.json()) | assert (a => Array.isArray(a) && a.length === 1)
+
+# concurrency + stats over real requests
+range(0,49) | parallel 10 | GET $BASE/health | expect 200 | stats | assert (s => s.count === 50)
+range(0,19) | parallel 5 | GET $BASE/health | stats | assert (s => s.status["200"] === 20)
+
+# a paced load phase still reports the rate it sustained
+load 300ms 100/s | parallel 10 | GET $BASE/health | expect 200 | stats | assert (s => s.count > 0)
+
+# per-request timeout is accepted on the verb stage
+GET $BASE/health --timeout 5s | expect 200

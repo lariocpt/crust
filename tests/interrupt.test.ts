@@ -217,7 +217,7 @@ describe("runLine + fake tty — Ctrl-C job control", () => {
     expect(code).toBe(0);
     expect(tty.armed).toBe(1);
     expect(tty.disposed).toBe(1);
-    expect(tty.cb).toBe(null);
+    expect((tty as unknown as { cb: unknown }).cb).toBe(null);
   });
 
   test("without a tty nothing arms (script mode untouched)", async () => {

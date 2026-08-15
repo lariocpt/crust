@@ -126,7 +126,7 @@ export function validateSchema(
 
   if (Array.isArray(s.allOf)) {
     for (const branch of s.allOf) {
-      out.push(...validateSchema(value, branch, spec, pointer, visited));
+      for (const v of validateSchema(value, branch, spec, pointer, visited)) out.push(v);
     }
   }
 
@@ -302,7 +302,14 @@ export function validateSchema(
     if (s.items !== undefined) {
       for (let i = 0; i < value.length; i++) {
         // Fresh guard set: the instance pointer deepens, so recursion is finite.
-        out.push(...validateSchema(value[i], s.items, spec, `${pointer}/${i}`, new Set<string>()));
+        for (const v of validateSchema(
+          value[i],
+          s.items,
+          spec,
+          `${pointer}/${i}`,
+          new Set<string>(),
+        ))
+          out.push(v);
       }
     }
   }
@@ -459,7 +466,7 @@ export function validateRequest(input: RequestInput, route: Route, spec: OpenApi
     if (param.in === "path") {
       const raw = input.params[param.name];
       if (raw === undefined) continue;
-      out.push(...validateParamValue(raw, param, spec, "path", ctx));
+      for (const v of validateParamValue(raw, param, spec, "path", ctx)) out.push(v);
     } else if (param.in === "query") {
       const values = input.searchParams.getAll(param.name);
       if (values.length === 0) {
@@ -479,7 +486,7 @@ export function validateRequest(input: RequestInput, route: Route, spec: OpenApi
         }
         continue;
       }
-      out.push(...validateQueryValues(values, param, spec, ctx));
+      for (const v of validateQueryValues(values, param, spec, ctx)) out.push(v);
     }
     // header/cookie parameters are not validated
   }

@@ -15,7 +15,8 @@ whose stages are all ordinary commands is handed to `sh -c` untouched.
 |---|---|
 | `range(0, 9)` | numbers 0..9 inclusive, one item each |
 | `**/*.ts` | glob source — file paths |
-| `read fixtures/*.json` | whole-file contents, one item per file (sorted; zero matches = error) |
+| `lines **/*.log` | one item per LINE across every match (sorted; zero matches = error). Use this for log mining — `read` gives whole files. Bare `lines` mid-pipeline splits upstream items |
+| `read fixtures/*.json` | whole-file contents, one item per file (sorted; zero matches = error) — the request-body form: `read fixtures/*.json \| POST …` |
 | `tail -F app.log` | native tail source (`-n N`, `-F` follow); the `-n N` cut is a bounded backward read, safe on huge files |
 | `stdin` (alias `-`) | piped-stdin source, one item per line — `docker logs -f X \| crust -c 'stdin \| …'`. Source position only. Bare `cmd \| crust` treats stdin as a SCRIPT, so data pipes need `-c` |
 | `grep ERROR` mid-pipeline | native line-buffered grep (`-i`/`-v`/`-F`, ONE pattern; per-line even on multi-line items) — follow streams don't stall on grep's 4KB pipe buffer. Combined/unknown flags, two positionals, any `$`, or GNU/JS-divergent regex bits (`\`, `[[:`, `{,`, `(?`) = exact system grep via sh; first-stage grep = file grep via sh |
@@ -32,6 +33,7 @@ whose stages are all ordinary commands is handed to `sh -c` untouched.
 | `stats [--every N] [--out f.json]` | summary: count/rps/status histogram/p50/p95/p99 |
 | `parallel N` | modifier: fan-out for the NEXT stage (http, lambda, or fn — anything else errors) |
 | `sql "SELECT …" $1-params` | registered fn — rows stream one item each (needs `$DATABASE_URL`) |
+| `range(1,1) \| sql "… WHERE id = ?"` | mid-pipeline, the upstream item BINDS as the first parameter when the line declares none (an explicit param wins); rows stream one item each in both positions |
 | anything else | plain shell via `sh -c` |
 
 `:3000/path` expands to `http://localhost:3000/path` everywhere.
@@ -73,9 +75,9 @@ GET $BASE/api/buildings/$BID -H "authorization: Bearer $TOKEN" | expect 200
 ## Verified one-liner patterns
 
 ```crust
-# log mining — read yields file CONTENTS (a bare glob would grep the paths);
-# after a shell stage like grep, items are LINES, so filter is per-line
-read **/*.log | grep ERROR | filter (l => !l.includes('healthcheck')) | wc -l
+# log mining — `lines` yields one item per LINE, which is what filter wants
+# (`read` yields whole FILES, so a filter would test the entire file at once)
+lines **/*.log | grep ERROR | filter (l => !l.includes('healthcheck')) | wc -l
 
 # lambda + shell mixing — items cross as lines (objects as JSON)
 range(1, 5) | (n => n * n) | sort -rn

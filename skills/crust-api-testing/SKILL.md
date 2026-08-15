@@ -10,7 +10,7 @@ Three layers, one binary. Pick the lightest that fits:
 | Layer | File | Best for |
 |---|---|---|
 | `test-pipes` | `.pipes` — one pipeline per line | readable CRUD suites, chaining, SQL cross-checks |
-| `test-fixture` | `.crust.ts` — TS fixture modules | complex setup, matcher functions, stress (`--count`) |
+| `test-fixture` | `.crust.ts` — TS fixture modules | complex setup, matcher functions, stress (`-n`) |
 | `gen-fixtures` | generated from `openapi.json` | negative matrices + CRUD flows for every documented op |
 
 ## .pipes suites (test-pipes)
@@ -26,10 +26,10 @@ sql "SELECT count(*)::int AS c FROM buildings WHERE name = 'Court'" | assert (r 
 GET $BASE/api/buildings/$BID -H "authorization: Bearer $TOKEN" | expect 404
 ```
 
-Run: `test-pipes --target 'tests/**/*.pipes' [--bail] [--timeout ms] [--setup m]`.
+Run: `test-pipes 'tests/**/*.pipes' [-b] [-t ms] [-s mod.ts]`.
 PASS/FAIL report lines are prefixed `file:LINE` with real file line numbers.
 
-- **Setup module**: `--setup mod.ts`, else sibling `<name>.setup.ts`; its
+- **Setup module**: `-s mod.ts`, else sibling `<name>.setup.ts`; its
   default export is awaited before the file and seeds `process.env`
   ($BASE/$TOKEN). `sql` needs `$DATABASE_URL`.
 - **SQL row types**: rows arrive as the driver returns them — uuid and enum
@@ -66,14 +66,14 @@ export default {
 };
 ```
 
-Run: `test-fixture --target 'tests/*.crust.ts' --threads 8 [--count N] [--timeout ms] [--bail]`.
+Run: `test-fixture 'tests/*.crust.ts' -j8 [-n N] [-t ms] [-b]`.
 
 `output.schema` is a RESERVED key: give it an inline JSON Schema and the
 response body must conform — violations fail with per-field pointer paths.
 Unknown schema keywords pass (never-invent-a-violation). gen-fixtures emits
 this automatically when the spec documents a response schema for a case's
 expected status.
-Fixtures may run CONCURRENTLY under --threads — share state only via a
+Fixtures may run CONCURRENTLY under -j/--threads — share state only via a
 module-scope promise-cached factory. Fixture files may import ONLY relative
 modules and Bun builtins (the binary can't resolve npm at runtime) —
 `Bun.SQL`, `Bun.file`, `Bun.jwt`.
@@ -81,7 +81,7 @@ modules and Bun builtins (the binary can't resolve npm at runtime) —
 ## gen-fixtures — spec-driven cases
 
 ```
-gen-fixtures --swagger ./openapi.json --out tests/gen --setup ./tests/gen-setup.ts [--no-flows]
+gen-fixtures ./openapi.json [--no-flows]   # --out/--setup default to tests/gen
 ```
 
 Emits (deterministic, byte-stable — check the output in, regenerate, review

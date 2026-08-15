@@ -34,6 +34,8 @@ export type StageKind =
     }
   | { kind: "capture"; name: string; source: string | null }
   | { kind: "readsrc"; pattern: string }
+  /** `lines <glob>` as a source, or bare `lines` mid-pipeline to split items */
+  | { kind: "lines"; pattern: string | null }
   | { kind: "stdin" }
   | { kind: "parallel"; n: number }
   | { kind: "expect"; matcher: number | string }

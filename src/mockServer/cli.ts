@@ -1,9 +1,10 @@
 #!/usr/bin/env bun
+import { FlagError, type FlagSpec, parseFlags } from "../args";
 import { loadSpec } from "./loadSpec";
 import { startServer } from "./server";
 import { normalizeStateUrl, stateDialect } from "./state";
 
-const USAGE = `mock-server --swagger <url-or-path> [--port N] [--host addr] [--stateful]
+const USAGE = `mock-server <spec> [-p N] [-b addr] [--stateful]
             [--state <path|url>] [--seed <file.json>]
             [--validate] [--proxy <upstream> [--proxy-timeout ms] [--report path]]
 
@@ -12,9 +13,10 @@ OpenAPI 3.x spec. Bodies come from the spec's examples when available,
 otherwise are synthesised from schemas (strings -> "string", ints -> 0,
 arrays -> [item], objects -> {props}, enums -> first value).
 
-  --swagger <src>   URL (http://, https://) or local path (.json, .yaml).
-  --port N          listen port (default 3000; 0 = OS-assigned).
-  --host addr       bind address (default 0.0.0.0).
+  -p, --port N      listen port (default 3000; 0 = OS-assigned).
+  The spec may also be given as --swagger <url-or-path>.
+  -b, --host addr   bind address (default 0.0.0.0). "-b" for bind, because "-H"
+                    is the HEADER flag on every http stage and in curl.
   --stateful        in-memory CRUD: POST creates, GET returns what was
                     created, PATCH/PUT merge, DELETE removes. Untouched
                     collections keep serving the spec's examples.
@@ -36,6 +38,19 @@ arrays -> [item], objects -> {props}, enums -> first value).
   --report <path>   append each violation as an NDJSON line (needs --proxy).
 `;
 
+export const SPEC: FlagSpec = {
+  swagger: { type: "string", positional: 0 },
+  port: { short: "p", type: "number" },
+  host: { short: "b", type: "string" },
+  stateful: { type: "boolean" },
+  state: { type: "string" },
+  seed: { type: "string" },
+  validate: { type: "boolean" },
+  proxy: { type: "string" },
+  "proxy-timeout": { type: "number" },
+  report: { type: "string" },
+};
+
 export async function runCli(args: string[]): Promise<number> {
   let swagger: string | undefined;
   let port = 3000;
@@ -48,88 +63,30 @@ export async function runCli(args: string[]): Promise<number> {
   let proxyTimeout = 30000;
   let report: string | undefined;
 
-  function intFlag(value: string | undefined, name: string): number | null {
-    const n = parseInt(value ?? "", 10);
-    if (!Number.isFinite(n)) {
-      process.stderr.write(`mock-server: ${name} requires an integer\n`);
-      return null;
-    }
-    return n;
-  }
-
-  // A value-taking flag must not silently swallow the next flag as its value.
-  function strFlag(value: string | undefined, name: string): string | null {
-    if (value === undefined || value.startsWith("--")) {
-      process.stderr.write(`mock-server: ${name} requires a value\n`);
-      return null;
-    }
-    return value;
-  }
-
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i]!;
-    if (a === "-h" || a === "--help") {
+  try {
+    const { values, rest, help } = parseFlags(args, SPEC);
+    if (help) {
       process.stdout.write(USAGE);
       return 0;
     }
-    if (a === "--swagger") {
-      swagger = args[++i];
-    } else if (a.startsWith("--swagger=")) {
-      swagger = a.slice("--swagger=".length);
-    } else if (a === "--port") {
-      const n = intFlag(args[++i], "--port");
-      if (n === null) return 2;
-      port = n;
-    } else if (a.startsWith("--port=")) {
-      const n = intFlag(a.slice("--port=".length), "--port");
-      if (n === null) return 2;
-      port = n;
-    } else if (a === "--host") {
-      host = args[++i] ?? host;
-    } else if (a.startsWith("--host=")) {
-      host = a.slice("--host=".length);
-    } else if (a === "--stateful") {
-      stateful = true;
-    } else if (a === "--state") {
-      const v = strFlag(args[++i], "--state");
-      if (v === null) return 2;
-      state = v;
-    } else if (a.startsWith("--state=")) {
-      state = a.slice("--state=".length);
-    } else if (a === "--seed") {
-      const v = strFlag(args[++i], "--seed");
-      if (v === null) return 2;
-      seed = v;
-    } else if (a.startsWith("--seed=")) {
-      seed = a.slice("--seed=".length);
-    } else if (a === "--validate") {
-      validate = true;
-    } else if (a === "--proxy") {
-      proxy = args[++i];
-    } else if (a.startsWith("--proxy=")) {
-      proxy = a.slice("--proxy=".length);
-    } else if (a === "--proxy-timeout") {
-      const n = intFlag(args[++i], "--proxy-timeout");
-      if (n === null) return 2;
-      proxyTimeout = n;
-    } else if (a.startsWith("--proxy-timeout=")) {
-      const n = intFlag(a.slice("--proxy-timeout=".length), "--proxy-timeout");
-      if (n === null) return 2;
-      proxyTimeout = n;
-    } else if (a === "--report") {
-      report = args[++i];
-    } else if (a.startsWith("--report=")) {
-      report = a.slice("--report=".length);
-    } else {
-      process.stderr.write(`mock-server: unknown arg '${a}'\n`);
-      process.stderr.write(USAGE);
-      return 2;
-    }
+    if (rest.length > 0) throw new FlagError(`unexpected argument "${rest[0]}"`);
+    swagger = values.swagger as string | undefined;
+    port = (values.port as number | undefined) ?? 3000;
+    host = (values.host as string | undefined) ?? "0.0.0.0";
+    stateful = values.stateful === true;
+    state = values.state as string | undefined;
+    seed = values.seed as string | undefined;
+    validate = values.validate === true;
+    proxy = values.proxy as string | undefined;
+    proxyTimeout = (values["proxy-timeout"] as number | undefined) ?? 30000;
+    report = values.report as string | undefined;
+  } catch (err) {
+    process.stderr.write(`mock-server: ${(err as Error).message}\n${USAGE}`);
+    return 2;
   }
 
   if (!swagger) {
-    process.stderr.write("mock-server: --swagger is required\n");
-    process.stderr.write(USAGE);
+    process.stderr.write(`mock-server: an OpenAPI spec (path or URL) is required\n${USAGE}`);
     return 2;
   }
 

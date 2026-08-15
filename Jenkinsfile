@@ -61,6 +61,29 @@ pipeline {
                 '''
             }
         }
+        stage('Test') {
+            steps {
+                sh '''
+                    set -eu
+                    # 600+ tests used to gate nothing: the pipeline went straight from
+                    # Version to Compile and published whatever built. Same image and the
+                    # same --frozen-lockfile as Compile, so a green build here is a real
+                    # statement about the artifact that follows.
+                    CID=$(docker create -w /w oven/bun:1 sh -c '
+                        set -eu
+                        cd /w
+                        bun install --frozen-lockfile --ignore-scripts
+                        bun test
+                        # Typecheck gates too: it was 27 errors deep for a long
+                        # time, so it only became a gate once it reached zero.
+                        bunx tsc --noEmit
+                    ')
+                    trap 'docker rm -f "$CID" >/dev/null 2>&1 || true' EXIT
+                    docker cp "$PWD/." "$CID:/w" >/dev/null
+                    docker start -a "$CID"
+                '''
+            }
+        }
         stage('Compile') {
             steps {
                 sh '''
@@ -80,7 +103,16 @@ pipeline {
                         set -eu
                         cd /w
                         bun install --frozen-lockfile --ignore-scripts
-                        bun build --compile --minify --bytecode --outfile /w/out/crust src/index.ts
+                        # --target is explicit: npm/package.json declares os:[linux] cpu:[x64],
+                        # and without this an arm64 agent would publish an arm64 ELF under it.
+                        bun build --compile --minify --bytecode --target=bun-linux-x64 \\
+                            --outfile /w/out/crust src/index.ts
+                        # The AOT fixture runner the test-fixture builtin execs when present
+                        # (src/builtins.ts probes ~/.crust/bin/crust-test-fixture). install.sh
+                        # built it; CI never did, so npm/curl installs always fell back to the
+                        # slower dynamic-import path.
+                        bun build --compile --minify --bytecode --target=bun-linux-x64 \\
+                            --outfile /w/out/crust-test-fixture src/testFixture/cli.ts
                     ')
                     trap 'docker rm -f "$CID" >/dev/null 2>&1 || true' EXIT
 
@@ -91,7 +123,8 @@ pipeline {
 
                     docker start -a "$CID"
                     docker cp "$CID:/w/out/crust" "$WORKSPACE/out/crust"
-                    chmod 0755 out/crust
+                    docker cp "$CID:/w/out/crust-test-fixture" "$WORKSPACE/out/crust-test-fixture"
+                    chmod 0755 out/crust out/crust-test-fixture
 
                     ls -lh out/crust
                     # Prove the binary is the one we think it is. Without this a wrong docker cp

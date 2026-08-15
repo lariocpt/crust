@@ -1,8 +1,9 @@
+import { hasUnquotedShellMeta } from "./args";
 import { builtins, isBuiltin } from "./builtins";
 import { formatItem } from "./format";
 import * as interrupt from "./interrupt";
 import { classify, tokenize } from "./lexer";
-import { parse } from "./parser";
+import { parse, ShellExitError } from "./parser";
 import { shellEnv } from "./shellPath";
 import type { Context } from "./types";
 
@@ -41,20 +42,38 @@ export async function runLines(source: string, ctx: Context): Promise<number> {
   return last;
 }
 
+// Expand aliases at the head of EVERY stage, not just the line. `alias
+// hc='GET :3000/health'` is only useful if `range(0,99) | parallel 50 | hc`
+// resolves it; previously only a line-leading alias expanded and anything
+// mid-pipeline fell through to sh as "command not found".
+//
+// Single pass, deliberately: an expansion is not re-scanned, so `alias
+// ls='ls -la'` terminates instead of recursing. The line is rebuilt ONLY when
+// something actually expanded — tokenize() trims, so rebuilding unconditionally
+// would rewrite the whitespace of every pure-shell line handed to `sh -c`.
+function expandAliases(line: string, aliases: Map<string, string>): string {
+  if (aliases.size === 0) return line;
+  let changed = false;
+  const stages = tokenize(line).map((t) => {
+    const sp = t.text.indexOf(" ");
+    const head = sp === -1 ? t.text : t.text.slice(0, sp);
+    const expansion = aliases.get(head);
+    if (expansion === undefined) return t.text;
+    changed = true;
+    return expansion + (sp === -1 ? "" : t.text.slice(sp));
+  });
+  return changed ? stages.join(" | ") : line;
+}
+
 export async function runLine(line: string, ctx: Context, tty?: ReplTty): Promise<number> {
   const trimmed = line.trim();
   if (!trimmed) return 0;
 
-  const firstSpace = trimmed.indexOf(" ");
-  const head = firstSpace === -1 ? trimmed : trimmed.slice(0, firstSpace);
-  const aliasExp = ctx.aliases.get(head);
-  const expanded = aliasExp
-    ? aliasExp + (firstSpace === -1 ? "" : trimmed.slice(firstSpace))
-    : trimmed;
+  const expanded = expandAliases(trimmed, ctx.aliases);
 
   const exFirstSpace = expanded.indexOf(" ");
   const exHead = exFirstSpace === -1 ? expanded : expanded.slice(0, exFirstSpace);
-  if (isBuiltin(exHead) && !/[|&;<>]/.test(expanded)) {
+  if (isBuiltin(exHead) && !hasUnquotedShellMeta(expanded)) {
     const args = exFirstSpace === -1 ? "" : expanded.slice(exFirstSpace + 1);
     // At the REPL, Ctrl-C reaches builtins as a synthetic in-process SIGINT —
     // that's what mock-server's and procs' "wait for SIGINT" handlers listen
@@ -140,7 +159,7 @@ export async function runLine(line: string, ctx: Context, tty?: ReplTty): Promis
         if (outcome === "interrupted") {
           // Late unwind errors are the cancellation, not news.
           drain.catch(() => {});
-          void gen.return?.(undefined);
+          gen.return?.(undefined)?.catch(() => {});
           return 130;
         }
         return 0;
@@ -157,6 +176,10 @@ export async function runLine(line: string, ctx: Context, tty?: ReplTty): Promis
       return 0;
     }
   } catch (err) {
+    // A shell stage that exited nonzero is reported by sh itself on the
+    // inherited stderr ("command not found", tee's ENOENT, …). Adding a
+    // `crust:` line on top would be noise; the child's code IS the answer.
+    if (err instanceof ShellExitError) return err.code;
     process.stderr.write(`crust: ${(err as Error).message}\n`);
     return 1;
   }

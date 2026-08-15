@@ -36,6 +36,13 @@ load 10s 20/s | (t => ({name: "user" + t.n})) | parallel 8 | POST :3000/users | 
 
 ## Honesty guarantees (read before quoting numbers)
 
+- A gate that measured NOTHING fails: `stats` over an empty stream is tagged
+  `empty: true` and `assert` refuses it. `{count: 0, p95: 0}` used to satisfy
+  `s => s.p95 < 200`, so a run that issued zero requests reported success.
+- Percentiles are bucketed (0.1ms below 100ms, 1ms below 1s) and report the
+  bucket's upper bound — never faster than reality. `count` and `meanMs` are
+  exact. Memory is constant, so a multi-hour soak is safe.
+
 - `stats.rps` is MEASURED, never the target. If downstream saturates, stale
   slots are skipped (never burst) and reported on stderr:
   `load: target 3000 ticks — emitted 2868, dropped 132 … achieved 95.6/s`.

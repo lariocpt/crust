@@ -324,12 +324,12 @@ describe("startServer end-to-end", () => {
 
       const getOne = await fetch(`${base}/pets/123`);
       expect(getOne.status).toBe(200);
-      const one = await getOne.json();
+      const one = (await getOne.json()) as { id: number };
       expect(one.id).toBe(0);
 
       const literal = await fetch(`${base}/pets/mine`);
       expect(literal.status).toBe(200);
-      expect((await literal.json()).mine).toBe(false);
+      expect(((await literal.json()) as { mine: boolean }).mine).toBe(false);
 
       const del = await fetch(`${base}/pets/9`, { method: "DELETE" });
       expect(del.status).toBe(204);

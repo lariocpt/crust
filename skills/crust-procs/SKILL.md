@@ -81,4 +81,6 @@ in CI), and `.pipes` files. Env-expanded args work:
   condition, or stop it with Ctrl-C: at the REPL that cancels the running
   line and tears the whole process group down (SIGTERM, then SIGKILL).
 - `FORCE_COLOR=0` is forced on children so lines stay parseable.
-- Redirecting `procs(...) > file` writes each item as its JSON line.
+- To capture the stream, END with a shell stage: `procs({…}) | cat > file`
+  writes each item as its JSON line. A bare `procs(...) > file` does NOT work —
+  the `>` lands inside the `procs(...)` expression and is evaluated as JS.

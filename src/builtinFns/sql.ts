@@ -40,9 +40,18 @@ export async function sql(...args: unknown[]): Promise<unknown[] | unknown> {
     query = first;
     params = args.slice(1);
   } else {
+    // Mid-pipeline: the parser calls fn(item, ...declaredArgs), so args[0] is
+    // the UPSTREAM ITEM and args[1] is the query.
     query = String(args[1] ?? "");
     params = args.slice(2);
     if (!query) throw new Error("sql: missing query");
+    // Bind the piped item as the first parameter when the line declares none.
+    // It used to be dropped on the floor, so `range(1,1) | sql "… WHERE id = ?"`
+    // ran with zero params and returned [] — indistinguishable from "no rows
+    // matched". An explicitly declared parameter still wins.
+    if (params.length === 0 && first !== undefined && first !== null) {
+      params = [first];
+    }
   }
   const client = getClient();
   if (!client.unsafe) {
