@@ -9,3 +9,8 @@ dist/
 .env.local
 .claude
 .husky/_/
+
+# Compiled binaries — ~95MB each and they never delta, so committing them added
+# that much to .git on every rebuild. `bin/crust` (the shim) stays tracked.
+bin/crust-bin
+bin/crust-test-fixture
