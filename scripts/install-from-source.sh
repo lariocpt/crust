@@ -47,9 +47,7 @@ esac
 TARGET="bun-${OS}-${ARCH}"
 ( cd "$CRUST_DIR" && \
   bun build --compile --minify --bytecode --target="$TARGET" \
-    --outfile bin/crust-bin src/index.ts && \
-  bun build --compile --minify --bytecode --target="$TARGET" \
-    --outfile bin/crust-test-fixture src/testFixture/cli.ts )
+    --outfile bin/crust-bin src/index.ts )
 
 # 4. Default config
 mkdir -p "$HOME/.config/crust"

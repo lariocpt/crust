@@ -940,7 +940,10 @@ describe.concurrent("procs liveness", () => {
               live: { url: down.url, intervalMs: 10, failures: 1, probeTimeoutMs: 50 },
             },
           },
-          { healthyUptimeMs: 400, killGraceMs: 500 },
+          // Wall uptime per spawn (~300ms: trap-TERM child + grace) must
+          // exceed healthyUptimeMs while the streak start (~30ms) stays well
+          // under it — that's the window where old and new accounting differ.
+          { healthyUptimeMs: 250, killGraceMs: 300 },
         ),
         (l) => l.line.startsWith("giving up"),
       );

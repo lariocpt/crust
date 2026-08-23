@@ -256,16 +256,14 @@ function parseDotenv(text: string): Array<[string, string]> {
   return out;
 }
 
+// In-process like every other tool builtin. A standalone AOT runner
+// (~/.crust/bin/crust-test-fixture) used to be probed here, but no install
+// route ever put a file at that path, and measurement showed the exec path
+// 1.6x SLOWER than this import once the main binary itself was
+// bytecode-compiled — the probe's only real effect was letting a stale
+// binary silently shadow the current runner.
 const testFixtureBuiltin: Builtin = async (rawArgs, _ctx) => {
   const args = splitArgs(rawArgs);
-  const binPath = `${process.env.HOME}/.crust/bin/crust-test-fixture`;
-  if (await Bun.file(binPath).exists()) {
-    const proc = Bun.spawn([binPath, ...args], {
-      stdio: ["inherit", "inherit", "inherit"],
-    });
-    await proc.exited;
-    return proc.exitCode ?? 0;
-  }
   const { runCli } = await import("./testFixture/cli");
   return await runCli(args);
 };

@@ -27,10 +27,6 @@ function getClient(): BunSqlTemplate {
   throw new Error("sql: this Bun build has no Bun.SQL or Bun.sql.unsafe support");
 }
 
-export function _resetSqlClient(): void {
-  cachedClient = null;
-}
-
 export async function sql(...args: unknown[]): Promise<unknown[] | unknown> {
   if (args.length === 0) throw new Error("sql: missing query");
   const first = args[0];
