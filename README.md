@@ -12,19 +12,24 @@ load pipelines below — all run through the released binary.
 
 ## Install
 
-crust is published to the LAN artifact plane on the build host. Either channel resolves the same
-prebuilt binary and verifies its sha256 — no clone, no GitHub credential, and no Bun needed
-on the target machine:
+Either channel resolves the same prebuilt binary and verifies its published
+sha256 before it is ever executable — no clone and no Bun on the target machine:
 
 ```bash
-curl -fsSL https://apps.in.drlario.org/install.sh | bash -s -- crust
-npm i -g crust --registry https://npm.in.drlario.org
+curl -fsSL https://raw.githubusercontent.com/lariocpt/crust/main/install.sh | bash
+npm i -g @lariocpt/crust
 ```
 
-To hack on it instead, clone and build for your own architecture:
+The installer drops the binary in `~/.local/bin` (override with `--dir`); the
+npm package is a small launcher that fetches the same release asset on first
+use. Prebuilt binaries cover linux and macOS on x64 and arm64.
+
+### Build from source
+
+Any other platform, or a working copy you intend to change:
 
 ```bash
-git clone git@github.com:lariocpt/crust.git ~/.crust && ~/.crust/install.sh
+git clone https://github.com/lariocpt/crust.git ~/.crust && ~/.crust/scripts/install-from-source.sh
 ```
 
 ## What it looks like
