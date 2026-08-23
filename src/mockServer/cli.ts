@@ -6,7 +6,8 @@ import { normalizeStateUrl, stateDialect } from "./state";
 
 const USAGE = `mock-server <spec> [-p N] [-b addr] [--stateful]
             [--state <path|url>] [--seed <file.json>]
-            [--validate] [--proxy <upstream> [--proxy-timeout ms] [--report path]]
+            [--validate] [--strict]
+            [--proxy <upstream> [--proxy-timeout ms] [--report path]]
 
 Boots a Bun.serve instance that mocks every operation in the given
 OpenAPI 3.x spec. Bodies come from the spec's examples when available,
@@ -30,6 +31,11 @@ arrays -> [item], objects -> {props}, enums -> first value).
                     Implies --stateful; excludes --proxy.
   --validate        validate requests against the spec; violations answer
                     422 with a JSON violation list instead of the mock body.
+  --strict          also enforce a literal additionalProperties: false at
+                    plain object nodes (implies --validate; applies to both
+                    directions under --proxy). Composed nodes — allOf-merged
+                    objects, combinator siblings, patternProperties — stay
+                    exempt: strict never invents a violation.
   --proxy <url>     validation-proxy mode: forward every request to the
                     upstream, return its response untouched, record request
                     AND response spec violations (GET /__crust/violations
@@ -46,6 +52,7 @@ export const SPEC: FlagSpec = {
   state: { type: "string" },
   seed: { type: "string" },
   validate: { type: "boolean" },
+  strict: { type: "boolean" },
   proxy: { type: "string" },
   "proxy-timeout": { type: "number" },
   report: { type: "string" },
@@ -59,6 +66,7 @@ export async function runCli(args: string[]): Promise<number> {
   let state: string | undefined;
   let seed: string | undefined;
   let validate = false;
+  let strict = false;
   let proxy: string | undefined;
   let proxyTimeout = 30000;
   let report: string | undefined;
@@ -77,6 +85,7 @@ export async function runCli(args: string[]): Promise<number> {
     state = values.state as string | undefined;
     seed = values.seed as string | undefined;
     validate = values.validate === true;
+    strict = values.strict === true;
     proxy = values.proxy as string | undefined;
     proxyTimeout = (values["proxy-timeout"] as number | undefined) ?? 30000;
     report = values.report as string | undefined;
@@ -90,8 +99,10 @@ export async function runCli(args: string[]): Promise<number> {
     return 2;
   }
 
-  // --state / --seed imply --stateful.
+  // --state / --seed imply --stateful; --strict implies --validate (in proxy
+  // mode validation is already always on — strict just deepens it).
   if (state !== undefined || seed !== undefined) stateful = true;
+  if (strict && proxy === undefined) validate = true;
 
   // Conflicts are caught before any boot work (spec load, port bind).
   if (proxy !== undefined && state !== undefined) {
@@ -152,6 +163,7 @@ export async function runCli(args: string[]): Promise<number> {
       state,
       seed,
       validate,
+      strict,
       proxy,
       proxyTimeoutMs: proxyTimeout,
       report,
@@ -161,7 +173,7 @@ export async function runCli(args: string[]): Promise<number> {
     return 1;
   }
   process.stdout.write(`mock-server: ${server.routes.length} route(s) from ${loaded.origin}\n`);
-  const modes = `${stateful ? " (stateful)" : ""}${validate && proxy === undefined ? " (validate)" : ""}${
+  const modes = `${stateful ? " (stateful)" : ""}${validate && proxy === undefined ? " (validate)" : ""}${strict ? " (strict)" : ""}${
     proxy !== undefined ? ` (proxy -> ${proxy})` : ""
   }${state !== undefined ? ` (state: ${stateDialect(state)})` : ""}${
     seed !== undefined ? ` (seeded ${server.seeded})` : ""

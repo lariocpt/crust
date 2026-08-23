@@ -25,6 +25,13 @@ export interface ServerOptions {
   seed?: string;
   /** Validate requests against the spec; violations → 422 (mock mode). */
   validate?: boolean;
+  /**
+   * Enforce a literal `additionalProperties: false` at plain object nodes
+   * (implies validate in mock mode). Composed nodes — allOf-merged objects,
+   * combinator siblings, patternProperties — stay exempt, so strict still
+   * never invents a violation.
+   */
+  strict?: boolean;
   /** Upstream base URL — validation-proxy mode (implies request+response validation). */
   proxy?: string;
   proxyTimeoutMs?: number;
@@ -236,6 +243,7 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
               },
               lookup.matched,
               opts.spec,
+              { strict: opts.strict === true },
             );
           } else {
             reqViolations = [undocumentedOperation(req.method, url.pathname)];
@@ -271,6 +279,7 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
                 },
                 lookup.matched,
                 opts.spec,
+                { strict: opts.strict === true },
               ).map((v) => ({ ...v, path: url.pathname }));
               for (const v of respViolations) await record(v);
               violationCount += respViolations.length;
@@ -309,6 +318,7 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
               },
               lookup.matched,
               opts.spec,
+              { strict: opts.strict === true },
             );
             if (reqViolations.length > 0) {
               for (const v of reqViolations) await record(v);

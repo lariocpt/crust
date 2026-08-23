@@ -889,3 +889,200 @@ describe("cli flag conflicts", () => {
     ).toBe(2);
   });
 });
+
+describe("validateSchema --strict (additionalProperties)", () => {
+  const strict = { strict: true };
+  const run = (value: unknown, schema: unknown, opts = strict) =>
+    validateSchema(value, schema, SCHEMA_SPEC, "", new Set(), opts);
+
+  test("literal false + extra keys -> one violation per extra key, with pointer", () => {
+    const schema = {
+      type: "object",
+      properties: { a: { type: "integer" } },
+      additionalProperties: false,
+    };
+    const v = run({ a: 1, extra: "x", more: 2 }, schema);
+    expect(v.map((x) => x.rule)).toEqual(["additionalProperties", "additionalProperties"]);
+    expect(v.map((x) => x.pointer).sort()).toEqual(["/extra", "/more"]);
+    expect(v[0]!.expected).toEqual(["a"]);
+    expect(v[0]!.message).toContain("unexpected property");
+  });
+
+  test("control: identical schema and value pass without strict", () => {
+    const schema = {
+      type: "object",
+      properties: { a: { type: "integer" } },
+      additionalProperties: false,
+    };
+    expect(validateSchema({ a: 1, extra: "x" }, schema, SCHEMA_SPEC)).toEqual([]);
+  });
+
+  test("the allOf-merge idiom is exempt (the false positive strict must not invent)", () => {
+    const schema = {
+      allOf: [
+        { type: "object", properties: { a: { type: "integer" } }, additionalProperties: false },
+        { type: "object", properties: { b: { type: "string" } } },
+      ],
+    };
+    expect(run({ a: 1, b: "x" }, schema)).toEqual([]);
+  });
+
+  test("a node with its own allOf sibling is not enforced at that node", () => {
+    const schema = {
+      type: "object",
+      additionalProperties: false,
+      properties: { a: { type: "integer" } },
+      allOf: [{ type: "object", properties: { b: { type: "string" } } }],
+    };
+    expect(run({ a: 1, b: "x", extra: 1 }, schema)).toEqual([]);
+  });
+
+  test("patternProperties present -> not enforced (walker can't judge coverage)", () => {
+    const schema = {
+      type: "object",
+      additionalProperties: false,
+      properties: { a: { type: "integer" } },
+      patternProperties: { "^x-": { type: "string" } },
+    };
+    expect(run({ a: 1, "x-custom": "ok" }, schema)).toEqual([]);
+  });
+
+  test("object-form additionalProperties stays unenforced under strict", () => {
+    const schema = {
+      type: "object",
+      properties: { a: { type: "integer" } },
+      additionalProperties: { type: "string" },
+    };
+    expect(run({ a: 1, extra: 42 }, schema)).toEqual([]);
+  });
+
+  test("enforced inside anyOf branches: extra key fails branch selection", () => {
+    const schema = {
+      anyOf: [
+        {
+          type: "object",
+          required: ["kind"],
+          properties: { kind: { enum: ["a"] }, a: { type: "integer" } },
+          additionalProperties: false,
+        },
+        {
+          type: "object",
+          required: ["kind"],
+          properties: { kind: { enum: ["b"] }, b: { type: "string" } },
+          additionalProperties: false,
+        },
+      ],
+    };
+    expect(run({ kind: "a", a: 1 }, schema)).toEqual([]);
+    const v = run({ kind: "a", a: 1, sneaky: true }, schema);
+    expect(v.map((x) => x.rule)).toEqual(["anyOf"]);
+  });
+
+  test("standalone objects nested inside an allOf branch ARE enforced (suppression resets with depth)", () => {
+    const schema = {
+      allOf: [
+        {
+          type: "object",
+          properties: {
+            inner: {
+              type: "object",
+              properties: { x: { type: "integer" } },
+              additionalProperties: false,
+            },
+          },
+        },
+        { type: "object", properties: { other: { type: "string" } } },
+      ],
+    };
+    const v = run({ inner: { x: 1, bad: 2 }, other: "y" }, schema);
+    expect(v.map((x) => `${x.rule}${x.pointer}`)).toEqual(["additionalProperties/inner/bad"]);
+  });
+
+  test("enforcement follows a $ref to a literal-false schema", () => {
+    const spec = {
+      openapi: "3.1.0",
+      paths: {},
+      components: {
+        schemas: {
+          Tight: {
+            type: "object",
+            properties: { a: { type: "integer" } },
+            additionalProperties: false,
+          },
+        },
+      },
+    } as unknown as OpenApiSpec;
+    const v = validateSchema(
+      { a: 1, loose: true },
+      { $ref: "#/components/schemas/Tight" },
+      spec,
+      "",
+      new Set(),
+      strict,
+    );
+    expect(v.map((x) => x.rule)).toEqual(["additionalProperties"]);
+  });
+});
+
+describe("--strict mock mode e2e", () => {
+  const STRICT_SPEC = {
+    openapi: "3.1.0",
+    paths: {
+      "/tight": {
+        post: {
+          requestBody: {
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["name"],
+                  properties: { name: { type: "string" } },
+                  additionalProperties: false,
+                },
+              },
+            },
+          },
+          responses: { "201": { description: "created" } },
+        },
+      },
+    },
+  } as unknown as OpenApiSpec;
+
+  test("extra property -> 422 under strict; same request passes without", async () => {
+    const strictServer = await startServer({
+      port: 0,
+      hostname: "127.0.0.1",
+      spec: STRICT_SPEC,
+      validate: true,
+      strict: true,
+      log: () => {},
+    });
+    const looseServer = await startServer({
+      port: 0,
+      hostname: "127.0.0.1",
+      spec: STRICT_SPEC,
+      validate: true,
+      log: () => {},
+    });
+    try {
+      const payload = {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: "x", extra: 1 }),
+      };
+      const rejected = await fetch(`http://127.0.0.1:${strictServer.port}/tight`, payload);
+      expect(rejected.status).toBe(422);
+      const body = (await rejected.json()) as {
+        violations: Array<{ pointer: string; rule: string }>;
+      };
+      expect(body.violations.map((v) => v.rule)).toEqual(["additionalProperties"]);
+      expect(body.violations[0]!.pointer).toBe("/extra");
+
+      const accepted = await fetch(`http://127.0.0.1:${looseServer.port}/tight`, payload);
+      expect(accepted.status).toBe(201);
+    } finally {
+      await strictServer.stop();
+      await looseServer.stop();
+    }
+  });
+});

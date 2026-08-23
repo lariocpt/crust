@@ -5,9 +5,12 @@
 // uncompilable patterns, unresolvable/remote $refs, and $ref cycles all pass.
 //
 // Deliberately unsupported (always pass): not, patternProperties,
-// additionalProperties (even a literal false — extra properties are never
-// rejected in v1), uniqueItems, multipleOf, discriminator, dependentSchemas,
-// propertyNames, contains, prefixItems, readOnly/writeOnly directionality.
+// uniqueItems, multipleOf, discriminator, dependentSchemas, propertyNames,
+// contains, prefixItems, readOnly/writeOnly directionality.
+// additionalProperties is unsupported by default; under opts.strict a
+// LITERAL `additionalProperties: false` at a plain object node is enforced
+// (see the guards at the enforcement site — composed nodes stay exempt so
+// strict mode still never invents a violation).
 import type { OpenApiSpec, ParameterObject, RequestBodyObject, ResponseObject } from "./loadSpec";
 import { resolveRef } from "./mockResponse";
 import type { Route } from "./router";
@@ -96,12 +99,25 @@ function enumMatches(value: unknown, member: unknown): boolean {
   }
 }
 
+export interface ValidateOpts {
+  /** Enforce a literal `additionalProperties: false` at plain object nodes. */
+  strict?: boolean;
+  /**
+   * Internal: set while recursing into an allOf branch at the SAME instance
+   * position — sibling branches may legitimately contribute the "extra"
+   * properties (the OpenAPI allOf-merge idiom), so enforcement there would
+   * invent violations. Reset once the instance position deepens.
+   */
+  suppressAP?: boolean;
+}
+
 export function validateSchema(
   value: unknown,
   schema: unknown,
   spec: OpenApiSpec,
   pointer = "",
   visited: ReadonlySet<string> = new Set<string>(),
+  opts: ValidateOpts = {},
 ): SchemaViolation[] {
   if (!schema || typeof schema !== "object" || Array.isArray(schema)) return [];
   const s = schema as Record<string, unknown>;
@@ -119,14 +135,20 @@ export function validateSchema(
     if (!resolved) return []; // remote/unresolvable — pass
     const next = new Set(visited);
     next.add(refName);
-    return validateSchema(value, resolved, spec, pointer, next);
+    return validateSchema(value, resolved, spec, pointer, next, opts);
   }
 
   const out: SchemaViolation[] = [];
 
   if (Array.isArray(s.allOf)) {
     for (const branch of s.allOf) {
-      for (const v of validateSchema(value, branch, spec, pointer, visited)) out.push(v);
+      // Same instance position: a branch's additionalProperties:false must
+      // not reject properties its sibling branches contribute.
+      for (const v of validateSchema(value, branch, spec, pointer, visited, {
+        ...opts,
+        suppressAP: true,
+      }))
+        out.push(v);
     }
   }
 
@@ -139,7 +161,10 @@ export function validateSchema(
       let best: SchemaViolation[] | null = null;
       let passed = false;
       for (const branch of branches) {
-        const errs = validateSchema(value, branch, spec, pointer, visited);
+        // Each anyOf/oneOf branch is a self-contained alternative shape —
+        // strict enforcement applies inside; a strict-failing branch merely
+        // fails branch selection.
+        const errs = validateSchema(value, branch, spec, pointer, visited, opts);
         if (errs.length === 0) {
           passed = true;
           break;
@@ -301,13 +326,17 @@ export function validateSchema(
     }
     if (s.items !== undefined) {
       for (let i = 0; i < value.length; i++) {
-        // Fresh guard set: the instance pointer deepens, so recursion is finite.
+        // Fresh guard set: the instance pointer deepens, so recursion is
+        // finite — and allOf suppression resets with it.
         for (const v of validateSchema(
           value[i],
           s.items,
           spec,
           `${pointer}/${i}`,
           new Set<string>(),
+          {
+            strict: opts.strict,
+          },
         ))
           out.push(v);
       }
@@ -330,14 +359,51 @@ export function validateSchema(
     if (isPlainObject(s.properties)) {
       for (const [key, propSchema] of Object.entries(s.properties)) {
         if (key in value) {
-          // Fresh guard set: the instance pointer deepens, so recursion is finite.
+          // Fresh guard set: the instance pointer deepens, so recursion is
+          // finite — and allOf suppression resets with it.
           out.push(
-            ...validateSchema(value[key], propSchema, spec, `${pointer}/${key}`, new Set<string>()),
+            ...validateSchema(
+              value[key],
+              propSchema,
+              spec,
+              `${pointer}/${key}`,
+              new Set<string>(),
+              {
+                strict: opts.strict,
+              },
+            ),
           );
         }
       }
     }
-    // additionalProperties (even false) deliberately not enforced in v1.
+    // additionalProperties is not enforced by default (a literal false
+    // included). Under strict it is enforced ONLY at a node the walker can
+    // fully judge: literal false, no combinator siblings that could
+    // contribute properties, no patternProperties covering unknown keys, and
+    // not inside an allOf branch at this instance position. Everything the
+    // guards exclude keeps the never-invent-a-violation rule even in strict.
+    if (
+      opts.strict === true &&
+      opts.suppressAP !== true &&
+      s.additionalProperties === false &&
+      !Array.isArray(s.allOf) &&
+      !Array.isArray(s.anyOf) &&
+      !Array.isArray(s.oneOf) &&
+      !isPlainObject(s.patternProperties)
+    ) {
+      const declared = isPlainObject(s.properties) ? Object.keys(s.properties).sort() : [];
+      for (const key of Object.keys(value)) {
+        if (!declared.includes(key)) {
+          out.push({
+            pointer: `${pointer}/${key}`,
+            rule: "additionalProperties",
+            message: `unexpected property '${key}'`,
+            expected: declared,
+            received: truncate(value[key]),
+          });
+        }
+      }
+    }
   }
 
   return out;
@@ -451,7 +517,12 @@ function toViolation(
   };
 }
 
-export function validateRequest(input: RequestInput, route: Route, spec: OpenApiSpec): Violation[] {
+export function validateRequest(
+  input: RequestInput,
+  route: Route,
+  spec: OpenApiSpec,
+  opts: ValidateOpts = {},
+): Violation[] {
   const ctx: ViolationContext = {
     direction: "request",
     method: input.method.toUpperCase(),
@@ -466,7 +537,7 @@ export function validateRequest(input: RequestInput, route: Route, spec: OpenApi
     if (param.in === "path") {
       const raw = input.params[param.name];
       if (raw === undefined) continue;
-      for (const v of validateParamValue(raw, param, spec, "path", ctx)) out.push(v);
+      for (const v of validateParamValue(raw, param, spec, "path", ctx, opts)) out.push(v);
     } else if (param.in === "query") {
       const values = input.searchParams.getAll(param.name);
       if (values.length === 0) {
@@ -486,7 +557,7 @@ export function validateRequest(input: RequestInput, route: Route, spec: OpenApi
         }
         continue;
       }
-      for (const v of validateQueryValues(values, param, spec, ctx)) out.push(v);
+      for (const v of validateQueryValues(values, param, spec, ctx, opts)) out.push(v);
     }
     // header/cookie parameters are not validated
   }
@@ -526,7 +597,7 @@ export function validateRequest(input: RequestInput, route: Route, spec: OpenApi
             ),
           );
         } else if (input.body !== undefined && media.schema !== undefined) {
-          for (const sv of validateSchema(input.body, media.schema, spec)) {
+          for (const sv of validateSchema(input.body, media.schema, spec, "", new Set(), opts)) {
             out.push(toViolation(sv, "body", ctx));
           }
         }
@@ -544,6 +615,7 @@ function validateParamValue(
   spec: OpenApiSpec,
   location: "path" | "query",
   ctx: ViolationContext,
+  opts: ValidateOpts = {},
 ): Violation[] {
   const name = param.name!;
   const coerced = coerceByType(raw, declaredType(param.schema, spec));
@@ -562,7 +634,7 @@ function validateParamValue(
       ),
     ];
   }
-  return validateSchema(coerced.value, param.schema, spec, name).map((sv) =>
+  return validateSchema(coerced.value, param.schema, spec, name, new Set(), opts).map((sv) =>
     toViolation(sv, location, ctx),
   );
 }
@@ -572,6 +644,7 @@ function validateQueryValues(
   param: ParameterObject,
   spec: OpenApiSpec,
   ctx: ViolationContext,
+  opts: ValidateOpts = {},
 ): Violation[] {
   const name = param.name!;
   const type = declaredType(param.schema, spec);
@@ -615,14 +688,14 @@ function validateQueryValues(
     }
     if (out.length === 0) {
       out.push(
-        ...validateSchema(coercedItems, param.schema, spec, name).map((sv) =>
+        ...validateSchema(coercedItems, param.schema, spec, name, new Set(), opts).map((sv) =>
           toViolation(sv, "query", ctx),
         ),
       );
     }
     return out;
   }
-  return validateParamValue(values[0]!, param, spec, "query", ctx);
+  return validateParamValue(values[0]!, param, spec, "query", ctx, opts);
 }
 
 // ---------------------------------------------------------------------------
@@ -641,6 +714,7 @@ export function validateResponse(
   input: ResponseInput,
   route: Route,
   spec: OpenApiSpec,
+  opts: ValidateOpts = {},
 ): Violation[] {
   const ctx: ViolationContext = {
     direction: "response",
@@ -723,7 +797,7 @@ export function validateResponse(
     );
     const media = mediaKey ? content[mediaKey] : undefined;
     if (media?.schema !== undefined) {
-      for (const sv of validateSchema(input.body, media.schema, spec)) {
+      for (const sv of validateSchema(input.body, media.schema, spec, "", new Set(), opts)) {
         out.push(toViolation(sv, "body", ctx));
       }
     }
