@@ -83,7 +83,15 @@ Checks: JSON body (type/required/enum/format/pattern/lengths/ranges,
 anyOf/oneOf/allOf), path + query params (coerced by declared type). The
 governing rule: a schema the validator can't judge PASSES — it never
 invents a violation (notably `additionalProperties: false` is not
-enforced). Composes with `--stateful`: an invalid POST creates nothing.
+enforced unless you add `--strict`). Composes with `--stateful`: an
+invalid POST creates nothing.
+
+`--strict` (implies `--validate`; composes with `--proxy`, both
+directions) enforces a LITERAL `additionalProperties: false` at plain
+object nodes only: allOf-merged objects, nodes with combinator siblings,
+and patternProperties stay exempt — so it still never invents a
+violation for spec composition idioms. Inside anyOf/oneOf branches an
+extra key just fails that branch's selection.
 
 ## Validation proxy (`--proxy <upstream>`) — spec-conformance testing
 

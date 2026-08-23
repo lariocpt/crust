@@ -810,7 +810,7 @@ The TS-test ecosystem owns the name `expect`. Crust exports the API name as `exp
 | `test-fixture <glob> [-o p] [-j N] [-n N] [-t ms] [-b]` | Runs `.crust.ts` HTTP fixtures. See [test-fixture](#test-fixture). |
 | `test-pipes <glob> [-b] [-t ms] [-s m]` | Runs `.pipes` files — one shorthand fixture pipeline per line. See [test-pipes](#test-pipes). |
 | `gen-fixtures <spec> [-o d] [-s m] [--no-flows]` | Generates negative-case `.crust.ts` fixtures and CRUD flow `.pipes` suites from an OpenAPI spec. See [gen-fixtures](#gen-fixtures). |
-| `mock-server <spec> [-p N] [-b addr] [--stateful] [--state <path\|url>] [--seed <file>] [--validate] [--proxy <upstream>]` | Boots a `Bun.serve` instance that mocks every operation in an OpenAPI 3.x spec; `--stateful` adds a CRUD layer, `--state` persists it to sqlite/postgres, `--seed` inserts boot data, `--validate` rejects spec-violating requests with 422, `--proxy` turns it into a validation proxy in front of a real upstream. See [mock-server](#mock-server). |
+| `mock-server <spec> [-p N] [-b addr] [--stateful] [--state <path\|url>] [--seed <file>] [--validate] [--strict] [--proxy <upstream>]` | Boots a `Bun.serve` instance that mocks every operation in an OpenAPI 3.x spec; `--stateful` adds a CRUD layer, `--state` persists it to sqlite/postgres, `--seed` inserts boot data, `--validate` rejects spec-violating requests with 422, `--strict` also enforces literal `additionalProperties: false`, `--proxy` turns it into a validation proxy in front of a real upstream. See [mock-server](#mock-server). |
 | `verify-web-links <url\|sitemap> [-c N] [-t ms] [--fixtures g] [--exclude s]` | Crawls a site from its sitemap (or auto-discovers one from a base URL), verifying every link, anchor and redirect, and diffs Open Graph/meta tags against fixtures. See [verify-web-links](#verify-web-links). |
 | `skills <list\|install> [--global] [--force]` | Claude agent skills shipped in the binary. See [Agent skills](#agent-skills). |
 | `logs [--buffer N] <source>` | Interactive log searcher: holds a `tail -F`/`procs(...)`/shell-command stream, buffers the last N items, and every typed line is a pipeline fragment run over the buffer then live. See [logs](#logs--interactive-log-searching). |
@@ -1132,7 +1132,7 @@ mock-server --swagger ./spec.json --port 0 --host 127.0.0.1   # OS-assigned port
 mock-server --swagger ./openapi.yaml --port 4000 --stateful   # in-memory CRUD
 ```
 
-Flags: `--swagger <url-or-path>` (required; URL or local `.json`/`.yaml`/`.yml`; Swagger 2.0 specs are auto-converted to OpenAPI 3.x), `--port N` (default `3000`, `0` = ephemeral), `--host addr` (default `0.0.0.0`), `--stateful` (CRUD layer — see below), `--state <path|url>` (persist the CRUD state in sqlite/postgres — see below; implies `--stateful`, excludes `--proxy`), `--seed <file.json>` (insert boot data into empty collections — see below; implies `--stateful`, excludes `--proxy`), `--validate` (reject spec-violating requests with `422` — see below), `--proxy <upstream>` (validation-proxy mode — see below; mutually exclusive with `--stateful`), `--proxy-timeout N` (upstream timeout in ms, default `30000`), `--report <path>` (append violations as NDJSON; requires `--proxy`).
+Flags: `--swagger <url-or-path>` (required; URL or local `.json`/`.yaml`/`.yml`; Swagger 2.0 specs are auto-converted to OpenAPI 3.x), `--port N` (default `3000`, `0` = ephemeral), `--host addr` (default `0.0.0.0`), `--stateful` (CRUD layer — see below), `--state <path|url>` (persist the CRUD state in sqlite/postgres — see below; implies `--stateful`, excludes `--proxy`), `--seed <file.json>` (insert boot data into empty collections — see below; implies `--stateful`, excludes `--proxy`), `--validate` (reject spec-violating requests with `422` — see below), `--strict` (also enforce literal `additionalProperties: false` — see below; implies `--validate`), `--proxy <upstream>` (validation-proxy mode — see below; mutually exclusive with `--stateful`), `--proxy-timeout N` (upstream timeout in ms, default `30000`), `--report <path>` (append violations as NDJSON; requires `--proxy`).
 
 Response bodies are picked example-first, schema-fallback:
 
@@ -1262,10 +1262,23 @@ any branch passes), `allOf`, `format` (`uuid`, `email`, `date`, `date-time`,
 
 The governing rule: **a schema the walker can't judge validates
 successfully** — unknown formats, uncompilable patterns, unresolvable or
-cyclic `$ref`s, and unsupported keywords (`not`, `additionalProperties` —
-even `false` — `uniqueItems`, `multipleOf`, …) never produce a violation, so
-extra properties are never rejected. Non-JSON request bodies (multipart,
+cyclic `$ref`s, and unsupported keywords (`not`, `uniqueItems`,
+`multipleOf`, …) never produce a violation, so extra properties are never
+rejected **unless you pass `--strict`**. Non-JSON request bodies (multipart,
 form) pass untouched.
+
+`--strict` (implies `--validate`) enforces a **literal
+`additionalProperties: false`**, and only at object nodes the walker can
+fully judge: a node whose schema also carries `allOf`/`anyOf`/`oneOf`
+siblings or `patternProperties` stays exempt, and inside an `allOf` branch
+the check is suppressed at that instance position — sibling branches may
+legitimately contribute the "extra" properties (the OpenAPI allOf-merge
+idiom; enforcing there is the classic validator false positive). Inside
+`anyOf`/`oneOf` branches it applies (each branch is a self-contained
+alternative, so an extra key just fails that branch's selection), and it
+applies again to deeper standalone objects inside any branch. The
+object-form `additionalProperties: {schema}` stays unenforced. Violations
+use `rule: "additionalProperties"` with the offending key in the pointer.
 
 #### Validation proxy (`--proxy <upstream>`)
 
@@ -1289,7 +1302,9 @@ violation adds `ts`, `direction` (`request`/`response`), `method`, `path`,
 `template`, and (response side) `status` to the fields above. Per-request
 log lines gain a ` [N violation(s)]` suffix. `--proxy` implies validation of
 both directions (`--validate` alongside it is accepted, redundant) and is
-mutually exclusive with `--stateful`.
+mutually exclusive with `--stateful`. `--strict` composes with `--proxy`:
+the additionalProperties check then applies to both request and response
+bodies — recorded, never enforced, like every proxy-mode violation.
 
 ```bash
 mock-server --swagger ./openapi.yaml --port 4000 --validate
