@@ -327,6 +327,45 @@ describe("test-fixture cli", () => {
     expect(Array.isArray(data.results)).toBe(true);
   });
 
+  test("--out report.xml writes JUnit with a testcase per run and exit 1 on failure", async () => {
+    mode = "ok";
+    const file = await writeFixture(
+      "cli/junit.crust.ts",
+      `export default [
+        { name: "passes", input: { url: "${baseUrl}/users/42" }, output: { status: 200 } },
+        { name: "fails <&\\"loudly\\">", input: { url: "${baseUrl}/users/42" }, output: { status: 999 } },
+        { name: "errors", setup: () => { throw new Error("setup <boom>"); }, input: { url: "${baseUrl}/users/42" }, output: { status: 200 } },
+      ];\n`,
+    );
+    const outPath = join(dir, "report.xml");
+    const code = await runCli(["--target", file, "--out", outPath]);
+    expect(code).toBe(1);
+    const xml = await Bun.file(outPath).text();
+    expect(xml).toContain('tests="3" failures="1" errors="1"');
+    expect(xml).toContain('<testcase name="passes"');
+    expect(xml).toContain('name="fails &lt;&amp;&quot;loudly&quot;&gt;"');
+    expect(xml).toContain("<failure message=");
+    expect(xml).toContain('<error message="setup &lt;boom&gt;"');
+    // Well-formed enough for a real parser: balanced root, no raw < in text.
+    expect(xml.trim().endsWith("</testsuites>")).toBe(true);
+  });
+
+  test("--count 2 --out x.xml emits one testcase per iteration", async () => {
+    mode = "ok";
+    const file = await writeFixture(
+      "cli/junit-stress.crust.ts",
+      `export default { name: "iterated", input: { url: "${baseUrl}/users/42" }, output: { status: 200 } };\n`,
+    );
+    const outPath = join(dir, "stress.xml");
+    const code = await runCli(["--target", file, "--count", "2", "--out", outPath]);
+    expect(code).toBe(0);
+    const xml = await Bun.file(outPath).text();
+    expect(xml).toContain('name="iterated #1"');
+    expect(xml).toContain('name="iterated #2"');
+    expect(xml).toContain("<system-out>");
+    expect(xml).toContain("p95=");
+  });
+
   test("empty glob match exits 2", async () => {
     const code = await runCli(["--target", `${dir}/nothing-here/*.crust.ts`]);
     expect(code).toBe(2);

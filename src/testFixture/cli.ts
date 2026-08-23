@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { extname } from "node:path";
 import { FlagError, type FlagSpec, parseFlags } from "../args";
-import { renderJson, renderMarkdown, renderText } from "./report";
+import { renderJson, renderJUnitXml, renderMarkdown, renderText } from "./report";
 import { runFixtures } from "./runner";
 
 const USAGE = `test-fixture <file|glob> [-o <path>] [-j N] [-n N] [-t <ms>] [-b]
@@ -18,7 +18,7 @@ are matcher predicates over the actual value.
                     (import { random } from "crust/testFixture/random")
                     to vary inputs across iterations.
   -j, --threads N   concurrency
-  -o, --out <path>  report file; .json/.md pick the format
+  -o, --out <path>  report file; .json/.md/.xml (JUnit) pick the format
   -t, --timeout <ms> fail any fixture whose request runs longer (a fixture's
                     own input.signal wins over this).
   -b, --bail        stop starting new fixtures after the first fail/error;
@@ -84,6 +84,7 @@ export async function runCli(args: string[]): Promise<number> {
   let text: string;
   if (ext === ".json") text = renderJson(report);
   else if (ext === ".md") text = renderMarkdown(report);
+  else if (ext === ".xml") text = renderJUnitXml(report);
   else text = renderText(report, !out && process.stdout.isTTY === true);
 
   if (out) {

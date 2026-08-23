@@ -1,4 +1,5 @@
 import { basename, dirname, relative } from "node:path";
+import { type JUnitCase, type JUnitSuite, renderJUnit } from "../junitXml";
 import type { FixtureFailure, RunReport } from "./types";
 
 export function renderText(report: RunReport, useColor: boolean): string {
@@ -94,6 +95,53 @@ export function renderMarkdown(report: RunReport): string {
     }
   }
   return out.join("\n") + "\n";
+}
+
+// Suite per fixture file, testcase per run. Stress --count N needs no
+// aggregation — the runner already emits one result per iteration named
+// "<name> #<iter>", so a failure points at the exact iteration. Percentile
+// buckets have no JUnit shape; they ride along as the suite's system-out.
+export function renderJUnitXml(report: RunReport): string {
+  const cwd = process.cwd();
+  const byFile = new Map<string, typeof report.results>();
+  for (const r of report.results) {
+    const arr = byFile.get(r.file) ?? [];
+    arr.push(r);
+    byFile.set(r.file, arr);
+  }
+  const suites: JUnitSuite[] = [];
+  for (const [file, results] of byFile) {
+    const rel = relative(cwd, file);
+    const cases: JUnitCase[] = results.map((r) => {
+      const c: JUnitCase = { name: r.name, classname: rel, timeMs: r.durationMs };
+      if (r.status === "fail") {
+        const lines = r.failures.map(
+          (f) => `${f.path}: expected ${fmt(f.expected)}, got ${fmt(f.actual)}`,
+        );
+        // One <failure> element per case — many CI parsers read only the
+        // first; every failure still lands in the body.
+        c.failure = { message: lines[0] ?? "failed", body: lines.join("\n") };
+      } else if (r.status === "error") {
+        c.error = { message: r.error?.message ?? "(unknown)", body: r.error?.stack ?? "" };
+      }
+      return c;
+    });
+    const suite: JUnitSuite = { name: rel, cases };
+    const buckets = (report.stress ?? []).filter((b) => b.fixture.startsWith(`${file}::`));
+    if (buckets.length > 0) {
+      suite.systemOut = buckets
+        .map((b) => {
+          const dist = Object.entries(b.statusCodes)
+            .sort((a, z) => Number(a[0]) - Number(z[0]))
+            .map(([k, v]) => `${k}:${v}`)
+            .join(" ");
+          return `${b.fixture}  n=${b.count}  p50=${b.p50.toFixed(1)}  p95=${b.p95.toFixed(1)}  p99=${b.p99.toFixed(1)}  mean=${b.meanMs.toFixed(1)}  min=${b.minMs.toFixed(1)}  max=${b.maxMs.toFixed(1)}  [${dist}]`;
+        })
+        .join("\n");
+    }
+    suites.push(suite);
+  }
+  return renderJUnit(suites, "test-fixture");
 }
 
 function fmt(v: unknown): string {

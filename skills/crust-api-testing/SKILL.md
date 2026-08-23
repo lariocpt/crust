@@ -26,8 +26,10 @@ sql "SELECT count(*)::int AS c FROM buildings WHERE name = 'Court'" | assert (r 
 GET $BASE/api/buildings/$BID -H "authorization: Bearer $TOKEN" | expect 404
 ```
 
-Run: `test-pipes 'tests/**/*.pipes' [-b] [-t ms] [-s mod.ts]`.
+Run: `test-pipes 'tests/**/*.pipes' [-b] [-t ms] [-s mod.ts] [-o report.xml]`.
 PASS/FAIL report lines are prefixed `file:LINE` with real file line numbers.
+`-o`'s extension picks the format: `.xml` is JUnit (testcase per line),
+`.json` the raw report — both CI-ingestable.
 
 - **Setup module**: `-s mod.ts`, else sibling `<name>.setup.ts`; its
   default export is awaited before the file and seeds `process.env`
@@ -66,7 +68,9 @@ export default {
 };
 ```
 
-Run: `test-fixture 'tests/*.crust.ts' -j8 [-n N] [-t ms] [-b]`.
+Run: `test-fixture 'tests/*.crust.ts' -j8 [-n N] [-t ms] [-b] [-o report.xml]`.
+`-o`'s extension picks the format — `.xml` is JUnit for CI: testcase per
+run (stress iterations individually), percentiles in `<system-out>`.
 
 `output.schema`: give it an inline JSON Schema and the response body must
 conform — violations fail with per-field pointer paths. Inline means
