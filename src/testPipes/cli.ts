@@ -1,8 +1,9 @@
-import { relative } from "node:path";
+import { extname } from "node:path";
 import { FlagError, type FlagSpec, parseFlags } from "../args";
+import { renderJson, renderJUnitXml, renderText } from "./report";
 import { runPipes } from "./runner";
 
-const USAGE = `test-pipes <file|glob> [-b] [-t <ms>] [-s <module>]
+const USAGE = `test-pipes <file|glob> [-o <path>] [-b] [-t <ms>] [-s <module>]
 
 Run .pipes files: one shorthand fixture pipeline per line.
   # comments and blank lines are skipped
@@ -17,6 +18,7 @@ Before a file runs, its setup module is imported and its default export
 awaited: --setup <module>, else a sibling <name>.setup.ts. Setup seeds
 process.env — that's how lines get $TOKEN-style values.
 
+  -o, --out <path>      report file; .json/.xml (JUnit) pick the format
   -b, --bail            stop at the first failing line
   -t, --timeout <ms>    fail any line that runs longer
   -s, --setup <module>  setup module (default: sibling <name>.setup.ts)
@@ -26,6 +28,7 @@ The target may also be given as --target <file|glob>.
 
 export const SPEC: FlagSpec = {
   target: { type: "string", positional: 0 },
+  out: { short: "o", type: "string" },
   bail: { short: "b", type: "boolean" },
   timeout: { short: "t", type: "number" },
   setup: { short: "s", type: "string" },
@@ -33,6 +36,7 @@ export const SPEC: FlagSpec = {
 
 export async function runCli(args: string[]): Promise<number> {
   let target: string | undefined;
+  let out: string | undefined;
   let bail = false;
   let timeoutMs: number | undefined;
   let setup: string | undefined;
@@ -45,6 +49,7 @@ export async function runCli(args: string[]): Promise<number> {
     }
     if (rest.length > 0) throw new FlagError(`unexpected argument "${rest[0]}"`);
     target = values.target as string | undefined;
+    out = values.out as string | undefined;
     bail = values.bail === true;
     timeoutMs = values.timeout as number | undefined;
     setup = values.setup as string | undefined;
@@ -67,19 +72,17 @@ export async function runCli(args: string[]): Promise<number> {
   }
 
   const cwd = process.cwd();
-  for (const r of report.results) {
-    const loc = `${relative(cwd, r.file)}:${r.lineNo}`;
-    if (r.status === "pass") {
-      process.stdout.write(
-        `  PASS  ${loc}  ${r.line.slice(0, 100)}  (${r.durationMs.toFixed(1)}ms)\n`,
-      );
-    } else {
-      process.stdout.write(`  FAIL  ${loc}  ${r.line.slice(0, 100)}\n        ${r.error}\n`);
-    }
+  const ext = out ? extname(out) : "";
+  let text: string;
+  if (ext === ".json") text = renderJson(report);
+  else if (ext === ".xml") text = renderJUnitXml(report, cwd);
+  else text = renderText(report, cwd);
+
+  if (out) {
+    await Bun.write(out, text);
+  } else {
+    process.stdout.write(text);
   }
-  const { pass, fail, files } = report.totals;
-  process.stdout.write(
-    `\n${files} file(s): ${pass} pass, ${fail} fail${report.bailed ? "  (bailed)" : ""}\n`,
-  );
-  return fail > 0 ? 1 : 0;
+
+  return report.totals.fail > 0 ? 1 : 0;
 }

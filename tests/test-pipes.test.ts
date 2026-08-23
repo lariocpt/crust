@@ -133,3 +133,72 @@ describe("test-pipes runner", () => {
     expect(report.totals.fail).toBe(0);
   });
 });
+
+describe("test-pipes reports", () => {
+  test("renderText matches the historical inline stdout format byte for byte", async () => {
+    const { renderText } = await import("../src/testPipes/report");
+    const text = renderText(
+      {
+        results: [
+          {
+            file: join(dir, "t.pipes"),
+            lineNo: 1,
+            line: '{"a":1} | assert (r => r.a === 1)',
+            status: "pass",
+            durationMs: 1.23,
+          },
+          {
+            file: join(dir, "t.pipes"),
+            lineNo: 2,
+            line: "GET /x | expect 200",
+            status: "fail",
+            durationMs: 0.5,
+            error: "expect 200: got 404",
+          },
+        ],
+        totals: { pass: 1, fail: 1, files: 1 },
+        bailed: false,
+      },
+      dir,
+    );
+    expect(text).toBe(
+      `  PASS  t.pipes:1  {"a":1} | assert (r => r.a === 1)  (1.2ms)\n` +
+        `  FAIL  t.pipes:2  GET /x | expect 200\n        expect 200: got 404\n` +
+        `\n1 file(s): 1 pass, 1 fail\n`,
+    );
+  });
+
+  test("--out report.xml writes JUnit — suite per file, case per line, exit mirrors failures", async () => {
+    const { runCli } = await import("../src/testPipes/cli");
+    const sub = join(dir, "junitout");
+    const { mkdir } = await import("node:fs/promises");
+    await mkdir(sub, { recursive: true });
+    await writeFile(
+      join(sub, "r.pipes"),
+      `{"a":1} | assert (r => r.a === 1)\n{"b":"<&>"} | assert (r => r.b === "nope")\n`,
+    );
+    const outPath = join(sub, "report.xml");
+    const code = await runCli([join(sub, "r.pipes"), "--out", outPath]);
+    expect(code).toBe(1);
+    const xml = await Bun.file(outPath).text();
+    expect(xml).toContain('name="test-pipes"');
+    expect(xml).toContain('tests="2" failures="1" errors="0"');
+    expect(xml).toContain('name="line 1: {&quot;a&quot;:1} | assert (r =&gt; r.a === 1)"');
+    expect(xml).toContain("<failure message=");
+    expect(xml.trim().endsWith("</testsuites>")).toBe(true);
+  });
+
+  test("--out report.json round-trips the PipesReport", async () => {
+    const { runCli } = await import("../src/testPipes/cli");
+    const sub = join(dir, "jsonout");
+    const { mkdir } = await import("node:fs/promises");
+    await mkdir(sub, { recursive: true });
+    await writeFile(join(sub, "j.pipes"), `{"a":1} | assert (r => r.a === 1)\n`);
+    const outPath = join(sub, "report.json");
+    const code = await runCli([join(sub, "j.pipes"), "-o", outPath]);
+    expect(code).toBe(0);
+    const data = JSON.parse(await Bun.file(outPath).text());
+    expect(data.totals).toEqual({ pass: 1, fail: 0, files: 1 });
+    expect(data.results[0].lineNo).toBe(1);
+  });
+});

@@ -896,6 +896,7 @@ test-fixture --target fixtures/users.crust.ts --out report.md
 test-fixture --target 'fixtures/**/*.crust.ts' --threads 8 --out report.json
 test-fixture --target fixtures/users.crust.ts --count 1000 --threads 32   # stress
 test-fixture --target 'gen/*.gen.crust.ts' --threads 8 --timeout 5000 --bail
+test-fixture --target 'fixtures/**/*.crust.ts' --out report.xml   # JUnit for CI
 ```
 
 - `--timeout <ms>` — fail any fixture whose request runs longer. A fixture's
@@ -932,7 +933,13 @@ export default {
 };
 ```
 
-Report formats are picked from `--out`'s extension: `.json`, `.md`, anything else is plain text. With no `--out`, prints a colored, folder-grouped summary to stdout. Exit codes: `0` all pass, `1` any failure/error, `2` no files matched or bad args.
+Report formats are picked from `--out`'s extension: `.json`, `.md`, `.xml` (JUnit), anything else is plain text. With no `--out`, prints a colored, folder-grouped summary to stdout. Exit codes: `0` all pass, `1` any failure/error, `2` no files matched or bad args.
+
+The JUnit report maps one `<testsuite>` per fixture file and one `<testcase>`
+per run — under `--count N`, each iteration is its own testcase (`name #3`),
+so CI points at the exact failing iteration; the stress percentile table
+rides along as the suite's `<system-out>`. Failures carry the first mismatch
+as the `message` and every mismatch in the body.
 
 When installed via `install.sh`, the runner is AOT-compiled to a host-arch bytecode binary at `~/.crust/bin/crust-test-fixture` for fast cold-start. The shell builtin execs that binary if present and falls back to in-process dynamic import otherwise (dev mode).
 
@@ -948,6 +955,7 @@ lines about what the previous line did.
 test-pipes --target smoke.pipes
 test-pipes --target 'tests/**/*.pipes' --bail --timeout 5000
 test-pipes --target smoke.pipes --setup ./seed.ts
+test-pipes --target 'tests/**/*.pipes' --out report.xml   # JUnit for CI
 ```
 
 ```bash
@@ -966,7 +974,9 @@ Captures require the sequential-per-file execution model; that's a contract,
 not an accident.
 
 Flags: `--bail` stops at the first failing line (across files); `--timeout
-<ms>` fails any line that runs longer.
+<ms>` fails any line that runs longer; `--out <path>` writes the report to a
+file instead of stdout — `.json` for the raw report, `.xml` for JUnit (one
+`<testsuite>` per `.pipes` file, one `<testcase>` per line).
 
 **Setup module.** Before a file runs, its setup module is imported and its
 **default export awaited**: explicit `--setup <module>`, else a sibling
