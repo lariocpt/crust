@@ -32,9 +32,9 @@ pipeline {
                     test -x /opt/publish/bin/apps-publish || { echo "apps-publish not mounted"; exit 1; }
                     test -d npm || { echo "npm/ staging template missing"; exit 1; }
 
-                    # The lockfile used to carry baked AWS CodeArtifact URLs from the
-                    # decommissioned a former employer account, which 401 and break the build inside a
-                    # clean container. Fail here with a clear message rather than mid-compile.
+                    # The lockfile used to carry baked AWS CodeArtifact URLs from a
+                    # decommissioned account, which 401 and break the build inside a clean
+                    # container. Fail here with a clear message rather than mid-compile.
                     if grep -q codeartifact bun.lock 2>/dev/null; then
                         echo "FAIL: bun.lock still references CodeArtifact. Regenerate it:"
                         echo "  rm bun.lock && BUN_CONFIG_REGISTRY=https://registry.npmjs.org bun install"
