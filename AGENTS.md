@@ -57,10 +57,12 @@ every example. If you change the grammar, those go red before users do.
   resolve, 1-arg functions in `input` receive the setup context, 1+-arg
   functions in `output` are matchers `(actual, ctx)`, async matchers are
   awaited (`diffAsync` — sync `diff` must fail loudly on thenables, never
-  truthy-pass a Promise). `output.schema` is RESERVED: a JSON Schema the
-  response body must conform to (validated via the mockServer subset
-  validator; extracted before the resolve walk so functions inside a schema
-  are never invoked).
+  truthy-pass a Promise). `output.schema` is a fixed contract (shipped in
+  v0.2): a JSON Schema the response body must conform to (validated via the
+  mockServer subset validator; extracted before the resolve walk so
+  functions inside a schema are never invoked). Schemas are inline only —
+  the runner has no spec to resolve against, so a `$ref` anywhere in one is
+  a loud error, never a silent pass.
 
 ## Tests
 

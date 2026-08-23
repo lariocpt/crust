@@ -68,8 +68,10 @@ export default {
 
 Run: `test-fixture 'tests/*.crust.ts' -j8 [-n N] [-t ms] [-b]`.
 
-`output.schema` is a RESERVED key: give it an inline JSON Schema and the
-response body must conform — violations fail with per-field pointer paths.
+`output.schema`: give it an inline JSON Schema and the response body must
+conform — violations fail with per-field pointer paths. Inline means
+$ref-free: a `$ref` anywhere in the schema is a loud error (the runner has
+no spec to resolve it against — it would otherwise pass silently).
 Unknown schema keywords pass (never-invent-a-violation). gen-fixtures emits
 this automatically when the spec documents a response schema for a case's
 expected status.
