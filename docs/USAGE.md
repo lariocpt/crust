@@ -64,6 +64,7 @@ crust -c 'src/**/*.ts | wc -l'
 | `crust <file.crust>` | Run a script file and exit. Blank lines and `#` comments are skipped (so a `#!/usr/bin/env crust` shebang works), and execution is **fail-fast**: crust stops at the first failing line and exits with *its* code. Positional script arguments are not supported — extra arguments are rejected (exit 2). An unreadable file exits 127. |
 | `cmd \| crust` | With stdin piped, crust reads it to EOF and runs the lines exactly like a script file — same comment handling, same fail-fast exit codes. Because stdin is drained up front, shell stages inside the script see EOF on their stdin. Piping **data** (not a program) is the [`stdin` source](#reading-piped-stdin-stdin-source)'s job: `docker logs -f app \| crust -c 'stdin \| grep ERROR'`. |
 | `crust -c <line>` | Run one line and exit. Multi-line strings split on `\n`, skip blanks and `#` comments, and are **fail-fast**: crust stops at the first failing line and exits with *its* code (previously a later success masked an earlier failure). |
+| `crust --env-file <path> …` | Load a `.env` file (same parser as the [`dotenv` builtin](#dotenv), overwrite mode) *before* any run mode — `-c`, a script, piped stdin, or the REPL — and before `init.ts`, so config code sees the vars. The "loaded" note goes to **stderr** (a `-c` pipeline's stdout stays clean), and a **missing file exits 2 loudly** — this flag exists to replace shell shims whose silent env failures made runs measure the wrong thing. Doesn't combine with `--check` (parse-only by contract). |
 | `crust -h`, `--help` | Show usage. |
 | `crust -V`, `--version` | Show version. |
 
@@ -1251,6 +1252,34 @@ instead of spec examples. Unknown collection keys (no matching route) print
 a boot warning and are skipped; an unreadable or invalid seed file exits
 `1`. The boot line gains `(seeded N)` with the number of items actually
 inserted.
+
+#### Failure injection (`PUT /__crust/override`)
+
+The mock can be **armed to fail** — for the case where the *app under test*
+owns the request, so no test-controlled header can select an error response
+(the app talks to the mock exactly as it would to the real upstream):
+
+```bash
+# arm: the next POST /v2/push/send whose body contains this fixture's uuid
+# answers 429 once, then the normal mock returns
+curl -X PUT :4000/__crust/override -d '{
+  "method": "POST", "path": "/v2/push/send", "status": 429,
+  "body": {"errors": [{"code": "RATE_LIMIT"}]},
+  "times": 1, "match": {"bodyContains": "d4c1…-my-fixture-uuid"}
+}'
+```
+
+`{method, path, status}` are required (`path` is the exact request pathname);
+`body` (string → raw, object → JSON), `contentType`, `times` (consume after
+N matches; armed until cleared when omitted) and `match.bodyContains` are
+optional. `match.bodyContains` + `times: 1` is the concurrency story: a
+fixture running under `--threads` arms a failure scoped to a unique value it
+puts in its own request body, so sibling fixtures never race it. First
+armed match wins; an armed override beats `--validate` and `--stateful`
+(a simulated 429 answers 429 no matter how valid the request was).
+`GET /__crust/override` lists what's armed, `DELETE` clears everything.
+Mock mode only — in `--proxy` mode the upstream is real and overrides are
+never consulted.
 
 #### Request validation (`--validate`)
 

@@ -59,6 +59,71 @@ export interface RunningServer {
 const MAX_VIOLATIONS = 1000;
 const DEFAULT_PROXY_TIMEOUT_MS = 30_000;
 
+// Armed via PUT /__crust/override (mock mode): the next matching request(s)
+// answer this instead of the mock. Exists for failure injection when the APP
+// under test owns the request — it can't send a Prefer-style control header,
+// so the mock itself must be armable. `match.bodyContains` + `times: 1`
+// lets a fixture running under --threads arm a failure for ITS OWN request
+// (scoped by a unique value it put in the body) without racing siblings.
+interface MockOverride {
+  method: string;
+  path: string;
+  status: number;
+  body?: unknown;
+  contentType?: string;
+  /** consume after N matches (armed until DELETE when omitted) */
+  times?: number;
+  match?: { bodyContains?: string };
+}
+
+function validateOverride(p: unknown): string | null {
+  if (!isPlainObject(p)) return "override payload must be a JSON object";
+  if (typeof p.method !== "string" || p.method.length === 0) return "method: required string";
+  if (typeof p.path !== "string" || !p.path.startsWith("/")) {
+    return "path: required string starting with /";
+  }
+  if (
+    typeof p.status !== "number" ||
+    !Number.isInteger(p.status) ||
+    p.status < 100 ||
+    p.status > 599
+  ) {
+    return "status: integer 100-599 required";
+  }
+  if (p.times !== undefined && (!Number.isInteger(p.times) || (p.times as number) < 1)) {
+    return "times: integer >= 1";
+  }
+  if (p.contentType !== undefined && typeof p.contentType !== "string") {
+    return "contentType: string";
+  }
+  if (p.match !== undefined) {
+    if (!isPlainObject(p.match)) return "match: object";
+    if (p.match.bodyContains !== undefined && typeof p.match.bodyContains !== "string") {
+      return "match.bodyContains: string";
+    }
+  }
+  return null;
+}
+
+function overrideResponse(o: MockOverride): Response {
+  if (o.body === undefined) {
+    return new Response(null, {
+      status: o.status,
+      headers: o.contentType ? { "content-type": o.contentType } : {},
+    });
+  }
+  if (typeof o.body === "string") {
+    return new Response(o.body, {
+      status: o.status,
+      headers: { "content-type": o.contentType ?? "text/plain; charset=utf-8" },
+    });
+  }
+  return new Response(JSON.stringify(o.body), {
+    status: o.status,
+    headers: { "content-type": o.contentType ?? "application/json" },
+  });
+}
+
 export async function startServer(opts: ServerOptions): Promise<RunningServer> {
   const routes = buildRoutes(opts.spec);
   const log = opts.log ?? ((line) => process.stderr.write(line + "\n"));
@@ -180,6 +245,26 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
     opts.stateful === true || opts.state !== undefined || opts.seed !== undefined;
   const needsBody = validateMode || statefulMode || proxyMode;
 
+  const overrides: MockOverride[] = [];
+  // First armed match wins; a `times` override is consumed as it matches.
+  const takeOverride = (method: string, pathname: string, rawBody: ArrayBuffer | null) => {
+    const m = method.toUpperCase();
+    for (let i = 0; i < overrides.length; i++) {
+      const o = overrides[i]!;
+      if (o.method !== m || o.path !== pathname) continue;
+      if (o.match?.bodyContains !== undefined) {
+        const text = rawBody ? new TextDecoder().decode(rawBody) : "";
+        if (!text.includes(o.match.bodyContains)) continue;
+      }
+      if (o.times !== undefined) {
+        o.times--;
+        if (o.times <= 0) overrides.splice(i, 1);
+      }
+      return o;
+    }
+    return null;
+  };
+
   const server = Bun.serve({
     port: opts.port,
     hostname: opts.hostname,
@@ -205,14 +290,55 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
           return response;
         }
 
+        // Mock-mode failure injection — the control endpoint, handled before
+        // everything else and never mocked or validated.
+        if (!proxyMode && url.pathname === "/__crust/override") {
+          if (req.method === "PUT") {
+            let payload: unknown;
+            try {
+              payload = await req.json();
+            } catch {
+              payload = undefined;
+            }
+            const problem =
+              payload === undefined ? "override payload must be JSON" : validateOverride(payload);
+            if (problem) {
+              response = jsonResponse(400, { error: problem });
+            } else {
+              const p = payload as Record<string, unknown>;
+              overrides.push({
+                method: (p.method as string).toUpperCase(),
+                path: p.path as string,
+                status: p.status as number,
+                ...(p.body !== undefined ? { body: p.body } : {}),
+                ...(p.contentType !== undefined ? { contentType: p.contentType as string } : {}),
+                ...(p.times !== undefined ? { times: p.times as number } : {}),
+                ...(p.match !== undefined ? { match: p.match as MockOverride["match"] } : {}),
+              });
+              response = jsonResponse(201, { armed: overrides.length });
+            }
+          } else if (req.method === "GET") {
+            response = jsonResponse(200, { count: overrides.length, overrides });
+          } else if (req.method === "DELETE") {
+            overrides.length = 0;
+            response = new Response(null, { status: 204 });
+          } else {
+            response = jsonResponse(405, { error: "method not allowed" });
+          }
+          logLine(req.method, url.pathname, response.status, started, 0);
+          return response;
+        }
+
         // Read the raw request body ONCE up front; every consumer (validator,
-        // stateful CRUD, proxy forwarding) works from this copy.
+        // stateful CRUD, proxy forwarding, override bodyContains matching)
+        // works from this copy.
         let rawBody: ArrayBuffer | null = null;
         let bodyPresent = false;
         let parsedBody: unknown;
         let jsonError: string | undefined;
         const contentType = req.headers.get("content-type");
-        if (needsBody) {
+        const overridesNeedBody = overrides.some((o) => o.match?.bodyContains !== undefined);
+        if (needsBody || overridesNeedBody) {
           rawBody = await req.arrayBuffer();
           bodyPresent = rawBody.byteLength > 0;
           if (bodyPresent) {
@@ -221,6 +347,18 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
             } catch (err) {
               if (isJsonContentType(contentType)) jsonError = (err as Error).message;
             }
+          }
+        }
+
+        // An armed override wins over validation, stateful CRUD and the mock:
+        // an upstream simulating a 429 answers 429 no matter how valid the
+        // request was. Never active in proxy mode (the upstream is real).
+        if (!proxyMode) {
+          const ov = takeOverride(req.method, url.pathname, rawBody);
+          if (ov) {
+            response = overrideResponse(ov);
+            logLine(req.method, url.pathname, response.status, started, 0);
+            return response;
           }
         }
 

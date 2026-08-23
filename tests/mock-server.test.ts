@@ -492,3 +492,147 @@ describe("stateful mode", () => {
     }
   });
 });
+
+describe("failure injection (/__crust/override)", () => {
+  test("arm, match, consume: times:1 answers once then the mock returns", async () => {
+    const server = await startServer({
+      port: 0,
+      hostname: "127.0.0.1",
+      spec: minimalSpec as unknown as OpenApiSpec,
+      log: () => {},
+    });
+    const base = `http://127.0.0.1:${server.port}`;
+    try {
+      const armed = await fetch(`${base}/__crust/override`, {
+        method: "PUT",
+        body: JSON.stringify({
+          method: "GET",
+          path: "/pets",
+          status: 503,
+          body: { error: "simulated outage" },
+          times: 1,
+        }),
+      });
+      expect(armed.status).toBe(201);
+
+      const first = await fetch(`${base}/pets`);
+      expect(first.status).toBe(503);
+      expect(((await first.json()) as { error: string }).error).toBe("simulated outage");
+
+      const second = await fetch(`${base}/pets`);
+      expect(second.status).toBe(200); // consumed — the mock is back
+    } finally {
+      await server.stop();
+    }
+  });
+
+  test("bodyContains scopes an override to the fixture that armed it", async () => {
+    const server = await startServer({
+      port: 0,
+      hostname: "127.0.0.1",
+      spec: minimalSpec as unknown as OpenApiSpec,
+      log: () => {},
+    });
+    const base = `http://127.0.0.1:${server.port}`;
+    try {
+      await fetch(`${base}/__crust/override`, {
+        method: "PUT",
+        body: JSON.stringify({
+          method: "POST",
+          path: "/pets",
+          status: 429,
+          times: 1,
+          match: { bodyContains: "uuid-mine" },
+        }),
+      });
+      const other = await fetch(`${base}/pets`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: "uuid-theirs" }),
+      });
+      expect(other.status).toBe(201); // sibling fixture untouched
+      const mine = await fetch(`${base}/pets`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: "uuid-mine" }),
+      });
+      expect(mine.status).toBe(429);
+      const after = await fetch(`${base}/pets`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: "uuid-mine" }),
+      });
+      expect(after.status).toBe(201); // consumed
+    } finally {
+      await server.stop();
+    }
+  });
+
+  test("an armed override wins over --validate; GET lists; DELETE clears; bad payloads 400", async () => {
+    const strictSpec = {
+      openapi: "3.1.0",
+      paths: {
+        "/w": {
+          post: {
+            requestBody: {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    required: ["name"],
+                    properties: { name: { type: "string" } },
+                  },
+                },
+              },
+            },
+            responses: { "201": { description: "created" } },
+          },
+        },
+      },
+    } as unknown as OpenApiSpec;
+    const server = await startServer({
+      port: 0,
+      hostname: "127.0.0.1",
+      spec: strictSpec,
+      validate: true,
+      log: () => {},
+    });
+    const base = `http://127.0.0.1:${server.port}`;
+    try {
+      await fetch(`${base}/__crust/override`, {
+        method: "PUT",
+        body: JSON.stringify({ method: "POST", path: "/w", status: 429 }),
+      });
+      const listed = (await (await fetch(`${base}/__crust/override`)).json()) as {
+        count: number;
+      };
+      expect(listed.count).toBe(1);
+
+      // Invalid body — but the simulated upstream answers 429 regardless.
+      const invalid = await fetch(`${base}/w`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ wrong: true }),
+      });
+      expect(invalid.status).toBe(429);
+
+      expect((await fetch(`${base}/__crust/override`, { method: "DELETE" })).status).toBe(204);
+      const nowValidated = await fetch(`${base}/w`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ wrong: true }),
+      });
+      expect(nowValidated.status).toBe(422); // validation is back in charge
+
+      const bad = await fetch(`${base}/__crust/override`, {
+        method: "PUT",
+        body: JSON.stringify({ method: "POST", path: "no-slash", status: 201 }),
+      });
+      expect(bad.status).toBe(400);
+      const notJson = await fetch(`${base}/__crust/override`, { method: "PUT", body: "nope" });
+      expect(notJson.status).toBe(400);
+    } finally {
+      await server.stop();
+    }
+  });
+});
