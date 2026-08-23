@@ -516,10 +516,15 @@ function shellSource(cmd: string): Pipeline<unknown> {
         stderr: "inherit",
         // Live env so `capture`d $VARs from earlier lines reach sh.
         env: shellEnv(),
+        // Own process group (setsid leader) so kills reach grandchildren.
+        // `sh -c "sleep 30"` only execs into sleep on shells that optimise the
+        // single-command case; dash — /bin/sh on Debian and Ubuntu — FORKS, so
+        // killing the direct child left the grandchild running to completion.
+        detached: true,
       });
       // REPL Ctrl-C kills the child through the bus; the finally kill also
       // reaps it when a downstream stage stops iterating early.
-      const unregister = registerChild(() => proc.kill());
+      const unregister = registerChild(() => sources.killGroup(proc));
       try {
         const decoder = new TextDecoder();
         let buf = "";
@@ -536,7 +541,7 @@ function shellSource(cmd: string): Pipeline<unknown> {
         if (failure) throw failure;
       } finally {
         unregister();
-        proc.kill();
+        sources.killGroup(proc);
       }
     })(),
   );
@@ -551,8 +556,11 @@ function shellTransform(input: Pipeline<unknown>, cmd: string): Pipeline<unknown
         stderr: "inherit",
         // Live env so `capture`d $VARs from earlier lines reach sh.
         env: shellEnv(),
+        // Own process group — see shellSource: a forking /bin/sh (dash) would
+        // otherwise orphan the grandchild on Ctrl-C or an early downstream exit.
+        detached: true,
       });
-      const unregister = registerChild(() => proc.kill());
+      const unregister = registerChild(() => sources.killGroup(proc));
       try {
         // UPSTREAM failures must fail the line (the -c fail-fast contract);
         // writer failures must not (a child that exits early — head — closes
@@ -605,7 +613,7 @@ function shellTransform(input: Pipeline<unknown>, cmd: string): Pipeline<unknown
         if (failure) throw failure;
       } finally {
         unregister();
-        proc.kill();
+        sources.killGroup(proc);
       }
     })(),
   );

@@ -534,7 +534,10 @@ function restartMax(restart: ProcSpec["restart"]): number | null {
 // SIGTERM/SIGKILL the child's whole process group (children are spawned
 // detached, i.e. setsid group leaders), falling back to a plain child kill
 // when the group is already gone.
-function killGroup(child: ReturnType<typeof Bun.spawn>, signal: "SIGTERM" | "SIGKILL" = "SIGTERM") {
+export function killGroup(
+  child: ReturnType<typeof Bun.spawn>,
+  signal: "SIGTERM" | "SIGKILL" = "SIGTERM",
+) {
   try {
     process.kill(-child.pid, signal);
   } catch {
