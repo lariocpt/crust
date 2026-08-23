@@ -235,3 +235,57 @@ test("items larger than the pipe buffer are not truncated on exit", async () => 
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+describe("--env-file", () => {
+  const { mkdtemp, rm, writeFile } =
+    require("node:fs/promises") as typeof import("node:fs/promises");
+  const { tmpdir } = require("node:os") as typeof import("node:os");
+  const { join } = require("node:path") as typeof import("node:path");
+
+  test("loads vars before the line runs; the loaded note goes to stderr, not stdout", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "crust-envfile-"));
+    try {
+      const envPath = join(dir, ".env.test");
+      await writeFile(envPath, "SMOKE_VAR=from-env-file\n# comment\nOTHER=2\n");
+      const r = await runCli(["--env-file", envPath, "-c", "echo $SMOKE_VAR"]);
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain("from-env-file");
+      expect(r.stdout).not.toContain("dotenv:");
+      expect(r.stderr).toContain("dotenv: loaded 2 var(s)");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("--env-file=<path> form works too", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "crust-envfile-"));
+    try {
+      const envPath = join(dir, ".env");
+      await writeFile(envPath, "EQ_FORM=yes\n");
+      const r = await runCli([`--env-file=${envPath}`, "-c", "echo $EQ_FORM"]);
+      expect(r.code).toBe(0);
+      expect(r.stdout).toContain("yes");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a missing file exits 2 loudly — never a silent no-op", async () => {
+    const r = await runCli(["--env-file", "/definitely/not/here.env", "-c", "echo hi"]);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toContain("not found");
+    expect(r.stdout).not.toContain("hi");
+  });
+
+  test("a missing path argument exits 2", async () => {
+    const r = await runCli(["--env-file"]);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toContain("--env-file requires a path");
+  });
+
+  test("refuses to combine with --check (parse-only contract)", async () => {
+    const r = await runCli(["--env-file", "/tmp/x.env", "--check", "range(1,2)"]);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toContain("does not combine with --check");
+  });
+});

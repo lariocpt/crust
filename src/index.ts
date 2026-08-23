@@ -2,7 +2,7 @@
 import pkg from "../package.json" with { type: "json" };
 import { hasUnquotedShellMeta, splitArgs } from "./args";
 import { registerBuiltinFns } from "./builtinFns";
-import { isBuiltin, renderBuiltinList } from "./builtins";
+import { dotenvLoad, isBuiltin, renderBuiltinList } from "./builtins";
 import { checkBuiltinLine } from "./checkBuiltin";
 import { type CrustGlobal, loadConfig } from "./config";
 import { onInterrupt, readLine, suspendEditor } from "./editor";
@@ -24,6 +24,8 @@ usage:
   crust -c <line>          run one line and exit
   crust --check <line>     parse without running (lint documented examples)
   cmd | crust              run lines piped on stdin and exit
+  crust --env-file <path>  load a .env before running (any run mode; missing
+                           file exits 2 — loudly, never a silent no-op)
   crust -h | --help        show this help
   crust -V | --version     show version
 
@@ -53,8 +55,15 @@ function newContext(history: string[]): Context {
   return ctx;
 }
 
-async function bootstrapCtx(history: string[] = []): Promise<Context> {
+async function bootstrapCtx(history: string[] = [], envFile?: string): Promise<Context> {
   const ctx = newContext(history);
+  // --env-file loads BEFORE init.ts so config code can read the vars. A
+  // missing file exits 2 loudly — the point of the flag is replacing shell
+  // shims whose silent env failures made runs measure the wrong thing.
+  if (envFile !== undefined) {
+    const code = await dotenvLoad(ctx, envFile, "overwrite", (s) => void process.stderr.write(s));
+    if (code !== 0) process.exit(2);
+  }
   await loadConfig(ctx, process.env.CRUST_CONFIG);
   const userCrust = (globalThis as { crust?: CrustGlobal }).crust;
   if (userCrust?.onBeforeStart) {
@@ -69,6 +78,32 @@ async function bootstrapCtx(history: string[] = []): Promise<Context> {
 
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
+
+  // Peel --env-file first — it composes with every RUN mode (-c, script,
+  // piped stdin, REPL). Not with --check, which is parse-only by contract
+  // (the website's CI checks examples on machines with no env files).
+  let envFile: string | undefined;
+  {
+    const i = argv.findIndex((a) => a === "--env-file" || a.startsWith("--env-file="));
+    if (i !== -1) {
+      const a = argv[i]!;
+      if (a.startsWith("--env-file=")) {
+        envFile = a.slice("--env-file=".length);
+        argv.splice(i, 1);
+      } else {
+        envFile = argv[i + 1];
+        argv.splice(i, 2);
+      }
+      if (!envFile || envFile.startsWith("-")) {
+        process.stderr.write("crust: --env-file requires a path\n");
+        process.exit(2);
+      }
+      if (argv[0] === "--check") {
+        process.stderr.write("crust: --env-file does not combine with --check (parse-only)\n");
+        process.exit(2);
+      }
+    }
+  }
 
   if (argv.length > 0) {
     const flag = argv[0]!;
@@ -94,7 +129,7 @@ async function main(): Promise<void> {
         );
         process.exit(2);
       }
-      const ctx = await bootstrapCtx();
+      const ctx = await bootstrapCtx([], envFile);
       // Fail fast: stop at the first failing line and exit with ITS code —
       // previously a later success masked an earlier failure.
       await shutdown(await runLines(argv[1]!, ctx));
@@ -159,7 +194,7 @@ async function main(): Promise<void> {
       process.stderr.write(`crust: cannot read ${flag}: ${(err as Error).message}\n`);
       process.exit(127);
     }
-    const ctx = await bootstrapCtx();
+    const ctx = await bootstrapCtx([], envFile);
     await shutdown(await runLines(source, ctx));
   }
 
@@ -170,11 +205,11 @@ async function main(): Promise<void> {
     // never installs its stdin listener on this path.
     markStdinConsumed("the script (bare `cmd | crust` treats piped stdin as lines to RUN)");
     const source = await Bun.stdin.text();
-    const ctx = await bootstrapCtx();
+    const ctx = await bootstrapCtx([], envFile);
     await shutdown(await runLines(source, ctx));
   }
 
-  const ctx = await bootstrapCtx(await loadHistory());
+  const ctx = await bootstrapCtx(await loadHistory(), envFile);
 
   while (true) {
     const uc = (globalThis as { crust?: UserCrustGlobals }).crust;

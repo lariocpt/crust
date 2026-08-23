@@ -158,10 +158,15 @@ const dotenvBuiltin: Builtin = async (rawArgs, ctx) => {
   }
 };
 
-async function dotenvLoad(
+// Exported for the top-level --env-file flag (src/index.ts), which reuses
+// this loader verbatim — one dotenv implementation, two entry points. The
+// flag passes a stderr writer so the "loaded" note never pollutes a -c
+// pipeline's stdout.
+export async function dotenvLoad(
   ctx: Context,
   path: string,
   mode: "overwrite" | "append",
+  log: (s: string) => void = (s) => void process.stdout.write(s),
 ): Promise<number> {
   const abs = path.startsWith("/") ? path : `${process.cwd()}/${path}`;
   const file = Bun.file(abs);
@@ -181,7 +186,7 @@ async function dotenvLoad(
     written.push(k);
   }
   ctx.dotenv.history.push({ path: abs, mode, ts: Date.now(), keys: written });
-  process.stdout.write(`dotenv: loaded ${written.length} var(s) from ${abs} (${mode})\n`);
+  log(`dotenv: loaded ${written.length} var(s) from ${abs} (${mode})\n`);
   return 0;
 }
 

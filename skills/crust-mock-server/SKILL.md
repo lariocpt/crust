@@ -74,6 +74,16 @@ sql "SELECT json_extract(doc, '$.name') AS name FROM crust_mock_state WHERE coll
 
 (postgres: `doc->>'name'` instead of `json_extract`.)
 
+## Failure injection (`PUT /__crust/override`) — mock mode only
+
+Arm the mock to fail when the APP owns the request (no test-controlled
+header possible): `PUT /__crust/override` with `{method, path, status,
+body?, contentType?, times?, match?: {bodyContains}}`. Under `-j/--threads`
+ALWAYS scope with `match.bodyContains` (a unique value the fixture put in
+its own request body) + `times: 1` — unscoped overrides race sibling
+fixtures. An armed override beats --validate/--stateful; `GET` lists,
+`DELETE` clears. Never consulted in --proxy mode.
+
 ## Request validation (`--validate`)
 
 Spec-violating requests get **422** (not the API's own 400 — deliberately
