@@ -4,10 +4,8 @@ import { buildSource } from "../parser";
 import type { Pipeline } from "../pipeline";
 import { shellEnv } from "../shellPath";
 import type { Context } from "../types";
+import { DEFAULT_CAPACITY, MAX_CAPACITY } from "./ring";
 import { LogsSession } from "./session";
-
-const DEFAULT_BUFFER = 10_000;
-const BUFFER_CAP = 1_000_000;
 
 const USAGE = `usage: logs [--buffer N] <source>
   logs tail -n 0 -F app.log          follow a file (or a glob of files)
@@ -40,7 +38,7 @@ async function runLogsInner(rawArgs: string, ctx: Context): Promise<number> {
     return 2;
   }
 
-  let bufferSize = DEFAULT_BUFFER;
+  let bufferSize = DEFAULT_CAPACITY;
   let spec = rawArgs;
   const bufMatch = spec.match(/^--buffer(?:=|\s+)(\S+)\s*/);
   if (bufMatch) {
@@ -49,9 +47,9 @@ async function runLogsInner(rawArgs: string, ctx: Context): Promise<number> {
       stderr(`logs: --buffer must be a positive integer — got "${bufMatch[1]}"\n`);
       return 2;
     }
-    if (n > BUFFER_CAP) {
-      stderr(`logs: --buffer capped at ${BUFFER_CAP}\n`);
-      bufferSize = BUFFER_CAP;
+    if (n > MAX_CAPACITY) {
+      stderr(`logs: --buffer capped at ${MAX_CAPACITY}\n`);
+      bufferSize = MAX_CAPACITY;
     } else {
       bufferSize = n;
     }
@@ -169,6 +167,7 @@ async function runLogsInner(rawArgs: string, ctx: Context): Promise<number> {
     source,
     sourceLabel: spec,
     bufferSize,
+    color: process.stdout.isTTY === true,
     readInput: readLine,
     write: (s) => void process.stdout.write(s),
     writeErr: stderr,

@@ -4,7 +4,7 @@ import { classify, tokenize } from "../lexer";
 import { parseStages } from "../parser";
 import { Pipeline } from "../pipeline";
 import type { Context } from "../types";
-import { RingBuffer } from "./ring";
+import { MAX_CAPACITY, RingBuffer } from "./ring";
 
 // Bounded hand-off between the pump and the live view. Drop-oldest under
 // pressure, with the drops COUNTED and reported — same honesty rule as the
@@ -51,6 +51,8 @@ export interface LogsSessionOpts {
   sourceLabel: string;
   bufferSize: number;
   viewQueueSize?: number;
+  /** ANSI highlighting for `search` matches (cli passes stdout.isTTY). */
+  color?: boolean;
   readInput(opts: { prompt: string; history: string[] }): Promise<string | null>;
   write(s: string): void;
   writeErr(s: string): void;
@@ -65,11 +67,17 @@ export interface LogsSessionOpts {
 
 const HELP = `logs session — each line is a pipeline fragment run over the buffer, then live:
   grep ERROR
-  (l => JSON.parse(l)) | filter (e => e.level >= 40) | stats --every 5
+  json on
+  filter (e => e.level >= 40) | stats --every 5
 commands:
-  buffer   show buffer usage        clear   empty the buffer
-  help     this text                exit    tear down the source and leave (or Ctrl-D)
+  buffer [N]     show buffer usage / resize the window (newest items kept)
+  clear          empty the buffer
+  json on|off    parse JSON-object lines at query time (others stay raw strings)
+  search <text>  match the buffer only — highlighted + counted, no live view
+  help           this text
+  exit           tear down the source and leave (or Ctrl-D)
 notes: a fragment runs TWICE (buffer, then live) — use >> not > in shell stages.
+Up-arrow recalls earlier queries.
 Ctrl-C once ends the live view and FLUSHES terminal stages (bare \`stats\` prints
 its summary right there); Ctrl-C again hard-cancels a stuck query.
 `;
@@ -81,6 +89,8 @@ export class LogsSession {
   private sourceError: string | null = null;
   private pumpDone: Promise<void>;
   private viewQueueSize: number;
+  private jsonMode = false;
+  private jsonHintDone = false;
 
   constructor(private opts: LogsSessionOpts) {
     this.ring = new RingBuffer(opts.bufferSize);
@@ -113,7 +123,8 @@ export class LogsSession {
     if (this.opts.note) writeErr(`logs: ${this.opts.note}\n`);
     const history: string[] = [];
     while (true) {
-      const line = await this.opts.readInput({ prompt: "logs> ", history });
+      const prompt = this.jsonMode ? "logs[json]> " : "logs> ";
+      const line = await this.opts.readInput({ prompt, history });
       if (line === null) break; // Ctrl-D
       const q = line.trim();
       if (!q) continue;
@@ -123,11 +134,17 @@ export class LogsSession {
         writeErr(HELP);
         continue;
       }
-      if (q === "buffer") {
-        const state = this.sourceEnded ? "; source ended" : "";
-        writeErr(
-          `buffer: ${this.ring.size}/${this.ring.capacity} items (pushed ${this.ring.pushed}, evicted ${this.ring.evicted}${state})\n`,
-        );
+      const bufferCmd = q.match(/^buffer(?:\s+(\S+))?$/);
+      if (bufferCmd) {
+        if (bufferCmd[1] === undefined) {
+          // Exact historical output — pinned by tests.
+          const state = this.sourceEnded ? "; source ended" : "";
+          writeErr(
+            `buffer: ${this.ring.size}/${this.ring.capacity} items (pushed ${this.ring.pushed}, evicted ${this.ring.evicted}${state})\n`,
+          );
+        } else {
+          this.resizeBuffer(bufferCmd[1]);
+        }
         continue;
       }
       if (q === "clear") {
@@ -135,6 +152,37 @@ export class LogsSession {
         writeErr("buffer cleared\n");
         continue;
       }
+      const jsonCmd = q.match(/^json(?:\s+(\S+))?$/);
+      if (jsonCmd) {
+        this.jsonHintDone = true;
+        if (jsonCmd[1] === undefined) {
+          writeErr(`json: ${this.jsonMode ? "on" : "off"} (\`json on|off\` to change)\n`);
+        } else if (jsonCmd[1] === "on") {
+          this.jsonMode = true;
+          writeErr(
+            "json: on — string items parsing to JSON objects/arrays reach queries parsed; everything else stays raw (ring untouched; `json off` reverts)\n",
+          );
+        } else if (jsonCmd[1] === "off") {
+          this.jsonMode = false;
+          writeErr("json: off\n");
+        } else {
+          writeErr("json: usage — json on|off\n");
+        }
+        continue;
+      }
+      const searchCmd = q.match(/^search(?:\s+(.*))?$/);
+      if (searchCmd) {
+        const needle = searchCmd[1]?.trim();
+        if (!needle) {
+          writeErr(
+            "search: usage — search <text> (fixed substring; for regex or live matching, run a `grep` query)\n",
+          );
+        } else {
+          this.runSearch(needle);
+        }
+        continue;
+      }
+      this.maybeJsonHint();
       await this.runQuery(q);
     }
     await this.shutdown();
@@ -152,7 +200,17 @@ export class LogsSession {
     }
 
     // Synchronous snapshot + live attach — the exactly-once boundary.
-    const snapshot = this.ring.snapshot();
+    const rawSnapshot = this.ring.snapshot();
+    // json mode is a QUERY-TIME transform: the ring always stores raw items,
+    // so `json off` is an instant lossless revert. String items that don't
+    // become objects stay raw AND are counted — a mixed stream must neither
+    // crash the query (the old `(l => JSON.parse(l))` idiom did) nor let
+    // lines silently vanish.
+    let retroRaw = 0;
+    let liveRaw = 0;
+    const snapshot = this.jsonMode
+      ? rawSnapshot.map((i) => this.tryJson(i, () => retroRaw++))
+      : rawSnapshot;
     const queue = this.sourceEnded ? null : new ViewQueue(this.viewQueueSize);
     this.live = queue;
 
@@ -196,6 +254,11 @@ export class LogsSession {
           retroIter.return?.(undefined)?.catch(() => {});
           return;
         }
+        if (retroRaw > 0) {
+          writeErr(
+            `json: ${retroRaw} of ${rawSnapshot.length} buffered item(s) stayed raw (not JSON objects)\n`,
+          );
+        }
       } catch (err) {
         writeErr(`crust: ${(err as Error).message}\n`);
         return; // a query that broke on the buffer must not run again live
@@ -231,7 +294,10 @@ export class LogsSession {
           hardCancel();
         }
       });
-      const iter = build(Pipeline.of(queue.stream()), ctx).lines()[Symbol.asyncIterator]();
+      const liveSource = this.jsonMode
+        ? this.mapJson(queue.stream(), () => liveRaw++)
+        : queue.stream();
+      const iter = build(Pipeline.of(liveSource), ctx).lines()[Symbol.asyncIterator]();
       try {
         const drain = (async () => {
           let res = await iter.next();
@@ -247,8 +313,13 @@ export class LogsSession {
         if (outcome === "hard") {
           drain.catch(() => {});
           iter.return?.(undefined)?.catch(() => {});
-        } else if (queue.dropped > 0) {
-          writeErr(`logs: live view lagged — dropped ${queue.dropped} oldest item(s)\n`);
+        } else {
+          if (queue.dropped > 0) {
+            writeErr(`logs: live view lagged — dropped ${queue.dropped} oldest item(s)\n`);
+          }
+          if (liveRaw > 0) {
+            writeErr(`json: ${liveRaw} live item(s) stayed raw (not JSON objects)\n`);
+          }
         }
         if (this.sourceEnded && presses === 0) {
           writeErr(`-- source ended${this.sourceError ? ` (${this.sourceError})` : ""} --\n`);
@@ -264,6 +335,97 @@ export class LogsSession {
       if (this.live === queue) this.live = null;
       queue?.end();
     }
+  }
+
+  // A string item parsing to a non-null object/array is replaced by the
+  // parsed value. Everything else — non-strings (procs items), non-JSON
+  // text, strings parsing to primitives ("42" must not change type) —
+  // passes through unchanged; string misses are counted for the report.
+  private tryJson(item: unknown, miss: () => void): unknown {
+    if (typeof item !== "string") return item;
+    const t = item.trimStart();
+    if (t.startsWith("{") || t.startsWith("[")) {
+      try {
+        const parsed = JSON.parse(item);
+        if (parsed !== null && typeof parsed === "object") return parsed;
+      } catch {
+        // fall through — stays raw
+      }
+    }
+    miss();
+    return item;
+  }
+
+  private async *mapJson(src: AsyncGenerator<unknown>, miss: () => void): AsyncGenerator<unknown> {
+    for await (const item of src) yield this.tryJson(item, miss);
+  }
+
+  // One-shot, evaluated lazily before a query while json is off. sample()
+  // is a cheap peek — snapshot() would copy up to a million items per
+  // prompt. Suggests, never auto-enables: silently changing the item type
+  // under a lambda the user already typed is the interactive cousin of a
+  // false pass.
+  private maybeJsonHint(): void {
+    if (this.jsonHintDone || this.jsonMode) return;
+    try {
+      const sample = this.ring
+        .sample(8)
+        .filter((i): i is string => typeof i === "string" && i.trim().length > 0);
+      if (sample.length < 3) return; // not enough evidence yet — re-check next query
+      this.jsonHintDone = true; // decided either way — stop paying per prompt
+      for (const s of sample) {
+        if (!s.trimStart().startsWith("{")) return;
+        try {
+          const p = JSON.parse(s);
+          if (p === null || typeof p !== "object" || Array.isArray(p)) return;
+        } catch {
+          return;
+        }
+      }
+      this.opts.writeErr(
+        "hint: buffer looks like NDJSON — `json on` parses object lines at query time (`json off` reverts)\n",
+      );
+    } catch {
+      this.jsonHintDone = true; // hint only — never let it interfere
+    }
+  }
+
+  private resizeBuffer(arg: string): void {
+    const { writeErr } = this.opts;
+    const n = Number(arg);
+    if (!Number.isInteger(n) || n < 1) {
+      writeErr(`logs: buffer size must be a positive integer — got "${arg}"\n`);
+      return;
+    }
+    const target = Math.min(n, MAX_CAPACITY);
+    if (n > MAX_CAPACITY) writeErr(`logs: buffer capped at ${MAX_CAPACITY}\n`);
+    const before = this.ring.capacity;
+    const { kept, discarded } = this.ring.resize(target);
+    const drop = discarded > 0 ? `, discarded ${discarded} oldest` : "";
+    writeErr(`buffer: resized ${before} → ${target} (kept ${kept} item(s)${drop})\n`);
+  }
+
+  // Retro-only, over the RAW ring (independent of json mode; works on procs
+  // objects via formatItem): instant return, a count even at zero matches,
+  // and highlighting — the three things a re-run query genuinely lacks.
+  private runSearch(needle: string): void {
+    const { write, writeErr } = this.opts;
+    const snap = this.ring.snapshot();
+    let matches = 0;
+    for (const item of snap) {
+      const text = formatItem(item);
+      if (!text.includes(needle)) continue;
+      matches++;
+      write(`${this.highlight(text, needle)}\n`);
+    }
+    // Zero matches must never be silence.
+    writeErr(`search: ${matches} matching item(s) of ${snap.length} buffered\n`);
+  }
+
+  // split/join on the literal needle — never a RegExp built from user text.
+  private highlight(text: string, needle: string): string {
+    if (this.opts.color !== true) return text;
+    return text.split(needle).join(`\x1b[1;31m${needle}\x1b[0m`);
   }
 
   private maybeStatsHint(fragment: string): void {

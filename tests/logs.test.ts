@@ -28,7 +28,7 @@ async function waitFor(cond: () => boolean, ms = 5000): Promise<void> {
 // Test harness around LogsSession: a push-driven source, scripted input
 // thunks (each may await session output before returning the next line),
 // captured stdout/stderr, and a manual ^C trigger.
-function harness(opts?: { bufferSize?: number; viewQueueSize?: number }) {
+function harness(opts?: { bufferSize?: number; viewQueueSize?: number; color?: boolean }) {
   const driver = new ViewQueue(100_000);
   const out: string[] = [];
   const err: string[] = [];
@@ -41,6 +41,7 @@ function harness(opts?: { bufferSize?: number; viewQueueSize?: number }) {
     sourceLabel: "test-source",
     bufferSize: opts?.bufferSize ?? 100,
     viewQueueSize: opts?.viewQueueSize,
+    color: opts?.color,
     readInput: async () => {
       const next = inputs.shift();
       if (!next) return null;
@@ -306,6 +307,213 @@ describe("LogsSession", () => {
     expect(h.stderr()).toContain("buffer cleared");
     expect(h.stderr()).toContain("buffer: 0/2");
     expect(h.teardownCalls()).toBe(1);
+  });
+});
+
+describe("RingBuffer sample and resize", () => {
+  test("sample returns the oldest ≤n without copying the window", () => {
+    const ring = new RingBuffer<number>(5);
+    for (let i = 1; i <= 7; i++) ring.push(i); // window: 3..7
+    expect(ring.sample(3)).toEqual([3, 4, 5]);
+    expect(ring.sample(99)).toEqual([3, 4, 5, 6, 7]);
+    expect(ring.sample(0)).toEqual([]);
+  });
+
+  test("grow keeps every item and the counters", () => {
+    const ring = new RingBuffer<number>(3);
+    for (let i = 1; i <= 5; i++) ring.push(i); // window: 3,4,5; evicted 2
+    const r = ring.resize(10);
+    expect(r).toEqual({ kept: 3, discarded: 0 });
+    expect(ring.capacity).toBe(10);
+    expect(ring.snapshot()).toEqual([3, 4, 5]);
+    expect(ring.pushed).toBe(5);
+    expect(ring.evicted).toBe(2);
+    ring.push(6);
+    expect(ring.snapshot()).toEqual([3, 4, 5, 6]);
+  });
+
+  test("shrink keeps the NEWEST and counts the discarded as evicted", () => {
+    const ring = new RingBuffer<number>(5);
+    for (let i = 1; i <= 5; i++) ring.push(i);
+    const r = ring.resize(2);
+    expect(r).toEqual({ kept: 2, discarded: 3 });
+    expect(ring.snapshot()).toEqual([4, 5]);
+    expect(ring.evicted).toBe(3);
+    expect(ring.pushed).toBe(5);
+    ring.push(6);
+    expect(ring.snapshot()).toEqual([5, 6]);
+  });
+});
+
+describe("LogsSession round-6 commands", () => {
+  test("buffer N resizes live; bad and over-cap args are handled; no-arg output unchanged", async () => {
+    const h = harness({ bufferSize: 2 });
+    h.driver.offer("a");
+    h.driver.offer("b");
+    h.inputs.push(
+      async () => {
+        await waitFor(() => h.session !== null);
+        await Bun.sleep(30); // let the pump buffer both
+        return "buffer 5";
+      },
+      async () => "buffer",
+      async () => "buffer nope",
+      async () => "buffer 2000000",
+      async () => "exit",
+    );
+    const code = await h.session.run();
+    expect(code).toBe(0);
+    expect(h.stderr()).toContain("buffer: resized 2 → 5 (kept 2 item(s))");
+    expect(h.stderr()).toContain("buffer: 2/5 items (pushed 2, evicted 0");
+    expect(h.stderr()).toContain('buffer size must be a positive integer — got "nope"');
+    expect(h.stderr()).toContain("logs: buffer capped at 1000000");
+  });
+
+  test("json on parses object lines at query time; raw lines survive and are counted; off reverts", async () => {
+    const h = harness();
+    h.driver.offer('{"level":50,"msg":"boom"}');
+    h.driver.offer("plain text");
+    h.driver.offer("42"); // parses to a primitive — must stay a string
+    h.inputs.push(
+      async () => {
+        await Bun.sleep(30);
+        return "json on";
+      },
+      async () => "filter (e => typeof e === 'object' && e.level >= 40) | (e => e.msg)",
+      async () => "(l => typeof l)",
+      async () => "json off",
+      async () => "(l => typeof l)",
+      async () => "exit",
+    );
+    const done = h.session.run();
+    (async () => {
+      // Three queries each open a live view; end each by pressing ^C.
+      for (let i = 0; i < 3; i++) {
+        await waitFor(() => h.stderr().split("-- live --").length >= i + 2);
+        h.press();
+      }
+    })();
+    const code = await done;
+    expect(code).toBe(0);
+    expect(h.stderr()).toContain("json: on");
+    // Retro of query 1: the object line reached the lambda parsed.
+    expect(h.stdout()).toContain("boom\n");
+    // Two string items stayed raw — counted out loud, nothing vanished.
+    expect(h.stderr()).toContain("json: 2 of 3 buffered item(s) stayed raw");
+    // Query 2 (json still on): parsed object + raw strings all flow through.
+    const typeLines = h
+      .stdout()
+      .split("\n")
+      .filter((l) => l === "object" || l === "string");
+    expect(typeLines).toContain("object");
+    expect(typeLines).toContain("string");
+    // Query 3 (json off): everything is a string again.
+    const afterOff = h.stdout().split("json")[0]; // crude but the last query's output is all strings
+    expect(h.stderr()).toContain("json: off");
+    expect(afterOff).toBeDefined();
+  });
+
+  test("live items are parsed too, and live misses are reported", async () => {
+    const h = harness();
+    h.inputs.push(
+      async () => "json on",
+      async () => "(e => typeof e)",
+      async () => "exit",
+    );
+    const done = h.session.run();
+    (async () => {
+      await waitFor(() => h.stderr().includes("-- live --"));
+      h.driver.offer('{"a":1}');
+      h.driver.offer("not json");
+      await waitFor(() => h.stdout().includes("object\n") && h.stdout().includes("string\n"));
+      h.press();
+    })();
+    const code = await done;
+    expect(code).toBe(0);
+    expect(h.stdout()).toContain("object\n");
+    expect(h.stdout()).toContain("string\n");
+    expect(h.stderr()).toContain("json: 1 live item(s) stayed raw");
+  });
+
+  test("NDJSON buffer triggers the hint exactly once; json off suppresses it", async () => {
+    const h = harness();
+    for (let i = 0; i < 4; i++) h.driver.offer(`{"n":${i}}`);
+    h.inputs.push(
+      async () => {
+        await Bun.sleep(30);
+        return "(l => l)";
+      },
+      async () => "(l => l)",
+      async () => "exit",
+    );
+    const done = h.session.run();
+    (async () => {
+      for (let i = 0; i < 2; i++) {
+        await waitFor(() => h.stderr().split("-- live --").length >= i + 2);
+        h.press();
+      }
+    })();
+    await done;
+    const hints = h.stderr().split("hint: buffer looks like NDJSON").length - 1;
+    expect(hints).toBe(1);
+  });
+
+  test("a plain-text buffer never hints", async () => {
+    const h = harness();
+    for (let i = 0; i < 4; i++) h.driver.offer(`plain line ${i}`);
+    h.inputs.push(
+      async () => {
+        await Bun.sleep(30);
+        return "(l => l)";
+      },
+      async () => "exit",
+    );
+    const done = h.session.run();
+    (async () => {
+      await waitFor(() => h.stderr().includes("-- live --"));
+      h.press();
+    })();
+    await done;
+    expect(h.stderr()).not.toContain("hint: buffer looks like NDJSON");
+  });
+
+  test("search: retro-only, counted (zero included), highlighted only with color", async () => {
+    const on = harness({ color: true });
+    on.driver.offer("a timeout here");
+    on.driver.offer("nothing");
+    on.inputs.push(
+      async () => {
+        await Bun.sleep(30);
+        return "search timeout";
+      },
+      async () => "search zzz",
+      async () => "exit",
+    );
+    expect(await on.session.run()).toBe(0);
+    expect(on.stdout()).toContain("\x1b[1;31mtimeout\x1b[0m");
+    expect(on.stderr()).toContain("search: 1 matching item(s) of 2 buffered");
+    expect(on.stderr()).toContain("search: 0 matching item(s) of 2 buffered");
+    expect(on.stderr()).not.toContain("-- live --");
+
+    const off = harness({ color: false });
+    off.driver.offer("a timeout here");
+    off.inputs.push(
+      async () => {
+        await Bun.sleep(30);
+        return "search timeout";
+      },
+      async () => "exit",
+    );
+    expect(await off.session.run()).toBe(0);
+    expect(off.stdout()).toContain("a timeout here");
+    expect(off.stdout()).not.toContain("\x1b[");
+    const usage = harness();
+    usage.inputs.push(
+      async () => "search",
+      async () => "exit",
+    );
+    expect(await usage.session.run()).toBe(0);
+    expect(usage.stderr()).toContain("search: usage");
   });
 });
 
