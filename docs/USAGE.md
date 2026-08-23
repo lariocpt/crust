@@ -1427,12 +1427,16 @@ A session:
 logs> grep ERROR                     # matches from the buffer, then live ones
 -- live --
 ^C
-logs> (l => JSON.parse(l)) | filter (e => e.level >= 40) | stats --every 5
+logs> json on
+json: on — string items parsing to JSON objects/arrays reach queries parsed
+logs[json]> filter (e => e.level >= 40) | stats --every 5
 -- live --
 ^C
-logs> buffer
-buffer: 4211/10000 items (pushed 4211, evicted 0)
-logs> exit
+logs[json]> search timeout
+search: 2 matching item(s) of 4211 buffered
+logs[json]> buffer 50000
+buffer: resized 10000 → 50000 (kept 4211 item(s))
+logs[json]> exit
 ```
 
 Rules of the road:
@@ -1449,7 +1453,27 @@ Rules of the road:
   oldest pending items are dropped and the drop count is **reported**.
 - Query errors print and re-prompt; they never kill the session or the
   held source. `clear` empties the buffer; `buffer` shows usage; `help`
-  lists everything.
+  lists everything. Up-arrow recalls earlier queries.
+- **`json on`** parses at *query time*: a string item that parses to a JSON
+  object/array reaches your lambdas parsed; everything else — plain text,
+  strings parsing to primitives (`"42"` stays a string), non-string items —
+  flows through **unchanged and counted out loud** (`json: 3 of 4211
+  buffered item(s) stayed raw`). The ring always stores raw items, so
+  `json off` is an instant lossless revert, and a mixed stream can neither
+  crash a query nor silently lose lines — which is why this replaces the
+  old `(l => JSON.parse(l))` idiom (that lambda throws on the first
+  non-JSON line; it remains available as the general mechanism). When a
+  buffer looks like NDJSON, the session *suggests* `json on` once — it
+  never auto-enables, because silently changing the item type under a
+  lambda you already typed would be a false picture.
+- **`search <text>`** is the instant look: fixed-substring match over the
+  buffer only (via each item's rendered form, so it works on `procs`
+  objects too), matches highlighted, and a count that **always prints —
+  zero included**. No live view, no Ctrl-C needed. For regex,
+  case-folding, or live matching, run a `grep` query.
+- **`buffer N`** resizes the window live, keeping the newest items — so a
+  too-small buffer can be widened *without* restarting the session and
+  losing the held source's history. Shrinks report what was discarded.
 - `procs` items are `{proc, stream, line}` **objects** — `(l => l.line)`
   extracts text, `filter (l => l.proc === "web")` selects a stream.
 - Fragments end in shell stages, so pretty-rendering is just another
@@ -1461,6 +1485,20 @@ Rules of the road:
 - The `logs` line itself takes no pipes or redirections (put a complex
   command in a script); interactive-only — with piped stdin use
   `cmd | crust -c 'stdin | …'` instead (exit 2 points you there).
+
+Non-goals, stated plainly: `logs` is interactive by construction — piped
+data goes to `cmd | crust -c 'stdin | …'`, and the non-tty refusal (exit 2)
+tells you so. The buffer is an in-memory ring — 10k items by default, 1M
+hard cap, not indexed scrollback (that's lnav's job); `buffer` shows how
+much history has scrolled past, `buffer N` resizes without restarting the
+source. Items flow as line-items through one formatter, not bytes — when
+byte-exact fidelity matters, pipe real binaries together outside crust.
+Per-line JS lambdas will not match angle-grinder-class throughput; the
+native `grep` stage covers the hot filter path, and `logs` optimizes for
+iterating without restarting the source, not GB/s. And there is no
+Ctrl-Z/fg/bg — crust is not a shell, and a suspended session would silently
+gap the buffer while looking live, which is exactly the false picture
+`logs` refuses to paint.
 
 ### Built-in functions
 
