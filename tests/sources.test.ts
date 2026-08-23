@@ -775,6 +775,226 @@ describe.concurrent("procs readiness and ordering", () => {
   });
 });
 
+// Concurrent like the readiness describe: each test owns its servers, and the
+// probe intervals + restart backoffs would stack serially.
+describe.concurrent("procs liveness", () => {
+  type Line = { proc: string; stream: string; line: string };
+
+  // Bun.serve whose health can be flipped both ways mid-test.
+  function healthToggle(initiallyUp = true) {
+    let up = initiallyUp;
+    const server = Bun.serve({
+      port: 0,
+      fetch: () => new Response(up ? "ok" : "down", { status: up ? 200 : 503 }),
+    });
+    return {
+      url: `http://localhost:${server.port}/health`,
+      set: (v: boolean) => {
+        up = v;
+      },
+      stop: () => server.stop(true),
+    };
+  }
+
+  async function collectUntil(
+    pipeline: { lines(): AsyncIterable<Line> },
+    done: (l: Line, all: Line[]) => boolean,
+  ): Promise<Line[]> {
+    const lines: Line[] = [];
+    const iter = pipeline.lines()[Symbol.asyncIterator]();
+    try {
+      for (;;) {
+        const { value, done: d } = await iter.next();
+        if (d) break;
+        lines.push(value);
+        if (done(value, lines)) break;
+      }
+    } finally {
+      await iter.return?.(undefined as never);
+    }
+    return lines;
+  }
+
+  test("fatal streak kills a restartable proc; the respawn re-arms liveness after ready", async () => {
+    const { procs } = await import("../src/sources");
+    const { pidsMatching } = await import("./procFind");
+    const srv = healthToggle(true);
+    const marker = "sleep 26.444"; // unique matchable token for THIS test
+    try {
+      const lines = await collectUntil(
+        procs({
+          web: {
+            cmd: marker,
+            restart: true,
+            ready: { url: srv.url, intervalMs: 10, timeoutMs: 1000 },
+            live: { url: srv.url, intervalMs: 10, failures: 2 },
+          },
+        }),
+        (l, all) => {
+          // Script the failure from inside the stream: down after first
+          // ready, back up once the restart is scheduled.
+          if (l.stream === "ready" && l.line.startsWith("ready after")) {
+            if (all.filter((x) => x.line.startsWith("ready after")).length === 1) srv.set(false);
+            else return true; // second ready = full kill/respawn/re-arm cycle proven
+          }
+          if (l.line.startsWith("restarting in")) srv.set(true);
+          return false;
+        },
+      );
+      const idx = (pred: (l: Line) => boolean) => lines.findIndex(pred);
+      const ready1 = idx((l) => l.line.startsWith("ready after"));
+      const fail1 = idx((l) => l.line.startsWith("probe failed (1/2)"));
+      const fail2 = idx((l) => l.line.startsWith("probe failed (2/2)"));
+      const fatal = idx((l) => l.line.startsWith("unhealthy after 2 consecutive"));
+      const exited = idx((l) => l.line.startsWith("exited with code"));
+      const respawn = idx((l) => l.line.startsWith("restarting in"));
+      for (const [name, i] of Object.entries({ ready1, fail1, fail2, fatal, exited, respawn })) {
+        expect(`${name}:${i >= 0}`).toBe(`${name}:true`);
+      }
+      expect(ready1).toBeLessThan(fail1);
+      expect(fail1).toBeLessThan(fail2);
+      expect(fail2).toBeLessThan(fatal);
+      expect(fatal).toBeLessThan(exited);
+      expect(exited).toBeLessThan(respawn);
+      expect(lines[fatal]!.stream).toBe("live");
+      expect(lines[fatal]!.line).toContain("— restarting");
+    } finally {
+      srv.stop();
+    }
+    // The liveness kill went through the full group escalation — no orphan.
+    for (let i = 0; i < 50 && pidsMatching(marker).length > 0; i++) await Bun.sleep(10);
+    expect(pidsMatching(marker)).toEqual([]);
+  });
+
+  test("recovery within the streak resets the counter and never kills", async () => {
+    const { procs } = await import("../src/sources");
+    const srv = healthToggle(true);
+    try {
+      const lines = await collectUntil(
+        procs({
+          web: {
+            cmd: "sleep 5",
+            ready: { url: srv.url, intervalMs: 10, timeoutMs: 1000 },
+            live: { url: srv.url, intervalMs: 10, failures: 3 },
+          },
+        }),
+        (l) => {
+          if (l.stream === "ready" && l.line.startsWith("ready after")) srv.set(false);
+          if (l.line.startsWith("probe failed (1/")) srv.set(true);
+          return l.stream === "live" && l.line.startsWith("recovered after");
+        },
+      );
+      const recovered = lines.find((l) => l.line.startsWith("recovered after"));
+      expect(recovered).toBeDefined();
+      expect(recovered!.line).toMatch(/^recovered after \d+ failed probe\(s\)/);
+      expect(lines.some((l) => l.line.startsWith("unhealthy"))).toBe(false);
+      expect(lines.some((l) => l.line.startsWith("exited"))).toBe(false);
+    } finally {
+      srv.stop();
+    }
+  });
+
+  test("a non-restartable proc fails the whole pipeline loudly (CI semantics)", async () => {
+    const { procs } = await import("../src/sources");
+    const srv = healthToggle(true);
+    try {
+      await expect(
+        collectUntil(
+          procs({
+            web: {
+              cmd: "sleep 5",
+              ready: { url: srv.url, intervalMs: 10, timeoutMs: 1000 },
+              live: { url: srv.url, intervalMs: 10, failures: 2 },
+            },
+          }),
+          (l) => {
+            if (l.stream === "ready" && l.line.startsWith("ready after")) srv.set(false);
+            return false;
+          },
+        ),
+      ).rejects.toThrow(/unhealthy after 2 consecutive failed probe\(s\)/);
+    } finally {
+      srv.stop();
+    }
+  });
+
+  // THE strike-reset contract. Ready succeeds every spawn (server A), liveness
+  // fails every spawn early (server B down) — so the fatal streak begins ~20ms
+  // in, long before healthyUptimeMs. The trap-TERM child + long killGraceMs
+  // stretch each spawn's WALL uptime past healthyUptimeMs: the old wall-clock
+  // reset would clear the strike every cycle and {max:1} would never trip
+  // (this test would then hang into its timeout). Streak-start accounting
+  // accrues strikes and gives up.
+  test("strikes accrue across liveness kills — healthy uptime ends when the streak began", async () => {
+    const { procs } = await import("../src/sources");
+    const ok = healthToggle(true);
+    const down = healthToggle(false);
+    try {
+      const lines = await collectUntil(
+        procs(
+          {
+            web: {
+              cmd: "trap '' TERM; sleep 26.555",
+              restart: { max: 1 },
+              ready: { url: ok.url, intervalMs: 10, timeoutMs: 2000 },
+              live: { url: down.url, intervalMs: 10, failures: 1, probeTimeoutMs: 50 },
+            },
+          },
+          { healthyUptimeMs: 400, killGraceMs: 500 },
+        ),
+        (l) => l.line.startsWith("giving up"),
+      );
+      expect(lines.filter((l) => l.line.startsWith("unhealthy")).length).toBe(2);
+      expect(lines.at(-1)!.line).toBe("giving up after 1 restart(s)");
+    } finally {
+      ok.stop();
+      down.stop();
+    }
+  }, 10_000);
+
+  test("control: sustained health before the streak still resets strikes", async () => {
+    const { procs } = await import("../src/sources");
+    const ok = healthToggle(true);
+    const down = healthToggle(false);
+    try {
+      const lines = await collectUntil(
+        procs(
+          {
+            web: {
+              cmd: "sleep 5",
+              restart: { max: 1 },
+              ready: { url: ok.url, intervalMs: 10, timeoutMs: 2000 },
+              live: { url: down.url, intervalMs: 10, failures: 1, probeTimeoutMs: 50 },
+            },
+          },
+          // Injected floor: any pre-streak uptime counts as a healthy stretch.
+          { healthyUptimeMs: 1 },
+        ),
+        (l, all) => all.filter((x) => x.line.startsWith("unhealthy")).length >= 3,
+      );
+      expect(lines.some((l) => l.line.startsWith("giving up"))).toBe(false);
+      expect(lines.filter((l) => l.line.startsWith("unhealthy")).length).toBe(3);
+    } finally {
+      ok.stop();
+      down.stop();
+    }
+  });
+
+  test("bad live wiring throws before anything spawns", async () => {
+    const { procs } = await import("../src/sources");
+    expect(() => procs({ a: { cmd: "sleep 1", live: {} } })).toThrow(
+      /live spec needs a url or port/,
+    );
+    expect(() => procs({ a: { cmd: "sleep 1", live: { port: 1, failures: 0 } } })).toThrow(
+      /failures must be an integer >= 1/,
+    );
+    expect(() => procs({ a: { cmd: "sleep 1", live: { port: 1, intervalMs: 0 } } })).toThrow(
+      /intervalMs must be > 0/,
+    );
+    expect(() => procs({ a: { cmd: "sleep 1", live: "not a target" } })).toThrow();
+  });
+});
+
 // Serial ON PURPOSE: this test finds the pipeline's SIGINT handler by
 // diffing process.listeners(), which would race any concurrently starting
 // procs pipeline.

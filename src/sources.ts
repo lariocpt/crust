@@ -2,7 +2,13 @@ import { stat } from "node:fs/promises";
 import { file, Glob } from "bun";
 import { interruptPromise, isInterrupted } from "./interrupt";
 import { Pipeline } from "./pipeline";
-import { awaitReady, formatReadyTarget, parseReadyTarget, type ReadyTarget } from "./readiness";
+import {
+  awaitReady,
+  formatReadyTarget,
+  parseReadyTarget,
+  probeOnce,
+  type ReadyTarget,
+} from "./readiness";
 import { shellEnv } from "./shellPath";
 import { HttpTimeoutError, isTimeoutError, labelBodyTimeout } from "./transforms";
 
@@ -449,7 +455,7 @@ export function GET(url: string, opts?: RequestInit, timeoutMs?: number): Pipeli
 export interface ProcLine {
   /** Name of the process this line came from (the spec key). */
   proc: string;
-  stream: "stdout" | "stderr" | "exit" | "ready";
+  stream: "stdout" | "stderr" | "exit" | "ready" | "live";
   line: string;
 }
 
@@ -466,6 +472,21 @@ export interface ReadySpec {
   probeTimeoutMs?: number;
 }
 
+export interface LiveSpec {
+  /** ":3001/api/health" | "http(s)://…" | "port:3001" */
+  url?: string;
+  /** TCP-connect probe on localhost:<port> (alternative to url) */
+  port?: number;
+  /** probe cadence (default 5s — liveness runs for the proc's whole life) */
+  intervalMs?: number;
+  /** per-probe cap (default min(intervalMs*4, 2s)) */
+  probeTimeoutMs?: number;
+  /** consecutive failed probes before the proc is unhealthy (default 3, min 1) */
+  failures?: number;
+  /** delay after ready before the first probe (default 0) */
+  graceMs?: number;
+}
+
 export interface ProcSpec {
   cmd: string;
   /** extra env for THIS process (merged over the inherited environment) */
@@ -473,18 +494,31 @@ export interface ProcSpec {
   /**
    * respawn on unexpected exit (backoff 250ms -> 2s); user kill never
    * respawns. `{max: N}` gives up after N consecutive restarts (a stretch of
-   * >10s uptime WHILE READY resets the counter; procs without ready: count
-   * as ready at spawn).
+   * >10s uptime WHILE READY resets the counter — with live:, uptime ends
+   * when a fatal liveness streak began, so a proc that wedges right after
+   * ready still accrues strikes; procs without ready: count as ready at
+   * spawn).
    */
   restart?: boolean | { max?: number };
   /** readiness probe — the proc counts as "up" only once this answers */
   ready?: string | ReadySpec;
+  /**
+   * liveness probe — armed once the proc is up (after ready:, or at spawn
+   * without one). After `failures` consecutive misses: a restartable proc is
+   * terminated so the restart loop respawns it; a non-restartable one fails
+   * the whole pipeline loudly (CI semantics, same as a ready-timeout).
+   */
+  live?: string | LiveSpec;
   /** spawn only after these procs are READY (their spec keys) */
   after?: string | string[];
 }
 
 const READY_DEFAULT_TIMEOUT_MS = 30_000;
 const READY_DEFAULT_INTERVAL_MS = 250;
+// Liveness polls for the life of the proc — readiness's 250ms cadence would
+// hammer health endpoints forever, so the default is deliberately slower.
+const LIVE_DEFAULT_INTERVAL_MS = 5_000;
+const LIVE_DEFAULT_FAILURES = 3;
 // SIGTERM -> SIGKILL escalation grace, shared by teardown, Ctrl-C and the
 // ready-timeout restart path.
 const KILL_GRACE_MS = 3000;
@@ -520,6 +554,41 @@ function normalizeReady(name: string, r: string | ReadySpec): NormalizedReady {
     timeoutMs: r.timeoutMs ?? READY_DEFAULT_TIMEOUT_MS,
     intervalMs: r.intervalMs ?? READY_DEFAULT_INTERVAL_MS,
     probeTimeoutMs: r.probeTimeoutMs,
+  };
+}
+
+interface NormalizedLive {
+  target: ReadyTarget;
+  intervalMs: number;
+  probeTimeoutMs: number;
+  failures: number;
+  graceMs: number;
+}
+
+function normalizeLive(name: string, l: string | LiveSpec): NormalizedLive {
+  const spec: LiveSpec = typeof l === "string" ? { url: l } : l;
+  let target: ReadyTarget;
+  if (spec.url != null) {
+    target = parseReadyTarget(spec.url);
+  } else if (spec.port != null) {
+    target = parseReadyTarget(`port:${spec.port}`);
+  } else {
+    throw new Error(`procs: "${name}" live spec needs a url or port`);
+  }
+  const intervalMs = spec.intervalMs ?? LIVE_DEFAULT_INTERVAL_MS;
+  if (!(intervalMs > 0)) throw new Error(`procs: "${name}" live intervalMs must be > 0`);
+  const failures = spec.failures ?? LIVE_DEFAULT_FAILURES;
+  if (!Number.isInteger(failures) || failures < 1) {
+    throw new Error(`procs: "${name}" live failures must be an integer >= 1`);
+  }
+  const graceMs = spec.graceMs ?? 0;
+  if (graceMs < 0) throw new Error(`procs: "${name}" live graceMs must be >= 0`);
+  return {
+    target,
+    intervalMs,
+    probeTimeoutMs: spec.probeTimeoutMs ?? Math.min(intervalMs * 4, 2000),
+    failures,
+    graceMs,
   };
 }
 
@@ -572,6 +641,7 @@ export function procs(
   const names = new Set(entries.map((e) => e.name));
   const afterOf = new Map<string, string[]>();
   const readyOf = new Map<string, NormalizedReady>();
+  const liveOf = new Map<string, NormalizedLive>();
   for (const { name, spec } of entries) {
     const deps = spec.after == null ? [] : Array.isArray(spec.after) ? spec.after : [spec.after];
     for (const d of deps) {
@@ -580,6 +650,7 @@ export function procs(
     }
     afterOf.set(name, deps);
     if (spec.ready != null) readyOf.set(name, normalizeReady(name, spec.ready));
+    if (spec.live != null) liveOf.set(name, normalizeLive(name, spec.live));
   }
   // cycle check — tiny DFS with an in-stack color
   {
@@ -729,12 +800,89 @@ export function procs(
         throw new Error(`procs: "${name}" not ready after ${ready.timeoutMs}ms (${label})`);
       }
 
+      // Poll liveness for the life of the spawn, arming only once the proc is
+      // up. The inverse of readyGen: that one converges on ready and returns;
+      // this one loops until the child dies, teardown, or a fatal streak.
+      // Every await races exit/kill — a dangling probe loop would wedge the
+      // per-spawn merge exactly like a dangling ready probe would.
+      async function* liveGen(
+        name: string,
+        live: NormalizedLive,
+        child: ReturnType<typeof Bun.spawn>,
+        restartable: boolean,
+        armed: Promise<void>,
+        state: { liveFailedAt: number | null },
+      ): AsyncGenerator<ProcLine> {
+        let exited = false;
+        const exitedP = child.exited.then(() => {
+          exited = true;
+        });
+        const label = formatReadyTarget(live.target);
+        await Promise.race([armed, exitedP, killSignal.promise]);
+        if (exited || killed) return;
+        if (live.graceMs > 0) {
+          await Promise.race([Bun.sleep(live.graceMs), exitedP, killSignal.promise]);
+          if (exited || killed) return;
+        }
+        let misses = 0;
+        let firstFailAt: number | null = null;
+        for (;;) {
+          await Promise.race([Bun.sleep(live.intervalMs), exitedP, killSignal.promise]);
+          if (exited || killed) return;
+          const ok = await probeOnce(live.target, live.probeTimeoutMs);
+          if (exited || killed) return;
+          if (ok) {
+            if (misses > 0) {
+              yield {
+                proc: name,
+                stream: "live",
+                line: `recovered after ${misses} failed probe(s) (${label})`,
+              };
+            }
+            misses = 0;
+            firstFailAt = null;
+            continue;
+          }
+          misses++;
+          if (firstFailAt === null) firstFailAt = performance.now();
+          yield {
+            proc: name,
+            stream: "live",
+            line: `probe failed (${misses}/${live.failures}) (${label})`,
+          };
+          if (misses < live.failures) continue;
+          // Fatal streak. Healthy uptime ended when the streak BEGAN — the
+          // restart loop's strike reset reads this, so the time spent failing
+          // probes never counts as healthy.
+          state.liveFailedAt = firstFailAt;
+          yield {
+            proc: name,
+            stream: "live",
+            line: `unhealthy after ${misses} consecutive failed probe(s) (${label})${
+              restartable ? " — restarting" : ""
+            }`,
+          };
+          if (restartable) {
+            // Same mechanism as a ready-timeout: put it down with the full
+            // escalation, the restart loop respawns it, liveness re-arms
+            // after the NEXT ready.
+            await terminate([child]);
+            return;
+          }
+          // Not restartable: fail the whole pipeline loudly — CI semantics.
+          throw new Error(
+            `procs: "${name}" unhealthy after ${misses} consecutive failed probe(s) (${label})`,
+          );
+        }
+      }
+
       // One self-restarting generator per proc: mergeAsync's slot set is
       // fixed at start, so respawning must happen INSIDE a single generator
       // rather than by adding new ones mid-flight.
       async function* runProc(name: string, spec: ProcSpec): AsyncGenerator<ProcLine> {
         const latch = latches.get(name)!;
         const ready = readyOf.get(name);
+        const live = liveOf.get(name);
         const deps = afterOf.get(name) ?? [];
         const max = restartMax(spec.restart);
         try {
@@ -764,9 +912,16 @@ export function procs(
             // Procs without ready: count as ready at spawn. With ready:, only
             // a successful probe THIS spawn marks it — wall-clock uptime alone
             // would count a proc that hung un-ready until the ready-timeout
-            // kill as "healthy", and {max} would never trip.
-            let becameReady = !ready;
-            if (!ready) latch.resolve();
+            // kill as "healthy", and {max} would never trip. liveFailedAt is
+            // set by liveGen when a fatal probe streak begins: healthy uptime
+            // ends THERE, not at the eventual kill, so a proc that wedges
+            // right after ready still accrues strikes.
+            const state = { becameReady: !ready, liveFailedAt: null as number | null };
+            const spawnUp = Promise.withResolvers<void>();
+            if (!ready) {
+              latch.resolve();
+              spawnUp.resolve();
+            }
             const exitGen = (async function* (): AsyncGenerator<ProcLine> {
               const code = await child.exited;
               yield { proc: name, stream: "exit", line: `exited with code ${code}` };
@@ -779,15 +934,18 @@ export function procs(
             if (ready)
               gens.push(
                 readyGen(name, ready, child, max !== null, () => {
-                  becameReady = true;
+                  state.becameReady = true;
+                  spawnUp.resolve();
                 }),
               );
+            if (live) gens.push(liveGen(name, live, child, max !== null, spawnUp.promise, state));
             yield* mergeAsync(gens);
             current.delete(name);
             if (max === null || killed) return;
             // A healthy stretch clears the strike count — {max} guards
             // against crash LOOPS, not against ever crashing twice.
-            if (becameReady && performance.now() - spawnedAt > healthyUptimeMs) {
+            const healthyEnd = state.liveFailedAt ?? performance.now();
+            if (state.becameReady && healthyEnd - spawnedAt > healthyUptimeMs) {
               backoff = 250;
               restarts = 0;
             }
