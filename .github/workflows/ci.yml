@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A second push to a PR makes the first run's result irrelevant, so don't burn a runner on it.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      # --ignore-scripts: nothing in the dependency tree needs a postinstall to build or test,
+      # and CI is exactly where an unreviewed one should not run.
+      - name: Install dependencies
+        run: bun install --frozen-lockfile --ignore-scripts
+
+      - name: Test
+        run: bun test
+
+      - name: Typecheck
+        run: bunx tsc --noEmit

@@ -6,6 +6,7 @@ import { handleStdinData, onInterrupt } from "../src/editor";
 import * as interrupt from "../src/interrupt";
 import { type ReplTty, runLine } from "../src/runLine";
 import type { Context } from "../src/types";
+import { isRunning } from "./procFind";
 
 function ctx(): Context {
   return {
@@ -158,16 +159,16 @@ describe("runLine + fake tty — Ctrl-C job control", () => {
   });
 
   test("procs source is torn down on Ctrl-C (sleep child reaped)", async () => {
-    const marker = "sleep 28.653"; // unique pgrep-able token for THIS test
+    const marker = "sleep 28.653"; // unique matchable token for THIS test
     const tty = fakeTty();
     const run = runLine(`procs({slow: "${marker}"})`, ctx(), tty);
     // Wait for the child to actually exist before pressing.
-    let up = "";
+    let up = false;
     for (let i = 0; i < 50 && !up; i++) {
       await Bun.sleep(100);
-      up = Bun.spawnSync(["pgrep", "-f", marker]).stdout.toString().trim();
+      up = isRunning(marker);
     }
-    expect(up).not.toBe("");
+    expect(up).toBe(true);
     tty.press();
     const code = await run;
     expect(code).toBe(130);
@@ -175,28 +176,28 @@ describe("runLine + fake tty — Ctrl-C job control", () => {
     let gone = false;
     for (let i = 0; i < 40 && !gone; i++) {
       await Bun.sleep(100);
-      gone = Bun.spawnSync(["pgrep", "-f", marker]).stdout.toString().trim() === "";
+      gone = !isRunning(marker);
     }
     expect(gone).toBe(true);
   }, 15_000);
 
   test("mid-pipeline shell child is killed through the bus", async () => {
-    const marker = "sleep 26.317"; // unique pgrep-able token for THIS test
+    const marker = "sleep 26.317"; // unique matchable token for THIS test
     const tty = fakeTty();
     const run = runLine(`range(1, 3) | ${marker}`, ctx(), tty);
-    let up = "";
+    let up = false;
     for (let i = 0; i < 50 && !up; i++) {
       await Bun.sleep(100);
-      up = Bun.spawnSync(["pgrep", "-f", marker]).stdout.toString().trim();
+      up = isRunning(marker);
     }
-    expect(up).not.toBe("");
+    expect(up).toBe(true);
     tty.press();
     const code = await run;
     expect(code).toBe(130);
     let gone = false;
     for (let i = 0; i < 40 && !gone; i++) {
       await Bun.sleep(100);
-      gone = Bun.spawnSync(["pgrep", "-f", marker]).stdout.toString().trim() === "";
+      gone = !isRunning(marker);
     }
     expect(gone).toBe(true);
   }, 15_000);

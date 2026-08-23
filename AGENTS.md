@@ -70,15 +70,30 @@ lands with tests (see `tests/test-fixture.test.ts` and
 tmpdir fixtures). Pre-commit runs lint-staged (biome) but NOT the suite —
 run `bun test` yourself before pushing.
 
-## Publishing (Jenkins job `crust`)
+## Publishing (two independent planes)
 
-One build publishes TWO channels that must stay in lockstep: the ~90MB
-binary to apps.in.drlario.org (versioned `BASE+sha`) and a ~4KB npm launcher
-to npm.in.drlario.org (`BASE-ci.N.sha`). Order is load-bearing — binary
-before npm (the launcher resolves index.tsv). The Jenkinsfile's sh blocks
-are Groovy triple-single-quoted: **escape backslashes** (`\\(` not `\(`) or
-the pipeline won't compile. Sibling containers can't resolve LAN DNS —
-`--add-host npm.in.drlario.org:host-gateway` where needed.
+Both planes ship the SAME invariant: the binary must be published BEFORE the
+npm launcher, because the launcher is ~4KB and resolves its ~90MB binary from
+whatever the binary channel published. Publishing npm first ships a package
+that cannot install itself.
+
+- **Public** — `.github/workflows/release.yml`, triggered by pushing a `v*`
+  tag. Builds linux/darwin × x64/arm64, uploads them plus `SHA256SUMS` to the
+  GitHub Release, then publishes `@lariocpt/crust` to npmjs.org (needs the
+  `NPM_TOKEN` repo secret). The version comes from the tag, and it is stamped
+  into `package.json` before the compile — `src/index.ts` imports it for
+  `--version`.
+- **LAN** — Jenkins job `crust`: binary to apps.in.drlario.org (`BASE+sha`),
+  launcher to npm.in.drlario.org (`BASE-ci.N.sha`). The Jenkinsfile's sh blocks
+  are Groovy triple-single-quoted: **escape backslashes** (`\\(` not `\(`) or
+  the pipeline won't compile. Sibling containers can't resolve LAN DNS —
+  `--add-host npm.in.drlario.org:host-gateway` where needed.
+
+Which plane a published launcher resolves from is the `crust.source` field in
+`npm/package.json` (`"apps"` in-repo, restamped `"github"` by the release
+workflow), overridable at runtime with `CRUST_SOURCE`. Both paths share one
+verify-then-rename download in `npm/lib/install.mjs` — don't fork it.
+Details in `docs/INTERNAL.md`.
 
 ## Docs are part of the deliverable
 

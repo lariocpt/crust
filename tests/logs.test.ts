@@ -4,6 +4,7 @@ import { LogsSession, ViewQueue } from "../src/logs/session";
 import { parseStages } from "../src/parser";
 import { Pipeline } from "../src/pipeline";
 import type { Context } from "../src/types";
+import { isRunning } from "./procFind";
 
 function ctx(): Context {
   return {
@@ -328,7 +329,7 @@ describe("logs CLI gates", () => {
 
 describe("review fixes — retro Ctrl-C and stuck-child reaping", () => {
   test("Ctrl-C during a wedged RETRO pass cancels the query and kills its shell child", async () => {
-    const marker = "sleep 27.313"; // unique pgrep-able token for THIS test
+    const marker = "sleep 27.313"; // unique matchable token for THIS test
     const h = harness();
     h.driver.offer("one");
     let promptCameBack = false;
@@ -345,12 +346,12 @@ describe("review fixes — retro Ctrl-C and stuck-child reaping", () => {
     const done = h.session.run();
     (async () => {
       // Wait for the sleep child to exist (retro is wedged on it), then press.
-      let up = "";
+      let up = false;
       for (let i = 0; i < 50 && !up; i++) {
         await Bun.sleep(100);
-        up = Bun.spawnSync(["pgrep", "-f", marker]).stdout.toString().trim();
+        up = isRunning(marker);
       }
-      expect(up).not.toBe("");
+      expect(up).toBe(true);
       h.press(); // ONE press during retro must cancel the whole query
     })();
     const code = await done;
@@ -359,7 +360,7 @@ describe("review fixes — retro Ctrl-C and stuck-child reaping", () => {
     let gone = false;
     for (let i = 0; i < 40 && !gone; i++) {
       await Bun.sleep(100);
-      gone = Bun.spawnSync(["pgrep", "-f", marker]).stdout.toString().trim() === "";
+      gone = !isRunning(marker);
     }
     expect(gone).toBe(true); // the bus fire reaped it — no leak
   }, 15_000);

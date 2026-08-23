@@ -1,0 +1,171 @@
+name: Release
+
+# Tag-driven: `git tag v0.2.0 && git push origin v0.2.0` publishes both public channels.
+#
+# ORDER IS LOAD-BEARING. The binaries must exist as release assets BEFORE the npm package is
+# published, because the npm package is a ~4 KB launcher that resolves its binary from the
+# release matching its own version. Publishing npm first ships a package that cannot install
+# itself — the same invariant the LAN Jenkins pipeline keeps between /srv/apps and Verdaccio.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to (re-)release, e.g. v0.2.0"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile --ignore-scripts
+      - run: bun test
+      - run: bunx tsc --noEmit
+
+  release:
+    needs: test
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Resolve version from tag
+        id: version
+        run: |
+          set -euo pipefail
+          TAG="${{ inputs.tag || github.ref_name }}"
+          VERSION="${TAG#v}"
+          # A tag that isn't a plain semver would publish a version nobody can resolve back to
+          # a release, so reject it here rather than after 90 MB of uploads.
+          echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$' \
+            || { echo "FAIL: tag '$TAG' is not vMAJOR.MINOR.PATCH"; exit 1; }
+          echo "tag=$TAG"         >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile --ignore-scripts
+
+      # src/index.ts imports ../package.json for --version, so the manifest is stamped before
+      # the compile — otherwise every released binary reports the in-repo `-dev` version.
+      - name: Stamp version
+        run: |
+          set -euo pipefail
+          sed -i '0,/"version"/s|"version"[[:space:]]*:[[:space:]]*"[^"]*"|"version": "${{ steps.version.outputs.version }}"|' package.json
+          grep -m1 '"version"' package.json
+
+      - name: Build binaries
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          for target in linux-x64 linux-arm64 darwin-x64 darwin-arm64; do
+            echo "==> crust-$target"
+            # The asset basename becomes the command name after install.sh moves it into place,
+            # so the platform suffix is stripped at install time, not here.
+            bun build --compile --minify --bytecode --target="bun-$target" \
+              --outfile "out/crust-$target" src/index.ts
+          done
+          chmod 0755 out/crust-*
+          ls -lh out/
+
+      # Only the runner's own architecture can be executed here, but that is enough to catch
+      # the failure that actually happens: a binary built from an unstamped manifest.
+      - name: Verify stamped version
+        run: |
+          set -euo pipefail
+          got=$(./out/crust-linux-x64 --version | tr -d '\r')
+          echo "reported version: $got"
+          [ "$got" = "${{ steps.version.outputs.version }}" ] \
+            || { echo "FAIL: binary reports '$got', expected '${{ steps.version.outputs.version }}'"; exit 1; }
+
+      # sha256sum's own format, so `sha256sum -c SHA256SUMS` works for anyone who downloads
+      # the whole set — and both installers parse the same file.
+      - name: Checksums
+        run: |
+          set -euo pipefail
+          cd out && sha256sum crust-* > SHA256SUMS && cat SHA256SUMS
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.version.outputs.tag }}"
+          # Idempotent so a failed npm job can be re-run without hand-deleting the release.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" out/crust-* out/SHA256SUMS --clobber
+          else
+            gh release create "$TAG" out/crust-* out/SHA256SUMS \
+              --title "crust $TAG" \
+              --generate-notes
+          fi
+
+  npm:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Require NPM_TOKEN
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "FAIL: repository secret NPM_TOKEN is not set."
+            echo "Create a granular npmjs.org token with publish rights to @lariocpt/crust, then:"
+            echo "  gh secret set NPM_TOKEN -R ${{ github.repository }}"
+            echo "The binaries are already released — re-run this job once the secret exists."
+            exit 1
+          fi
+
+      # The published package is the launcher in npm/, not this repo: staged, stamped, and
+      # pointed at the GitHub Releases plane. The in-repo npm/package.json keeps its LAN
+      # defaults (name `crust`, source `apps`) so the Jenkins pipeline is unaffected.
+      - name: Stage package
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          rm -rf npmstage && cp -r npm npmstage
+          # Agent skills ride along in the tarball (package.json "files" lists skills/).
+          cp -r skills npmstage/skills
+          jq --arg v "$VERSION" --arg repo "${{ github.repository }}" '
+            .name = "@lariocpt/crust"
+            | .version = $v
+            | .crust.source = "github"
+            | .crust.repo = $repo
+            | .os = ["linux", "darwin"]
+            | .cpu = ["x64", "arm64"]
+            | del(.publishConfig)
+          ' npm/package.json > npmstage/package.json
+          cat npmstage/package.json
+
+      - name: Publish to npmjs.org
+        working-directory: npmstage
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public

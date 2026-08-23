@@ -30,13 +30,17 @@ A pipeline-first devops toolkit built on Bun. Shell commands, TypeScript lambdas
 
 ## Install
 
-crust is published to the LAN artifact plane. Either channel resolves the
-same prebuilt binary and verifies its sha256:
+Either channel resolves the same prebuilt binary and verifies its published
+sha256 before it is ever executable:
 
 ```bash
-curl -fsSL https://apps.in.drlario.org/install.sh | bash -s -- crust
-npm i -g crust --registry https://npm.in.drlario.org
+curl -fsSL https://raw.githubusercontent.com/lariocpt/crust/main/install.sh | bash
+npm i -g @lariocpt/crust
 ```
+
+Prebuilt binaries cover linux and macOS on x64 and arm64; on anything else,
+build from source with `scripts/install-from-source.sh`. (Internal LAN
+channels are documented in [docs/INTERNAL.md](INTERNAL.md).)
 
 Then launch `crust` for the REPL — or skip straight to
 [one-liners and scripts](#one-liners-scripts-and-stdin) and call it from bash/zsh/fish; crust is

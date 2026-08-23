@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Pipeline } from "../src/pipeline";
 import { GET, glob, load, range, read, tail } from "../src/sources";
+import { pidsMatching } from "./procFind";
 
 describe("range", () => {
   test("inclusive integer range", async () => {
@@ -376,13 +377,13 @@ describe("procs object specs", () => {
 // ms later. Poll briefly so the assertion races the reaper, not the kill: a
 // REAL orphan (SIGTERM ignored, no escalation) would live for 30s.
 async function expectNoProcess(marker: string): Promise<void> {
-  let out = "";
+  let out: number[] = [];
   for (let i = 0; i < 50; i++) {
-    out = Bun.spawnSync(["pgrep", "-f", marker]).stdout.toString().trim();
-    if (out === "") return;
+    out = pidsMatching(marker);
+    if (out.length === 0) return;
     await Bun.sleep(10);
   }
-  throw new Error(`orphaned process still alive after 500ms: ${marker} (pids ${out})`);
+  throw new Error(`orphaned process still alive after 500ms: ${marker} (pids ${out.join(", ")})`);
 }
 
 // Concurrent: each test owns its servers and pipelines, and the mandated
@@ -677,7 +678,7 @@ describe.concurrent("procs readiness and ordering", () => {
   test("ready-timeout kill escalates to SIGKILL when the child ignores SIGTERM", async () => {
     const { procs } = await import("../src/sources");
     const port = deadPort();
-    const marker = "sleep 31.415"; // unique pgrep-able token for THIS test
+    const marker = "sleep 31.415"; // unique matchable token for THIS test
     const lines = await procs(
       {
         stubborn: {
@@ -715,7 +716,7 @@ describe.concurrent("procs readiness and ordering", () => {
 describe("procs kill escalation", () => {
   test("kill() (Ctrl-C path) owns the SIGTERM -> SIGKILL escalation and is idempotent", async () => {
     const { procs } = await import("../src/sources");
-    const marker = "sleep 27.182"; // unique pgrep-able token for THIS test
+    const marker = "sleep 27.182"; // unique matchable token for THIS test
     const before = new Set(process.listeners("SIGINT"));
     const pipeline = procs(
       { stubborn: { cmd: `trap '' TERM; echo up; ${marker}` } },
