@@ -39,22 +39,44 @@ export function parseDuration(s: string): number {
   return n * (unit === "ms" ? 1 : unit === "s" ? 1000 : 60_000);
 }
 
-// One probe, hard-capped at timeoutMs. Never throws — false covers refused,
-// timed out, and non-2xx alike.
-export async function probeOnce(t: ReadyTarget, timeoutMs: number): Promise<boolean> {
-  if (t.kind === "http") {
-    try {
-      const res = await fetch(t.url, {
-        signal: AbortSignal.timeout(timeoutMs),
-        redirect: "manual",
-      });
-      void res.body?.cancel().catch(() => {});
-      return res.status >= 200 && res.status < 300;
-    } catch {
-      return false;
-    }
-  }
-  return await new Promise<boolean>((resolve) => {
+// The loopback shorthands (`port:N`, `:PORT/path`) must not let the OS pick an
+// address family on the user's behalf, because the two ends of the round trip
+// do not pick the same one.
+//
+// `Bun.listen({hostname:"localhost"})` — and `vite --host localhost`, and
+// `server.listen(port, "localhost")` — resolve in verbatim getaddrinfo order and
+// bind ::1 first where that exists. Our probe's connect path instead goes
+// through glibc's AI_ADDRCONFIG, which DROPS AAAA when the machine has no
+// non-loopback IPv6 address. A default-bridge Docker container is exactly that
+// machine: the service listens on ::1, the probe knocks on 127.0.0.1, and a
+// service that is up is reported "not ready" until the timeout expires.
+//
+// So try every loopback address ourselves. The v6 literal is required — a v6
+// HOSTNAME does not help, since ADDRCONFIG substitutes 127.0.0.1 for it too.
+const LOOPBACK_HOSTS = ["127.0.0.1", "::1"];
+const loopbackFanout = (host: string): string[] => (host === "localhost" ? LOOPBACK_HOSTS : [host]);
+
+// First success wins; false only once every candidate has failed. Waiting for
+// the slowest (Promise.all) would make a black-holed family cost a probe its
+// whole timeout even when the other answered instantly.
+function anyTrue(tasks: Array<() => Promise<boolean>>): Promise<boolean> {
+  if (tasks.length === 1) return tasks[0]!();
+  return new Promise<boolean>((resolve) => {
+    let pending = tasks.length;
+    let settled = false;
+    const finish = (ok: boolean) => {
+      if (settled) return;
+      if (ok || --pending === 0) {
+        settled = true;
+        resolve(ok);
+      }
+    };
+    for (const task of tasks) task().then(finish, () => finish(false));
+  });
+}
+
+function tcpOnce(host: string, port: number, timeoutMs: number): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
     let settled = false;
     const done = (ok: boolean) => {
       if (!settled) {
@@ -65,8 +87,8 @@ export async function probeOnce(t: ReadyTarget, timeoutMs: number): Promise<bool
     };
     const timer = setTimeout(() => done(false), timeoutMs);
     Bun.connect({
-      hostname: t.host,
-      port: t.port,
+      hostname: host,
+      port,
       socket: {
         open(socket) {
           done(true);
@@ -83,6 +105,46 @@ export async function probeOnce(t: ReadyTarget, timeoutMs: number): Promise<bool
       },
     }).catch(() => done(false));
   });
+}
+
+async function httpOnce(url: string, timeoutMs: number): Promise<boolean> {
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs), redirect: "manual" });
+    void res.body?.cancel().catch(() => {});
+    return res.status >= 200 && res.status < 300;
+  } catch {
+    return false;
+  }
+}
+
+// Same fan-out for the http shorthand: `:3000/health` becomes
+// http://localhost:3000/health, which has the identical family problem. An
+// EXPLICIT host the user typed is left exactly as typed.
+function httpCandidates(url: string): string[] {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return [url];
+  }
+  if (parsed.hostname !== "localhost") return [url];
+  return [
+    url,
+    ...LOOPBACK_HOSTS.map((h) => {
+      const u = new URL(url);
+      u.hostname = h.includes(":") ? `[${h}]` : h;
+      return u.toString();
+    }),
+  ];
+}
+
+// One probe, hard-capped at timeoutMs. Never throws — false covers refused,
+// timed out, and non-2xx alike.
+export async function probeOnce(t: ReadyTarget, timeoutMs: number): Promise<boolean> {
+  if (t.kind === "http") {
+    return anyTrue(httpCandidates(t.url).map((u) => () => httpOnce(u, timeoutMs)));
+  }
+  return anyTrue(loopbackFanout(t.host).map((h) => () => tcpOnce(h, t.port, timeoutMs)));
 }
 
 export interface AwaitReadyOpts {

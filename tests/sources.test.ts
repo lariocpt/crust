@@ -7,6 +7,19 @@ import { Pipeline } from "../src/pipeline";
 import { GET, glob, load, range, read, tail } from "../src/sources";
 import { pidsMatching } from "./procFind";
 
+// Can this kernel host an IPv6 loopback listener at all? Asked once, by trying:
+// Bun.listen({hostname:"::1"}) THROWS EADDRNOTAVAIL where IPv6 is disabled, so
+// the v6 readiness tests below must skip rather than explode there.
+const hasIpv6Loopback = (() => {
+  try {
+    const probe = Bun.listen({ hostname: "::1", port: 0, socket: { data() {} } });
+    probe.stop(true);
+    return true;
+  } catch {
+    return false;
+  }
+})();
+
 describe("range", () => {
   test("inclusive integer range", async () => {
     expect(await range(0, 4).collect()).toEqual([0, 1, 2, 3, 4]);
@@ -457,6 +470,58 @@ describe.concurrent("procs readiness and ordering", () => {
       srv.stop();
     }
   });
+
+  // A service that binds "localhost" lands on ::1 wherever that resolves first
+  // (`vite --host localhost` and friends), while the probe's connect path can be
+  // restricted to 127.0.0.1 by glibc's ADDRCONFIG — which is precisely what
+  // happens inside a default-bridge Docker container. readiness.ts fans out over
+  // both loopback addresses so the two ends cannot disagree; these pin that.
+  //
+  // Skipped, not failed, where the kernel has no IPv6: Bun.listen on ::1 THROWS
+  // EADDRNOTAVAIL there, and an environment that cannot host the scenario cannot
+  // testify about it either way.
+  test.skipIf(!hasIpv6Loopback)(
+    "ready(tcp): a v6-only listener is found even though localhost may resolve to v4",
+    async () => {
+      const { procs } = await import("../src/sources");
+      const listener = Bun.listen({
+        hostname: "::1",
+        port: 0,
+        socket: {
+          data() {},
+          open(s) {
+            s.end();
+          },
+        },
+      });
+      try {
+        const lines = await collectUntil(
+          procs({ db: { cmd: "sleep 5", ready: `port:${listener.port}` } }),
+          (l) => l.stream === "ready" && l.line.startsWith("ready after"),
+        );
+        expect(lines.find((l) => l.line.startsWith("ready after"))).toBeDefined();
+      } finally {
+        listener.stop(true);
+      }
+    },
+  );
+
+  test.skipIf(!hasIpv6Loopback)(
+    "ready(http): the :PORT shorthand reaches a v6-only server",
+    async () => {
+      const { procs } = await import("../src/sources");
+      const srv = Bun.serve({ hostname: "::1", port: 0, fetch: () => new Response("ok") });
+      try {
+        const lines = await collectUntil(
+          procs({ web: { cmd: "sleep 5", ready: `:${srv.port}/` } }),
+          (l) => l.stream === "ready" && l.line.startsWith("ready after"),
+        );
+        expect(lines.find((l) => l.line.startsWith("ready after"))).toBeDefined();
+      } finally {
+        srv.stop(true);
+      }
+    },
+  );
 
   test("ready(tcp): the port:N string form connects to a live listener", async () => {
     const { procs } = await import("../src/sources");
