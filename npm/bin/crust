@@ -9,7 +9,7 @@
 // Fetching here means `npm i -g crust` works under any script policy — the cost is that the
 // very first invocation pays the download.
 import { spawnSync } from "node:child_process";
-import { ensureBinary, readManifest, APPS_URL_EFFECTIVE } from "../lib/install.mjs";
+import { ensureBinary, readManifest, installHint } from "../lib/install.mjs";
 
 const say = (m) => console.error(`[crust] ${m}`);
 
@@ -26,12 +26,7 @@ if (!manifest) {
     // stdout here would corrupt the first command someone runs through it.
     manifest = await ensureBinary({ log: say, warn: say });
   } catch (e) {
-    bail([
-      `could not install the crust binary: ${e.message}`,
-      `The binary is hosted on the LAN at ${APPS_URL_EFFECTIVE}, so this needs to run on that network.`,
-      "Override the host with CRUST_APPS_URL, or install directly with:",
-      "  curl -fsSL https://apps.in.drlario.org/install.sh | bash -s -- crust",
-    ]);
+    bail([`could not install the crust binary: ${e.message}`, ...installHint()]);
   }
 }
 

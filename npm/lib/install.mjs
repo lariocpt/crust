@@ -1,14 +1,16 @@
-// crust — resolve and install the prebuilt binary from the LAN artifact plane.
+// crust — resolve and install the prebuilt binary for this package.
 //
 // WHY THIS PACKAGE IS A LAUNCHER RATHER THAN THE BINARY
-// `bun build --compile` produces a ~91 MB self-contained ELF. Shipping that inside the npm
-// tarball would put ~91 MB into /srv/npm per published version, against Verdaccio's 200 MB
-// max_body_size, and hard-lock the package to linux-x64. Instead the binary is published
-// ONCE to apps.in.drlario.org by the same Jenkins build, and both channels resolve that one
-// artifact — same file, same sha256:
+// `bun build --compile` produces a ~91 MB self-contained executable. Shipping that inside the
+// npm tarball would put ~91 MB into the registry per published version and hard-lock the
+// package to one platform. Instead the binary is published ONCE per build to an artifact
+// plane, and every install route resolves that one artifact — same file, same sha256.
 //
-//   curl …/install.sh | bash -s -- crust     ->  /srv/apps/tools/crust/<v>/crust
-//   npm i -g crust                           ->  this module, same file
+// TWO PLANES, ONE RESOLVER. The public release publishes binaries to GitHub Releases; the
+// LAN build publishes to apps.in.drlario.org. Which one this copy of the package uses is
+// stamped into package.json as `crust.source` at publish time ("github" or "apps") and can be
+// overridden with CRUST_SOURCE. The verify-then-rename download path below is shared, because
+// "did the bytes we ran match the bytes that were published" must not depend on the plane.
 //
 // WHY THIS IS A LIBRARY AND NOT JUST A POSTINSTALL
 // npm 12 blocks install scripts BY DEFAULT (`allowScripts`), so a postinstall-only design
@@ -31,9 +33,36 @@ export const MANIFEST_PATH = path.join(PKG_ROOT, "install-manifest.json");
 
 const APPS_URL = (process.env.CRUST_APPS_URL || "https://apps.in.drlario.org").replace(/\/+$/, "");
 const CACHE_ROOT = path.join(process.env.XDG_CACHE_HOME || path.join(homedir(), ".cache"), "crust");
+const DEFAULT_REPO = "lariocpt/crust";
 
-// The two planes version the same build differently, and that is deliberate — see the header
-// of publish/bin/apps-publish:
+function readPkg() {
+  return JSON.parse(readFileSync(path.join(PKG_ROOT, "package.json"), "utf8"));
+}
+
+// Env beats the stamp so someone on the LAN can point a public install at the internal plane
+// (and vice versa) without editing an installed package.
+export function resolveSource(pkg = readPkg()) {
+  const raw = (process.env.CRUST_SOURCE || pkg.crust?.source || "apps").toLowerCase();
+  if (raw !== "apps" && raw !== "github") {
+    throw new Error(`unknown CRUST_SOURCE '${raw}' — expected 'github' or 'apps'`);
+  }
+  return raw;
+}
+
+// `crust-linux-x64`, `crust-darwin-arm64`, … — the names the release workflow uploads.
+export function assetName(platform = process.platform, arch = process.arch) {
+  return `crust-${platform}-${arch}`;
+}
+
+function ghRepo(pkg) {
+  if (process.env.CRUST_GITHUB_REPO) return process.env.CRUST_GITHUB_REPO;
+  if (pkg.crust?.repo) return pkg.crust.repo;
+  const m = /github\.com[/:]([^/]+\/[^/.]+)/.exec(pkg.repository?.url || "");
+  return m ? m[1] : DEFAULT_REPO;
+}
+
+// The two LAN planes version the same build differently, and that is deliberate — see the
+// header of publish/bin/apps-publish:
 //
 //   apps plane : <pkgversion>+<shortsha>      e.g. 0.1.0+78f2a43
 //   npm plane  : <pkgversion>-ci.<n>.<sha>    e.g. 0.1.0-ci.42.78f2a43
@@ -66,6 +95,16 @@ function pickRow(rows, wantSha) {
   }
   const latest = rows.find((r) => r.path.includes("/latest/"));
   return latest ? { row: latest, exact: false } : null;
+}
+
+// SHA256SUMS is the plain `sha256sum` format: "<hex>  <filename>" per line.
+function parseSums(text) {
+  const out = new Map();
+  for (const line of text.split("\n")) {
+    const m = /^([0-9a-f]{64})\s+\*?(.+?)\s*$/.exec(line);
+    if (m) out.set(m[2], m[1]);
+  }
+  return out;
 }
 
 async function get(url) {
@@ -105,23 +144,9 @@ async function downloadVerified(url, dest, wantSha) {
   return dest;
 }
 
-export function readManifest() {
-  if (!existsSync(MANIFEST_PATH)) return null;
-  try {
-    const m = JSON.parse(readFileSync(MANIFEST_PATH, "utf8"));
-    return m && m.bin && existsSync(m.bin) ? m : null;
-  } catch {
-    return null;
-  }
-}
-
-// Resolve, download if needed, record what was verified, return the manifest.
-// `log` is a sink so the shim can stay quiet on the happy path while the postinstall talks.
-export async function ensureBinary({ log = () => {}, warn = () => {} } = {}) {
-  const cached = readManifest();
-  if (cached) return cached;
-
-  const pkg = JSON.parse(readFileSync(path.join(PKG_ROOT, "package.json"), "utf8"));
+// Both resolvers return the same shape: { version, url, sha256, bytes, from, note }.
+// `note` is a non-fatal warning for the caller to surface.
+async function resolveFromApps(pkg) {
   const wantSha = shaFromNpmVersion(pkg.version);
 
   const res = await get(`${APPS_URL}/index.tsv`);
@@ -131,23 +156,82 @@ export async function ensureBinary({ log = () => {}, warn = () => {} } = {}) {
   const picked = pickRow(rows, wantSha);
   if (!picked) throw new Error("index.tsv has crust rows but none resolvable");
   const { row, exact } = picked;
-  if (wantSha && !exact) {
-    warn(`binary for ${pkg.version} (sha ${wantSha}) is no longer published — falling back to latest (${row.version})`);
+
+  return {
+    version: row.version,
+    url: `${APPS_URL}/${row.path}`,
+    sha256: row.sha256,
+    bytes: Number(row.bytes) || 0,
+    from: APPS_URL,
+    note: wantSha && !exact
+      ? `binary for ${pkg.version} (sha ${wantSha}) is no longer published — falling back to latest (${row.version})`
+      : null,
+  };
+}
+
+async function resolveFromGithub(pkg) {
+  const repo = ghRepo(pkg);
+  const tag = `v${pkg.version}`;
+  const base = `https://github.com/${repo}/releases/download/${tag}`;
+  const asset = assetName();
+
+  // The checksums file is the source of truth for what this release actually contains, so an
+  // unsupported platform fails here with the real list rather than as a 404 on the binary.
+  const sums = parseSums(await (await get(`${base}/SHA256SUMS`)).text());
+  const sha256 = sums.get(asset);
+  if (!sha256) {
+    const have = [...sums.keys()].filter((k) => k.startsWith("crust-")).join(", ") || "(none)";
+    throw new Error(
+      `release ${tag} has no ${asset}\n  platforms in this release: ${have}\n` +
+      `  build from source instead: https://github.com/${repo}#build-from-source`,
+    );
   }
 
-  const dir = path.join(CACHE_ROOT, row.version);
+  return { version: pkg.version, url: `${base}/${asset}`, sha256, bytes: 0, from: `github.com/${repo}@${tag}`, note: null };
+}
+
+export function readManifest(source = null) {
+  if (!existsSync(MANIFEST_PATH)) return null;
+  try {
+    const m = JSON.parse(readFileSync(MANIFEST_PATH, "utf8"));
+    if (!m || !m.bin || !existsSync(m.bin)) return null;
+    // A manifest written under a different plane describes a binary this run did not ask for
+    // (someone set CRUST_SOURCE between runs). Re-resolve rather than launch it.
+    if (source && m.source && m.source !== source) return null;
+    return m;
+  } catch {
+    return null;
+  }
+}
+
+// Resolve, download if needed, record what was verified, return the manifest.
+// `log` is a sink so the shim can stay quiet on the happy path while the postinstall talks.
+export async function ensureBinary({ log = () => {}, warn = () => {} } = {}) {
+  const pkg = readPkg();
+  const source = resolveSource(pkg);
+
+  const cached = readManifest(source);
+  if (cached) return cached;
+
+  const r = source === "github" ? await resolveFromGithub(pkg) : await resolveFromApps(pkg);
+  if (r.note) warn(r.note);
+
+  // The cache key carries the platform because a home directory can be shared across machines
+  // of different architectures; two hosts must not race for one path holding one arch's ELF.
+  const dir = path.join(CACHE_ROOT, `${r.version}-${process.platform}-${process.arch}`);
   const bin = path.join(dir, "crust");
   mkdirSync(dir, { recursive: true });
 
-  if (existsSync(bin) && (await sha256OfFile(bin)) === row.sha256) {
-    log(`already cached: ${row.version}`);
+  if (existsSync(bin) && (await sha256OfFile(bin)) === r.sha256) {
+    log(`already cached: ${r.version}`);
   } else {
-    log(`downloading crust ${row.version} (${(Number(row.bytes) / 1048576).toFixed(0)} MB) from ${APPS_URL}`);
-    await downloadVerified(`${APPS_URL}/${row.path}`, bin, row.sha256);
+    const size = r.bytes ? ` (${(r.bytes / 1048576).toFixed(0)} MB)` : "";
+    log(`downloading crust ${r.version}${size} from ${r.from}`);
+    await downloadVerified(r.url, bin, r.sha256);
     log(`installed -> ${bin}`);
   }
 
-  const manifest = { appsVersion: row.version, bin, sha256: row.sha256, from: APPS_URL };
+  const manifest = { source, version: r.version, bin, sha256: r.sha256, from: r.from };
   // Recorded rather than re-derived: after a `latest` fallback the resolved version is no
   // longer derivable from this package's own version, and the shim must launch the binary
   // that was actually verified — not whatever latest points at next week.
@@ -161,4 +245,26 @@ export async function ensureBinary({ log = () => {}, warn = () => {} } = {}) {
   return manifest;
 }
 
-export const APPS_URL_EFFECTIVE = APPS_URL;
+// What to tell a user whose download just failed — the recovery differs per plane, and a LAN
+// URL printed at someone on the public internet is worse than no hint at all.
+export function installHint() {
+  let pkg;
+  try {
+    pkg = readPkg();
+  } catch {
+    return [];
+  }
+  if (resolveSource(pkg) === "github") {
+    const repo = ghRepo(pkg);
+    return [
+      `Binaries for v${pkg.version} come from https://github.com/${repo}/releases.`,
+      "If that host is unreachable, install directly with:",
+      `  curl -fsSL https://raw.githubusercontent.com/${repo}/main/install.sh | bash`,
+    ];
+  }
+  return [
+    `The binary is hosted on the LAN at ${APPS_URL}, so this needs to run on that network.`,
+    "Override the host with CRUST_APPS_URL, or install directly with:",
+    `  curl -fsSL ${APPS_URL}/install.sh | bash -s -- crust`,
+  ];
+}

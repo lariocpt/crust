@@ -24,6 +24,10 @@
   "bin": {
     "crust": "./bin/crust"
   },
+  "crust": {
+    "source": "apps",
+    "repo": "lariocpt/crust"
+  },
   "files": [
     "bin",
     "lib",
