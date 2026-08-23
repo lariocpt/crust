@@ -107,12 +107,6 @@ pipeline {
                         # and without this an arm64 agent would publish an arm64 ELF under it.
                         bun build --compile --minify --bytecode --target=bun-linux-x64 \\
                             --outfile /w/out/crust src/index.ts
-                        # The AOT fixture runner the test-fixture builtin execs when present
-                        # (src/builtins.ts probes ~/.crust/bin/crust-test-fixture). install.sh
-                        # built it; CI never did, so npm/curl installs always fell back to the
-                        # slower dynamic-import path.
-                        bun build --compile --minify --bytecode --target=bun-linux-x64 \\
-                            --outfile /w/out/crust-test-fixture src/testFixture/cli.ts
                     ')
                     trap 'docker rm -f "$CID" >/dev/null 2>&1 || true' EXIT
 
@@ -123,8 +117,7 @@ pipeline {
 
                     docker start -a "$CID"
                     docker cp "$CID:/w/out/crust" "$WORKSPACE/out/crust"
-                    docker cp "$CID:/w/out/crust-test-fixture" "$WORKSPACE/out/crust-test-fixture"
-                    chmod 0755 out/crust out/crust-test-fixture
+                    chmod 0755 out/crust
 
                     ls -lh out/crust
                     # Prove the binary is the one we think it is. Without this a wrong docker cp

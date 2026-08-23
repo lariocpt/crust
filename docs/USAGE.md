@@ -960,7 +960,7 @@ so CI points at the exact failing iteration; the stress percentile table
 rides along as the suite's `<system-out>`. Failures carry the first mismatch
 as the `message` and every mismatch in the body.
 
-When installed via `install.sh`, the runner is AOT-compiled to a host-arch bytecode binary at `~/.crust/bin/crust-test-fixture` for fast cold-start. The shell builtin execs that binary if present and falls back to in-process dynamic import otherwise (dev mode).
+The runner is part of the crust binary and runs in-process — measured faster (~22ms to first work) than the standalone AOT runner binary crust used to build for this (exec'ing a second ~90MB image cost more than the import it saved), so that artifact is gone.
 
 ### test-pipes
 
