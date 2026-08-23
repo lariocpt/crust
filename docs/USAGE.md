@@ -223,12 +223,13 @@ REPL, `Ctrl-C` on a running `procs` line delivers exactly that: the whole
 process group is torn down (SIGTERM, then SIGKILL for stragglers) and the
 prompt comes back.
 
-A spec value can also be an object — `{cmd, env?, restart?, ready?, after?}`:
+A spec value can also be an object —
+`{cmd, env?, restart?, ready?, live?, after?}`:
 
 ```bash
 procs({
   db:  {cmd: "docker compose up pg", ready: "port:5432"},
-  api: {cmd: "bun api.ts", after: "db", ready: ":3001/health", restart: {max: 3}},
+  api: {cmd: "bun api.ts", after: "db", ready: ":3001/health", live: {url: ":3001/health", failures: 3}, restart: {max: 3}},
   web: {cmd: "bun run dev", after: "api", env: {PORT: "3001"}}
 })
 ```
@@ -242,6 +243,10 @@ procs({
   ready** resets the counter (it guards against crash *loops*, not against
   ever crashing twice; procs without `ready:` count as ready at spawn — a
   proc that hangs un-ready until its ready-timeout kill never resets it).
+  With `live:`, the healthy stretch ends when a fatal probe streak **began**,
+  not when the kill finally lands — a proc that answers ready and then
+  wedges still accrues strikes, so `{max}` trips instead of restarting
+  forever.
 - `ready` — a readiness probe: `":3001/health"` / `"http(s)://…"` (ready =
   any 2xx) or `"port:5432"` (ready = TCP connect succeeds). Long form
   `{url?, port?, timeoutMs?, intervalMs?, probeTimeoutMs?}` (defaults 30s /
@@ -252,6 +257,19 @@ procs({
   timeout, a restartable proc is killed and respawned (readiness is
   re-awaited after every restart); a non-restartable one fails the whole
   pipeline — CI semantics.
+- `live` — a liveness probe for the *unhealthy-but-alive* case a readiness
+  probe can't see: same target forms as `ready`, long form
+  `{url?, port?, intervalMs?, probeTimeoutMs?, failures?, graceMs?}`
+  (defaults: 5s interval — liveness polls for the proc's whole life, so the
+  cadence is deliberately slower than readiness; 3 consecutive failures;
+  `graceMs: 0` delay after ready before the first probe). It arms once the
+  proc is up (after `ready:`, or at spawn without one) and reports on a
+  `live` stream: `probe failed (k/N) (…)`, `recovered after k failed
+  probe(s) (…)` when a streak breaks, and `unhealthy after N consecutive
+  failed probe(s) (…)` when it doesn't. At that point a restartable proc is
+  killed through the normal escalation and respawned (liveness re-arms
+  after the next ready); a non-restartable one fails the whole pipeline —
+  CI semantics, exactly like a ready-timeout.
 - `after` — a name or list of names that must be **ready** before this proc
   spawns (procs without `ready:` count as ready once spawned). Gating is
   one-shot: a dependency restarting later never re-blocks a dependent, but a
