@@ -205,6 +205,7 @@ async function runOne(
           ? await (schema as () => unknown)()
           : schema;
       rawOutput = rest as typeof rawOutput;
+      assertNoRefs(responseSchema);
     }
     assertKnownOutputKeys(rawOutput);
     const input = (await resolveDeep(rawInput, setupCtx, true)) as Record<string, unknown>;
@@ -293,6 +294,32 @@ async function resolveDeep(value: unknown, ctx: unknown, callUnary: boolean): Pr
 // reported a PASS. `input` takes `body` while `output` takes `data`, so this is
 // an easy slip to make.
 const KNOWN_OUTPUT_KEYS = ["data", "headers", "schema", "status"];
+
+// A $ref in output.schema is an authoring error, not a soft pass: the runner
+// validates against a stub spec (there is nothing to resolve refs against),
+// so every $ref would resolve to nothing and the schema would validate
+// SUCCESSFULLY — the author believes a shape is enforced when none is.
+// Keys whose values are DATA rather than schema (enum members, examples,
+// defaults) are skipped, so a payload that happens to contain a "$ref" field
+// is never flagged.
+const DATA_BEARING_KEYS = new Set(["enum", "const", "example", "examples", "default"]);
+
+function assertNoRefs(schema: unknown, pointer = ""): void {
+  if (schema === null || typeof schema !== "object") return;
+  if (Array.isArray(schema)) {
+    for (let i = 0; i < schema.length; i++) assertNoRefs(schema[i], `${pointer}/${i}`);
+    return;
+  }
+  for (const [k, v] of Object.entries(schema as Record<string, unknown>)) {
+    if (k === "$ref") {
+      throw new Error(
+        `output.schema contains a $ref (${pointer || "/"}) — inline it; fixture schemas resolve against no spec, so $refs would silently pass`,
+      );
+    }
+    if (DATA_BEARING_KEYS.has(k)) continue;
+    assertNoRefs(v, `${pointer}/${k}`);
+  }
+}
 
 function editDistance(a: string, b: string): number {
   const prev = Array.from({ length: b.length + 1 }, (_, i) => i);

@@ -4,6 +4,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runCli } from "../src/testFixture/cli";
 import { runFixtures } from "../src/testFixture/runner";
+import type { FixtureOutput } from "../src/testFixture/types";
+
+// Compile-time check: `schema` is a declared FixtureOutput field, not an
+// index-signature stowaway.
+const _typedSchemaOutput: FixtureOutput = {
+  status: 200,
+  schema: { type: "object", required: ["id"] },
+};
+void _typedSchemaOutput;
 
 let server: ReturnType<typeof Bun.serve>;
 let baseUrl: string;
@@ -366,7 +375,7 @@ describe("--timeout and --bail", () => {
   });
 });
 
-describe("output.schema (reserved key)", () => {
+describe("output.schema", () => {
   test("conforming response passes; violation fails with a pointer path", async () => {
     const file = await writeFixture(
       "schema-ok.crust.ts",
@@ -423,6 +432,63 @@ describe("output.schema (reserved key)", () => {
         name: "plain",
         input: { url: "${baseUrl}/users/42" },
         output: { status: 200, data: { id: 42 } },
+      };`,
+    );
+    const report = await runFixtures({ target: file, threads: 1 });
+    expect(report.results[0]!.status).toBe("pass");
+  });
+
+  // A $ref would resolve against the runner's stub spec to nothing and the
+  // schema would validate successfully — the author believes a shape is
+  // enforced when none is. Loud beats vacuous.
+  test("a top-level $ref is a loud error, not a silent pass", async () => {
+    const file = await writeFixture(
+      "schema-ref-top.crust.ts",
+      `export default {
+        name: "reffed",
+        input: { url: "${baseUrl}/users/42" },
+        output: { status: 200, schema: { $ref: "#/components/schemas/User" } },
+      };`,
+    );
+    const report = await runFixtures({ target: file, threads: 1 });
+    const r = report.results[0]!;
+    expect(r.status).toBe("error");
+    expect(r.error?.message).toContain("output.schema contains a $ref (/)");
+    expect(r.error?.message).toContain("inline it");
+  });
+
+  test("a $ref nested under properties errors with its pointer", async () => {
+    const file = await writeFixture(
+      "schema-ref-nested.crust.ts",
+      `export default {
+        name: "nested-ref",
+        input: { url: "${baseUrl}/users/42" },
+        output: {
+          status: 200,
+          schema: { type: "object", properties: { owner: { $ref: "#/components/schemas/User" } } },
+        },
+      };`,
+    );
+    const report = await runFixtures({ target: file, threads: 1 });
+    const r = report.results[0]!;
+    expect(r.status).toBe("error");
+    expect(r.error?.message).toContain("$ref (/properties/owner)");
+  });
+
+  test("$ref-shaped DATA inside enum/example values is not flagged", async () => {
+    const file = await writeFixture(
+      "schema-ref-data.crust.ts",
+      `export default {
+        name: "ref-shaped-data",
+        input: { url: "${baseUrl}/users/42" },
+        output: {
+          status: 200,
+          schema: {
+            type: "object",
+            example: { $ref: "a payload field literally named $ref" },
+            properties: { id: { enum: [42, { $ref: "also data" }], example: { $ref: "data" } } },
+          },
+        },
       };`,
     );
     const report = await runFixtures({ target: file, threads: 1 });

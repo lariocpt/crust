@@ -23,6 +23,11 @@ export interface FixtureOutput {
     | ((actual: Record<string, string>, ctx?: unknown) => boolean | Promise<boolean>)
     | (() => unknown);
   data?: unknown;
+  // A JSON Schema the response body must conform to. Inline only — fixture
+  // schemas resolve against no spec, so a `$ref` anywhere in it is a loud
+  // error. Validated by the mock-server subset walker (unknown keywords
+  // pass); functions inside the schema object are never invoked.
+  schema?: unknown;
   [key: string]: unknown;
 }
 
