@@ -324,6 +324,7 @@ describe("test-fixture cli", () => {
     expect(code).toBe(0);
     const data = JSON.parse(await Bun.file(outPath).text());
     expect(data.totals.pass).toBe(1);
+    expect(data.filesMatched).toBe(1);
     expect(Array.isArray(data.results)).toBe(true);
   });
 
@@ -369,6 +370,30 @@ describe("test-fixture cli", () => {
   test("empty glob match exits 2", async () => {
     const code = await runCli(["--target", `${dir}/nothing-here/*.crust.ts`]);
     expect(code).toBe(2);
+  });
+
+  test("a matched but gated-off module exits 2 and says so — not 'no files matched'", async () => {
+    // `export default () => []` is a real gating pattern (skip a suite when its
+    // service is down). The old message blamed the glob; both cases stay exit 2.
+    const file = await writeFixture("cli/gated-off.crust.ts", "export default () => [];\n");
+    const stderrChunks: string[] = [];
+    const realWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: string | Uint8Array) => {
+      stderrChunks.push(chunk.toString());
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      const gated = await runCli(["--target", file]);
+      expect(gated).toBe(2);
+      const missing = await runCli(["--target", `${dir}/nothing-here/*.crust.ts`]);
+      expect(missing).toBe(2);
+    } finally {
+      process.stderr.write = realWrite;
+    }
+    const out = stderrChunks.join("");
+    expect(out).toContain("matched 1 file(s)");
+    expect(out).toContain("yielded 0 fixtures");
+    expect(out).toContain("no files matched");
   });
 
   test("missing --target exits 2", async () => {

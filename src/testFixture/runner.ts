@@ -97,7 +97,7 @@ export async function runFixtures(opts: RunOpts): Promise<RunReport> {
     totals[r.status]++;
     totals.ms += r.durationMs;
   }
-  const report: RunReport = { results, totals };
+  const report: RunReport = { results, filesMatched: files.length, totals };
   if (bailed) {
     report.bailed = true;
     report.scheduled = tasks.length;

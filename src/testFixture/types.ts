@@ -80,6 +80,10 @@ export interface StressBucket {
 
 export interface RunReport {
   results: FixtureResult[];
+  // How many files the target expanded to — lets the CLI tell "no files
+  // matched" apart from "files matched but yielded 0 fixtures" (a gated-off
+  // `export default () => []` module). Both are still failures.
+  filesMatched: number;
   totals: { pass: number; fail: number; error: number; ms: number };
   stress?: StressBucket[];
   // Present only when --bail cut the run short: results then holds just the
