@@ -1,0 +1,25 @@
+name: Feature request
+description: Suggest a capability
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        crust deliberately keeps its grammar small — a new stage keyword must not
+        shadow a real binary, and the preference is always to give users the
+        general mechanism rather than a keyword per use case.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The task, not the proposed syntax.
+    validations: { required: true }
+  - type: textarea
+    id: today
+    attributes:
+      label: How do you do it today?
+      description: The shell/crust line you currently write, however awkward.
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like instead?

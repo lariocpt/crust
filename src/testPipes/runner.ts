@@ -46,6 +46,13 @@ async function expandPipesTarget(target: string): Promise<string[]> {
   if (!looksGlob) {
     const abs = resolve(process.cwd(), target);
     if (!(await Bun.file(abs).exists())) return [];
+    // The glob branch below filters on .pipes; the direct path did not, so ANY
+    // readable file was accepted and every non-comment line in it went to the
+    // parser — where anything unrecognised classifies as a shell stage and runs
+    // under `sh -c`. A typo'd path must not execute /etc/something.
+    if (!abs.endsWith(".pipes")) {
+      throw new Error(`test-pipes: ${target} is not a .pipes file`);
+    }
     return [abs];
   }
   // Static import above, NOT await import("bun"): dynamic import of the

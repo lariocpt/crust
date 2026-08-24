@@ -40,6 +40,28 @@ done
 [ -n "$VERSION" ] || die "--version needs a value"
 [ -n "$INSTALL_DIR" ] || die "--dir needs a value"
 
+# Platform support is decided BEFORE tool availability: telling an Alpine user
+# "curl is required" hides the real answer, which is that no binary exists for them.
+OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+case "$OS" in
+  linux|darwin) ;;
+  *) die "unsupported OS '$OS' — build from source: https://github.com/$REPO#build-from-source" ;;
+esac
+case "$(uname -m)" in
+  x86_64|amd64)  ARCH=x64 ;;
+  aarch64|arm64) ARCH=arm64 ;;
+  *) die "unsupported architecture '$(uname -m)' — build from source: https://github.com/$REPO#build-from-source" ;;
+esac
+
+# The published Linux binaries are glibc-only. Without this check an Alpine user
+# downloads one, passes the checksum, and then gets `crust: not found` — which
+# reads as a broken install rather than an unsupported platform. Fail here, with
+# the real reason.
+if [ "$OS" = linux ] && ls /lib/ld-musl-* >/dev/null 2>&1; then
+  die "musl libc detected (Alpine?) — the published binaries are glibc-only.
+  Build from source instead: https://github.com/$REPO#build-from-source"
+fi
+
 command -v curl >/dev/null 2>&1 || die "curl is required"
 
 # sha256sum on GNU userland, shasum on macOS. Refusing to install unverified is the point, so
@@ -52,16 +74,7 @@ else
   die "need sha256sum or shasum to verify the download"
 fi
 
-OS=$(uname -s | tr '[:upper:]' '[:lower:]')
-case "$OS" in
-  linux|darwin) ;;
-  *) die "unsupported OS '$OS' — build from source: https://github.com/$REPO#build-from-source" ;;
-esac
-case "$(uname -m)" in
-  x86_64|amd64)  ARCH=x64 ;;
-  aarch64|arm64) ARCH=arm64 ;;
-  *) die "unsupported architecture '$(uname -m)' — build from source: https://github.com/$REPO#build-from-source" ;;
-esac
+
 ASSET="crust-${OS}-${ARCH}"
 
 if [ -n "${CRUST_DOWNLOAD_BASE:-}" ]; then

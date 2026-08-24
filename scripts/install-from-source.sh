@@ -13,7 +13,7 @@
 # architecture (including architectures the release does not cover) and seeds the config.
 set -euo pipefail
 
-CRUST_DIR="${CRUST_DIR:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)}"
+CRUST_DIR="${CRUST_DIR:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)}"
 
 say()  { printf '\033[36m==>\033[0m %s\n' "$1"; }
 die()  { printf '\033[31m[error]\033[0m %s\n' "$1" >&2; exit 1; }

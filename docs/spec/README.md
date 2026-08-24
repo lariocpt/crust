@@ -9,4 +9,4 @@ Reference material — **not** parser input. Crust hand-writes a tiny parser to 
 
 ## Why no POSIX spec
 
-POSIX shell language (IEEE 1003.1 ch.2) is the formal standard but its plaintext isn't freely redistributable. The bash manual is a superset and is GPL-licensed for redistribution. For v0.1 we cite bash; v0.2+ may add a POSIX-subset compatibility note if we start caring about portability across non-bash `sh` implementations.
+POSIX shell language (IEEE 1003.1 ch.2) is the formal standard but its plaintext isn't freely redistributable. The bash manual is a superset and is redistributable under the **GNU Free Documentation License** (see `NOTICE`) — it is third-party documentation, not part of this project's MIT-licensed source. For v0.1 we cite bash; v0.2+ may add a POSIX-subset compatibility note if we start caring about portability across non-bash `sh` implementations.

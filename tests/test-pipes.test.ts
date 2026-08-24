@@ -188,6 +188,61 @@ describe("test-pipes reports", () => {
     expect(xml.trim().endsWith("</testsuites>")).toBe(true);
   });
 
+  // AGENTS.md rule 1. `70aa19a` gave test-fixture a zero-result guard;
+  // test-pipes shipped without one, so a suite that ran NOTHING exited 0 and
+  // its JUnit report was a green `tests="0"`. Each case here failed before the
+  // guard existed; the controls below exist so a fix cannot just fail everything.
+  describe("an empty run is never a pass", () => {
+    test("a .pipes file with no runnable lines exits 2, not 0", async () => {
+      const { runCli } = await import("../src/testPipes/cli");
+      const sub = join(dir, "emptyrun");
+      const { mkdir } = await import("node:fs/promises");
+      await mkdir(sub, { recursive: true });
+      await writeFile(
+        join(sub, "e.pipes"),
+        "# everything here is commented out\n\n#   still nothing\n",
+      );
+      expect(await runCli([join(sub, "e.pipes")])).toBe(2);
+    });
+
+    test("no green JUnit artifact is written for an empty run", async () => {
+      const { runCli } = await import("../src/testPipes/cli");
+      const sub = join(dir, "emptyxml");
+      const { mkdir } = await import("node:fs/promises");
+      await mkdir(sub, { recursive: true });
+      await writeFile(join(sub, "e.pipes"), "# nothing\n");
+      const outPath = join(sub, "report.xml");
+      expect(await runCli([join(sub, "e.pipes"), "--out", outPath])).toBe(2);
+      // The old behaviour wrote `<testsuites … tests="0" failures="0">`, which a
+      // CI JUnit step reads as a clean run.
+      expect(await Bun.file(outPath).exists()).toBe(false);
+    });
+
+    test("a file that is not .pipes is refused, never executed", async () => {
+      const { runCli } = await import("../src/testPipes/cli");
+      const sub = join(dir, "notpipes");
+      const { mkdir } = await import("node:fs/promises");
+      await mkdir(sub, { recursive: true });
+      // Unrecognised stages classify as shell, so accepting this file meant
+      // running `touch <marker>` through `sh -c`.
+      const marker = join(sub, "pwned");
+      await writeFile(join(sub, "notes.txt"), `touch ${marker}\n`);
+      expect(await runCli([join(sub, "notes.txt")])).toBe(2);
+      expect(await Bun.file(marker).exists()).toBe(false);
+    });
+
+    test("CONTROL: a passing suite still exits 0 and a failing one still exits 1", async () => {
+      const { runCli } = await import("../src/testPipes/cli");
+      const sub = join(dir, "controls");
+      const { mkdir } = await import("node:fs/promises");
+      await mkdir(sub, { recursive: true });
+      await writeFile(join(sub, "ok.pipes"), `{"a":1} | assert (r => r.a === 1)\n`);
+      await writeFile(join(sub, "no.pipes"), `{"a":1} | assert (r => r.a === 2)\n`);
+      expect(await runCli([join(sub, "ok.pipes")])).toBe(0);
+      expect(await runCli([join(sub, "no.pipes")])).toBe(1);
+    });
+  });
+
   test("--out report.json round-trips the PipesReport", async () => {
     const { runCli } = await import("../src/testPipes/cli");
     const sub = join(dir, "jsonout");

@@ -30,3 +30,9 @@ jobs:
 
       - name: Typecheck
         run: bunx tsc --noEmit
+
+      # `bun run check`, not `bunx biome check`: bunx resolves the latest biome,
+      # which drifts from the version biome.json's $schema targets and fails the
+      # config parse. The script uses the lockfile-pinned binary.
+      - name: Lint
+        run: bun run check

@@ -71,6 +71,18 @@ export async function runCli(args: string[]): Promise<number> {
     return 2;
   }
 
+  // A suite that ran nothing is not a pass. `70aa19a` gave test-fixture this
+  // guard; test-pipes never got it, so a .pipes file whose lines were all
+  // commented out during debugging — or lost to a bad merge — exited 0 and,
+  // with --out report.xml, produced a green `<testsuites tests="0">`.
+  // AGENTS.md rule 1: crust must never report a false pass.
+  if (report.results.length === 0) {
+    process.stderr.write(
+      `test-pipes: matched ${report.totals.files} file(s) under ${target}, but they yielded 0 runnable lines (blank or commented out)\n`,
+    );
+    return 2;
+  }
+
   const cwd = process.cwd();
   const ext = out ? extname(out) : "";
   let text: string;
