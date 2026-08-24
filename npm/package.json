@@ -9,7 +9,7 @@
     "type": "git",
     "url": "git+https://github.com/lariocpt/crust.git"
   },
-  "homepage": "https://github.com/lariocpt/crust#readme",
+  "homepage": "https://lariocpt.github.io/crust-website/",
   "bugs": "https://github.com/lariocpt/crust/issues",
   "keywords": [
     "bun",
