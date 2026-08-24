@@ -8,7 +8,7 @@
 // a package that only fetches in postinstall installs "successfully" and then cannot run.
 // Fetching here means `npm i -g crust` works under any script policy — the cost is that the
 // very first invocation pays the download.
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { ensureBinary, readManifest, installHint } from "../lib/install.mjs";
 
 const say = (m) => console.error(`[crust] ${m}`);
@@ -30,13 +30,29 @@ if (!manifest) {
   }
 }
 
-// spawnSync with inherited stdio rather than exec: crust is an interactive shell, so it needs
-// the real tty, and this shim must be transparent about how the process ended.
-const r = spawnSync(manifest.bin, process.argv.slice(2), { stdio: "inherit" });
-if (r.error) bail([`failed to launch ${manifest.bin}: ${r.error.message}`]);
-// A plain exit-code passthrough loses signals, which makes `crust` dying to SIGINT look
-// different from the binary dying to SIGINT. Re-raise instead.
-if (r.signal) {
-  process.kill(process.pid, r.signal);
+// Async spawn with inherited stdio rather than exec or spawnSync: crust is interactive, so it
+// needs the real tty — and the shim must be a transparent SIGNAL conduit. spawnSync was not:
+// a single-pid SIGTERM (Playwright stopping a webServer, systemd, a bare `kill`) hit only this
+// node process, libuv put the binary down without ceremony, and a crust `procs` supervisor
+// died WITHOUT running its group-kill teardown — orphaning every dev server it held. Forward
+// the termination signals and let the binary do its own graceful shutdown.
+const child = spawn(manifest.bin, process.argv.slice(2), { stdio: "inherit" });
+child.on("error", (e) => bail([`failed to launch ${manifest.bin}: ${e.message}`]));
+for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"]) {
+  process.on(sig, () => {
+    try {
+      child.kill(sig);
+    } catch {
+      /* already gone */
+    }
+  });
 }
-process.exit(r.status ?? 0);
+child.on("exit", (code, signal) => {
+  // A plain exit-code passthrough loses signals, which makes `crust` dying to SIGINT look
+  // different from the binary dying to SIGINT. Re-raise instead.
+  if (signal) {
+    process.kill(process.pid, signal);
+    return;
+  }
+  process.exit(code ?? 0);
+});
