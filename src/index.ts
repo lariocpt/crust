@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import pkg from "../package.json" with { type: "json" };
-import { hasUnquotedShellMeta, splitArgs } from "./args";
+import { hasUnquotedShellMeta, splitArgs, stripTrailingComment } from "./args";
 import { registerBuiltinFns } from "./builtinFns";
 import { dotenvLoad, isBuiltin, renderBuiltinList } from "./builtins";
 import { checkBuiltinLine } from "./checkBuiltin";
@@ -157,7 +157,10 @@ async function main(): Promise<void> {
         // against the CLI's own flag spec instead.
         const head = line.split(/\s+/)[0] ?? "";
         if (isBuiltin(head) && !hasUnquotedShellMeta(line)) {
-          const problem = await checkBuiltinLine(head, splitArgs(line.slice(head.length).trim()));
+          const problem = await checkBuiltinLine(
+            head,
+            splitArgs(stripTrailingComment(line.slice(head.length).trim())),
+          );
           if (problem) {
             process.stderr.write(`crust: ${problem}\n  in: ${line}\n`);
             process.exit(1);

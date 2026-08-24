@@ -192,6 +192,46 @@ export function parseFlags(argv: string[], spec: FlagSpec): ParsedFlags {
   return { values, rest, help: false };
 }
 
+// Strip a trailing sh-style `# comment` from a BUILTIN line. Shell stages get
+// this for free from `sh -c`; builtin lines used to hand the `#` to parseFlags
+// as an `unexpected argument`. Quote handling matches splitArgs exactly
+// (backslash escapes only inside double quotes), brackets () {} [] guard
+// structured payloads like procs({...}), and only a `#` that STARTS a word
+// (position 0 or after whitespace) counts — `file#1.log` and `http://h/p#frag`
+// pass through untouched. Not applied to pipeline/shell lines: sh owns its own
+// comments, and $()-nesting makes a global strip unsafe.
+export function stripTrailingComment(text: string): string {
+  let quote: '"' | "'" | null = null;
+  let depth = 0;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]!;
+    if (quote === '"' && ch === "\\" && i + 1 < text.length) {
+      i++;
+      continue;
+    }
+    if (quote) {
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      continue;
+    }
+    if (ch === "(" || ch === "{" || ch === "[") {
+      depth++;
+      continue;
+    }
+    if (ch === ")" || ch === "}" || ch === "]") {
+      depth--;
+      continue;
+    }
+    if (ch === "#" && depth === 0 && (i === 0 || /\s/.test(text[i - 1]!))) {
+      return text.slice(0, i).trimEnd();
+    }
+  }
+  return text;
+}
+
 // True when the line contains a shell metacharacter OUTSIDE quotes.
 //
 // This is the builtin-dispatch gate. It used to be a bare /[|&;<>]/ against the

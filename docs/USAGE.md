@@ -644,6 +644,11 @@ sequencing (`&`, `;`) operator. Quoted ones are fine, which is what makes
 `export DB='postgres://h/d?a=1&b=2'` and `alias two='a | b'` work — before the
 gate understood quotes, both silently did nothing and exited 0.
 
+Builtin lines accept sh-style trailing comments, same as shell stages:
+`dotenv .env.test # matrix run`. Only an unquoted `#` that starts a word
+(outside quotes and brackets) begins a comment — `tail file#1.log`,
+`grep "#tag"`, and `procs({...})` payloads pass through untouched.
+
 ---
 
 ## Shorthand fixture grammar
@@ -1439,6 +1444,8 @@ export default {
 ```bash
 verify-web-links --base-url https://example.com --fixtures site/*.meta.crust.ts
 ```
+
+Fixture `url`s are matched **URL-normalized**, not byte-for-byte: `https://example.com` and `https://example.com/` are the same page, host case and default ports don't matter. A trailing slash on a non-root path stays significant — `/login/` and `/login` are different pages.
 
 Exit codes: `0` all clear, `1` verification failures (broken links, missing anchors, redirect chains, OG image issues, meta mismatches), `2` bad args / unreachable sitemap.
 

@@ -1,4 +1,4 @@
-import { hasUnquotedShellMeta } from "./args";
+import { hasUnquotedShellMeta, stripTrailingComment } from "./args";
 import { builtins, isBuiltin } from "./builtins";
 import { formatItem } from "./format";
 import * as interrupt from "./interrupt";
@@ -74,7 +74,9 @@ export async function runLine(line: string, ctx: Context, tty?: ReplTty): Promis
   const exFirstSpace = expanded.indexOf(" ");
   const exHead = exFirstSpace === -1 ? expanded : expanded.slice(0, exFirstSpace);
   if (isBuiltin(exHead) && !hasUnquotedShellMeta(expanded)) {
-    const args = exFirstSpace === -1 ? "" : expanded.slice(exFirstSpace + 1);
+    // sh strips trailing comments from shell stages; builtin lines get the
+    // same courtesy here so `dotenv .env.test # matrix run` works everywhere.
+    const args = exFirstSpace === -1 ? "" : stripTrailingComment(expanded.slice(exFirstSpace + 1));
     // At the REPL, Ctrl-C reaches builtins as a synthetic in-process SIGINT —
     // that's what mock-server's and procs' "wait for SIGINT" handlers listen
     // for, and raw mode means no real signal ever arrives. Builtins that hold
