@@ -222,3 +222,22 @@ describe("assert on empty upstream", () => {
     expect(msg).toContain("no items reached");
   });
 });
+
+describe("expandEnv ${NAME:-default}", () => {
+  test("unset and empty fall back to the default; set wins (POSIX :-)", () => {
+    delete process.env.CRUST_DEF_TEST;
+    expect(expandEnv("${CRUST_DEF_TEST:-http://localhost:3001}/x")).toBe("http://localhost:3001/x");
+    process.env.CRUST_DEF_TEST = "";
+    expect(expandEnv("${CRUST_DEF_TEST:-fallback}")).toBe("fallback");
+    process.env.CRUST_DEF_TEST = "http://real:4747";
+    expect(expandEnv("${CRUST_DEF_TEST:-fallback}/api")).toBe("http://real:4747/api");
+    delete process.env.CRUST_DEF_TEST;
+  });
+
+  test("defaults may contain URLs with colons and slashes; plain forms unchanged", () => {
+    delete process.env.CRUST_DEF_TEST;
+    expect(expandEnv("${CRUST_DEF_TEST:-}")).toBe(""); // empty default is legal
+    expect(expandEnv("a $CRUST_DEF_TEST b")).toBe("a  b"); // bare form: still ""
+    expect(expandEnv("id = $1")).toBe("id = $1"); // SQL positionals survive
+  });
+});

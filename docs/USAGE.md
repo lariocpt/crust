@@ -693,8 +693,15 @@ string. Expansion is **opt-in per position** — crust expands exactly:
 | JSON-literal sources | yes |
 | `stats --out` paths | yes |
 | Registered-fn args (`sql "…" "$RUN_ID"`) | yes — SQL positionals `$1`/`$2` survive (a digit can't start an env var name) |
+| Tool-builtin args (`mock-server --proxy $UP`, `test-fixture --target $DIR/*.crust.ts`) | yes — expanded after quote-aware splitting, so a var holding spaces stays one argument |
 | Lambda / `assert` / `capture` bodies | **no** — they're JS; use `process.env.TOKEN` |
 | Shell stages | untouched — `sh` does its own expansion |
+
+Everywhere crust expands, `${NAME:-default}` works with POSIX `:-`
+semantics: the default is used when the var is unset **or** empty — so
+`GET ${CRUST_BASE_URL:-http://localhost:3001}/api/health` runs against
+localhost until CI exports the real target. (`logs` takes its source spec
+verbatim and stays unexpanded.)
 
 ---
 

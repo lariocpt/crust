@@ -1,4 +1,4 @@
-import { FlagError, type FlagSpec, parseFlags, splitArgs } from "./args";
+import { expandEnv, FlagError, type FlagSpec, parseFlags, splitArgs } from "./args";
 import type { Context } from "./types";
 
 export type Builtin = (rawArgs: string, ctx: Context) => Promise<number> | number;
@@ -263,31 +263,31 @@ function parseDotenv(text: string): Array<[string, string]> {
 // bytecode-compiled — the probe's only real effect was letting a stale
 // binary silently shadow the current runner.
 const testFixtureBuiltin: Builtin = async (rawArgs, _ctx) => {
-  const args = splitArgs(rawArgs);
+  const args = splitArgs(rawArgs).map(expandEnv);
   const { runCli } = await import("./testFixture/cli");
   return await runCli(args);
 };
 
 const testPipesBuiltin: Builtin = async (rawArgs, _ctx) => {
-  const args = splitArgs(rawArgs);
+  const args = splitArgs(rawArgs).map(expandEnv);
   const { runCli } = await import("./testPipes/cli");
   return await runCli(args);
 };
 
 const genFixturesBuiltin: Builtin = async (rawArgs, _ctx) => {
-  const args = splitArgs(rawArgs);
+  const args = splitArgs(rawArgs).map(expandEnv);
   const { runCli } = await import("./genFixtures/cli");
   return await runCli(args);
 };
 
 const mockServerBuiltin: Builtin = async (rawArgs, _ctx) => {
-  const args = splitArgs(rawArgs);
+  const args = splitArgs(rawArgs).map(expandEnv);
   const { runCli } = await import("./mockServer/cli");
   return await runCli(args);
 };
 
 const verifyWebLinksBuiltin: Builtin = async (rawArgs, _ctx) => {
-  const args = splitArgs(rawArgs);
+  const args = splitArgs(rawArgs).map(expandEnv);
   const { runCli } = await import("./verifyWebLinks/cli");
   return await runCli(args);
 };

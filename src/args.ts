@@ -222,12 +222,20 @@ export function hasUnquotedShellMeta(text: string): boolean {
   return false;
 }
 
-// Expand $NAME / ${NAME} from process.env. Missing vars become the empty
-// string. Applied ONLY where crust explicitly opts in (URLs, -H values,
-// JSON-literal sources) — shell stages keep sh's own expansion.
+// Expand $NAME / ${NAME} / ${NAME:-default} from process.env. Missing vars
+// become the empty string; the `:-` form falls back to its default when the
+// var is unset OR empty (POSIX semantics — package.json scripts lean on it,
+// and before this the whole `${VAR:-…}` passed through verbatim and became
+// a "valid-looking" broken URL). Applied ONLY where crust explicitly opts
+// in (URLs, -H values, JSON-literal sources, tool-builtin args) — shell
+// stages keep sh's own expansion.
 export function expandEnv(s: string): string {
   return s.replace(
-    /\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))/g,
-    (_m, braced, bare) => process.env[(braced ?? bare) as string] ?? "",
+    /\$(?:\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}|([A-Za-z_][A-Za-z0-9_]*))/g,
+    (_m, braced, def, bare) => {
+      const val = process.env[(braced ?? bare) as string];
+      if (def !== undefined && (val === undefined || val === "")) return def;
+      return val ?? "";
+    },
   );
 }

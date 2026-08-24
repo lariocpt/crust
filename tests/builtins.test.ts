@@ -351,3 +351,36 @@ describe("defaultPrompt env marker", () => {
     expect(defaultPrompt(ctx)).toContain("[env: 2]");
   });
 });
+
+describe("tool builtin args are env-expanded", () => {
+  test("test-fixture expands $VAR and ${VAR:-default} in its args", async () => {
+    // An expanded-but-nonexistent glob exits 2 with the EXPANDED path in the
+    // message — proving expansion ran before the CLI saw the args.
+    process.env.CRUST_BUILTIN_EXP = "/definitely/not/here";
+    const errs: string[] = [];
+    const origWrite = process.stderr.write.bind(process.stderr);
+    // biome-ignore lint/suspicious/noExplicitAny: capture stderr for assertion
+    (process.stderr as any).write = (s: string) => {
+      errs.push(String(s));
+      return true;
+    };
+    try {
+      const code = await builtins["test-fixture"]!(
+        "--target $CRUST_BUILTIN_EXP/*.crust.ts",
+        mkCtx(),
+      );
+      expect(code).toBe(2);
+      expect(errs.join("")).toContain("/definitely/not/here/*.crust.ts");
+      const code2 = await builtins["test-fixture"]!(
+        "--target ${CRUST_NOT_SET_ANYWHERE:-/from/default}/*.crust.ts",
+        mkCtx(),
+      );
+      expect(code2).toBe(2);
+      expect(errs.join("")).toContain("/from/default/*.crust.ts");
+    } finally {
+      // biome-ignore lint/suspicious/noExplicitAny: restore
+      (process.stderr as any).write = origWrite;
+      delete process.env.CRUST_BUILTIN_EXP;
+    }
+  });
+});
