@@ -9,7 +9,7 @@
 // Fetching here means `npm i -g crust` works under any script policy — the cost is that the
 // very first invocation pays the download.
 import { spawn } from "node:child_process";
-import { ensureBinary, readManifest, installHint } from "../lib/install.mjs";
+import { ensureBinary, readManifest, installHint, resolveSource } from "../lib/install.mjs";
 
 const say = (m) => console.error(`[crust] ${m}`);
 
@@ -18,7 +18,10 @@ function bail(lines, code = 127) {
   process.exit(code);
 }
 
-let manifest = readManifest();
+// Pass the plane: readManifest's whole job is to reject a cached binary that
+// belongs to a DIFFERENT artifact plane, and with no argument that guard is
+// skipped — so CRUST_SOURCE was silently ignored on every run after the first.
+let manifest = readManifest(resolveSource());
 
 if (!manifest) {
   try {
