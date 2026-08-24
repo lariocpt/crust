@@ -20,7 +20,9 @@ crust -c 'read fixtures/*.json | POST :3000/users | expect 201'
 crust -c 'lines **/*.log | grep ERROR | filter (l => !l.includes("healthcheck")) | wc -l'
 ```
 
-Full documentation: **https://github.com/lariocpt/crust**
+**Documentation: https://lariocpt.github.io/crust-website/**
+
+Source and issues: https://github.com/lariocpt/crust
 
 ## What this package installs
 

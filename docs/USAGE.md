@@ -28,6 +28,9 @@ A pipeline-first devops toolkit built on Bun. Shell commands, TypeScript lambdas
 
 ---
 
+> This reference is also published, searchable and cross-linked, at
+> [https://lariocpt.github.io/crust-website/](https://lariocpt.github.io/crust-website/).
+
 ## Install
 
 Either channel resolves the same prebuilt binary and verifies its published

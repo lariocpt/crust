@@ -10,6 +10,8 @@ Battle-tested by dogfooding against a real 97-operation production API:
 406 generated fixtures, spec-driven mocking for two client apps, and the
 load pipelines below — all run through the released binary.
 
+**Documentation:** https://lariocpt.github.io/crust-website/
+
 ## Install
 
 Either channel resolves the same prebuilt binary and verifies its published
@@ -85,6 +87,8 @@ don't persist (use `export` or `capture`). The full list lives in
 
 ## Docs
 
+- [https://lariocpt.github.io/crust-website/](https://lariocpt.github.io/crust-website/) — the rendered documentation site: quickstart, recipes,
+  agent skills, and the pipe-shorthand-vs-TypeScript comparison.
 - [docs/USAGE.md](docs/USAGE.md) — user-facing reference: sources, transforms, sinks, builtins, editor keybindings, `init.ts` configuration, examples, limits.
 - [docs/spec/v0.1-contract.md](docs/spec/v0.1-contract.md) — the green-light test contract.
 - [docs/PLAN.md](docs/PLAN.md) — design notes.
