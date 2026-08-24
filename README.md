@@ -36,46 +36,88 @@ git clone https://github.com/lariocpt/crust.git ~/.crust && ~/.crust/scripts/ins
 
 ## What it looks like
 
-```bash
-# API smoke test — every fixture file's contents, POSTed and asserted
-read fixtures/*.json | POST :3000/users | expect 201
+Every line below is a real one — this README is parsed against the live grammar
+on each `bun test`, so an example that stopped working fails the build.
 
-# A whole CRUD suite as one .pipes file — request, then assert the DB saw it
-#   {"name":"Court"} | POST $BASE/api/buildings -H "authorization: Bearer $TOKEN" | expect 201
-#   sql "SELECT count(*)::int AS c FROM buildings" | assert (r => r.c === 1)
-test-pipes smoke.pipes -b
+**Fixture tests.** `.crust.ts` fixtures with `setup()` context, async matchers
+and JUnit for CI; `-n/-j` turns any fixture into a stress run with p50/p95/p99.
 
-# Generate the negative-test matrix (401/403/404 + per-field 400s) from a spec
-# (copy examples/gen-setup.ts as your starting --setup module)
-gen-fixtures ./openapi.json                       # --out/--setup default to tests/gen
-test-fixture 'tests/gen/*.gen.crust.ts' -j8
-
-# Load testing
-range(0, 10000) | parallel 100 | GET :3000/health | expect 200 | stats
-
-# Log mining — `lines` streams a file line by line (`read` yields whole files)
-lines **/*.log | grep ERROR | filter (l => !l.includes('healthcheck')) | wc -l
-
-# Any command's output as a source — and native grep keeps follow streams live
-docker logs -f my-app | crust -c 'stdin | (l => JSON.parse(l)) | filter (e => e.level >= 40)'
-tail -n 0 -F app.log | grep ERROR
-
-# Interactive log search — hold one live stream, iterate on filters against
-# its buffered past + live future (every query is ordinary pipeline grammar)
-logs docker logs -f my-app
-
-# One dev tail — merge every dev process, auto-restart the flaky one
-procs({web: "bun run dev", api: {cmd: "bun api.ts", restart: true}}) | (l => `[${l.proc}] ${l.line}`)
+```crust
+test-fixture "tests/api/**/*.crust.ts" -j 8 -o reports/api.junit.xml
+test-fixture tests/api/checkout.crust.ts -n 500 -j 32 -o reports/stress.json
 ```
 
-Fixtures (`test-fixture`) run `.crust.ts` files with `{ input, output }`
-shapes: `setup()` context flows into the request and every matcher, matchers
-may be async (DB side-effect assertions await), and `--count/--threads`
-turns any fixture into a stress run with p50/p95/p99 reports —
-`-t/-b` keep long runs honest. `mock-server spec.json` serves an OpenAPI
-spec example-first so clients run without their backend; `--stateful` makes it
-remember what you POST. Every tool builtin takes its primary argument
-positionally; the old `--target`/`--swagger` spellings still work.
+Or a whole CRUD suite as one `.pipes` file — one pipeline per line, chained
+with `capture`:
+
+```crust
+{"name": "Court"} | POST $BASE/api/buildings -H "authorization: Bearer $TOKEN" | assert (r => r.status === 201) | (r => r.json()) | capture BID (b => b.building.id)
+GET $BASE/api/buildings/$BID -H "authorization: Bearer $TOKEN" | expect 200
+test-pipes "tests/**/*.pipes" -s tests/seed.setup.ts -b -o reports/pipes.junit.xml
+```
+
+**Load testing that CI can gate on.** Thresholds are `assert` composition, so a
+failure names the predicate and exits non-zero. A run that measured nothing is
+tagged `empty` and refused — `{count: 0, p95: 0}` never passes a gate.
+
+```crust
+load 30s 200/s | parallel 50 | GET :3000/health | expect 200 | stats | assert (s => s.p95 < 250)
+load 10s 50/s, 5m 200/s | parallel 200 | GET $BASE/api/search | stats --every 15 | assert (s => !s.window || s.p99 < 800)
+load 60s 100/s | parallel 50 | GET :3000/health | stats --out load/last.json | assert (s => s.p95 < 250)
+```
+
+**A persistent mock server from a Swagger/OpenAPI spec.** Example-first
+responses, stateful CRUD persisted to sqlite or postgres so it survives a
+restart, seeded from a file, with spec-violating requests rejected as 422.
+
+```crust
+mock-server ./openapi.yaml -p 4010 --state ./.crust/mock.sqlite --seed seeds/dev.json --validate
+{"thing": {"name": "x"}} | POST :4010/api/things | expect 201 | (r => r.json()) | capture TID (t => t.thing.id)
+```
+
+Point it at a *real* API instead and it becomes a conformance audit — every
+request forwarded untouched, every spec violation recorded:
+
+```crust
+mock-server ./swagger.json -p 4747 --proxy http://localhost:3001 --report violations.ndjson
+```
+
+**SQL assertions, inline.** Rows stream one item each, so the database is just
+another stage. An empty result **fails** rather than passing quietly.
+
+```crust
+sql "SELECT count(*)::int AS c FROM buildings WHERE name = 'Court'" | assert (r => r.c === 1)
+sql "SELECT status FROM orders WHERE id = $1" $OID | assert (r => r.status === "paid")
+```
+
+**Pretty logs from every service at once.** `procs` merges stdout and stderr
+from any number of processes into one stream of `{proc, stream, line}` items —
+filter them as objects, then hand the text to `pino-pretty`. Local
+`node_modules/.bin` is on PATH the way `npm run` does it, so no global install.
+
+```crust
+procs({api: "bun run dev", worker: "bun run worker", db: "docker compose logs -f postgres"}) | (l => l.line) | pino-pretty --colorize
+procs({api: "bun run dev", worker: "bun run worker"}) | filter (l => l.stream === "stdout") | (l => l.line) | pino-pretty --colorize --minimumLevel warn
+```
+
+**Interactive log querying.** `logs` holds one live stream and lets you iterate
+on filters against its buffered past *and* live future — every query is ordinary
+pipeline grammar, so nothing new to learn.
+
+```crust
+logs procs({api: "bun run dev", worker: "bun run worker", db: "docker compose logs -f postgres"})
+logs docker logs -f my-app
+```
+
+At its prompt, each line runs over the buffer and then live until Ctrl-C:
+
+```text
+logs> filter (l => l.proc === "api") | (l => l.line) | grep -i timeout
+logs> json on
+logs> filter (e => e.level >= 50) | stats --every 5
+logs> search "connection reset"
+logs> buffer 50000
+```
 
 ## What crust is not
 

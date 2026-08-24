@@ -4,6 +4,23 @@ Notable changes to crust. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project is
 pre-1.0, so minor versions may carry breaking changes.
 
+## [0.2.2] — 2026-08-24
+
+### Changed
+
+- Both front pages now show what crust actually does: fixture tests, load
+  testing with a CI gate, a persistent mock server against an OpenAPI spec, SQL
+  assertions, `pino-pretty` streams merged from several processes, and
+  interactive log querying.
+
+### Fixed
+
+- `npm/README.md` — the page npmjs.org renders — was linted by nothing. It
+  shipped byte-for-byte from the release workflow, so a broken example there
+  passed every gate and reached every installer. It is now parsed against the
+  live grammar like the repo README, and its examples are bare pipeline lines so
+  that check is meaningful.
+
 ## [0.2.1] — 2026-08-24
 
 ### Changed
@@ -52,5 +69,6 @@ Releases and npm.
 - A `$ref` inside `output.schema` errors loudly instead of passing vacuously.
 - Trailing `#` comments parse on builtin lines, like shell stages.
 
+[0.2.2]: https://github.com/lariocpt/crust/releases/tag/v0.2.2
 [0.2.1]: https://github.com/lariocpt/crust/releases/tag/v0.2.1
 [0.2.0]: https://github.com/lariocpt/crust/releases/tag/v0.2.0

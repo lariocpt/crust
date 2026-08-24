@@ -94,7 +94,13 @@ describe("documented examples parse", () => {
   // finding examples, the test would otherwise pass by checking nothing.
   test.each([
     ["docs/USAGE.md", 100],
-    ["README.md", 12],
+    ["README.md", 20],
+    // The npm package page. It ships to npmjs.org byte-for-byte from release.yml
+    // and was linted by nothing at all — a broken example there passed every gate
+    // and reached every installer. Its examples are bare pipeline lines precisely
+    // so this check is meaningful: a `crust -c '…'` wrapper would parse as an
+    // opaque shell stage and the pipeline inside it would go unchecked.
+    ["npm/README.md", 12],
     // The shipped agent skills are documentation too — they are embedded in the
     // binary and are what coding agents read to drive crust.
     ["skills/crust-pipelines/SKILL.md", 8],
