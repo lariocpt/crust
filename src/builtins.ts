@@ -140,8 +140,15 @@ export const DOTENV_SPEC: FlagSpec = {
 
 const dotenvBuiltin: Builtin = async (rawArgs, ctx) => {
   const parts = splitArgs(rawArgs.trim());
-  if (parts[0] === "status" || parts[0] === "list") return dotenvStatus(ctx);
-  if (parts[0] === "clear") return dotenvClear(ctx);
+  if (parts[0] === "status" || parts[0] === "list" || parts[0] === "clear") {
+    // Subcommands take nothing. Trailing junk used to be silently ignored,
+    // which made `dotenv status --nonsense` look like it did something.
+    if (parts.length > 1) {
+      process.stderr.write(`dotenv: unexpected argument "${parts[1]}"\n${DOTENV_USAGE}`);
+      return 2;
+    }
+    return parts[0] === "clear" ? dotenvClear(ctx) : dotenvStatus(ctx);
+  }
 
   try {
     const { values, rest, help } = parseFlags(parts, DOTENV_SPEC);

@@ -58,6 +58,9 @@ export async function checkBuiltinLine(name: string, argv: string[]): Promise<st
   if (!check) return null;
 
   if (check.subcommands && argv.length > 0 && check.subcommands.includes(argv[0]!)) {
+    // Subcommands take nothing — the runtime rejects trailing junk, so --check
+    // must too or a doc'd `dotenv status --nonsense` would lint clean and fail live.
+    if (argv.length > 1) return `${name} ${argv[0]}: unexpected argument "${argv[1]}"`;
     return null;
   }
 

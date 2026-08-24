@@ -76,7 +76,13 @@ export async function runCli(args: string[]): Promise<number> {
   }
 
   if (report.results.length === 0) {
-    process.stderr.write(`test-fixture: no files matched ${target}\n`);
+    if (report.filesMatched === 0) {
+      process.stderr.write(`test-fixture: no files matched ${target}\n`);
+    } else {
+      process.stderr.write(
+        `test-fixture: matched ${report.filesMatched} file(s) under ${target}, but they yielded 0 fixtures (empty or gated-off modules)\n`,
+      );
+    }
     return 2;
   }
 

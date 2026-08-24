@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { expandEnv, splitArgs } from "../src/args";
+import { expandEnv, splitArgs, stripTrailingComment } from "../src/args";
 import { classify } from "../src/lexer";
 import { parse } from "../src/parser";
 import type { Context } from "../src/types";
@@ -62,6 +62,28 @@ describe("args helpers", () => {
   test("expandEnv handles $NAME, ${NAME}, and missing vars", () => {
     process.env.CRUST_TEST_VAR = "yes";
     expect(expandEnv("v=$CRUST_TEST_VAR/${CRUST_TEST_VAR}/$CRUST_NOPE!")).toBe("v=yes/yes/!");
+  });
+
+  test("stripTrailingComment cuts an unquoted word-start #", () => {
+    expect(stripTrailingComment("t.crust.ts -j8 # matrix run")).toBe("t.crust.ts -j8");
+    expect(stripTrailingComment("# whole line")).toBe("");
+    expect(stripTrailingComment("status   # note")).toBe("status");
+  });
+
+  test("stripTrailingComment keeps # inside words, quotes, and brackets", () => {
+    expect(stripTrailingComment("tail file#1.log")).toBe("tail file#1.log");
+    expect(stripTrailingComment('grep "#tag" x')).toBe('grep "#tag" x');
+    expect(stripTrailingComment("grep '#tag' x")).toBe("grep '#tag' x");
+    expect(stripTrailingComment("http://h/p#frag")).toBe("http://h/p#frag");
+    expect(stripTrailingComment('procs({p: "printf # not-a-comment"})')).toBe(
+      'procs({p: "printf # not-a-comment"})',
+    );
+    expect(stripTrailingComment("f([a, # inside], b)")).toBe("f([a, # inside], b)");
+  });
+
+  test("stripTrailingComment honors backslash escapes inside double quotes", () => {
+    // The \" does not close the quote, so the # stays quoted.
+    expect(stripTrailingComment('say "a \\" # b" tail')).toBe('say "a \\" # b" tail');
   });
 });
 

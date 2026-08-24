@@ -289,3 +289,38 @@ describe("--env-file", () => {
     expect(r.stderr).toContain("does not combine with --check");
   });
 });
+
+describe("trailing # comments on builtin lines", () => {
+  // Shell stages always tolerated `# comments` (sh strips them); builtin lines
+  // handed the "#" to parseFlags as an unexpected argument. Now both accept them.
+  test("-c builtin line with a trailing comment parses past the #", async () => {
+    const r = await runCli(["-c", "test-fixture /nonexistent-crust-e2e/*.crust.ts # matrix"]);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toContain("no files matched");
+    expect(r.stderr).not.toContain('"#"');
+  });
+
+  test("--check accepts a commented builtin line and still rejects bogus flags", async () => {
+    const ok = await runCli(["--check", "test-fixture t.crust.ts -j8 # concurrency matrix"]);
+    expect(ok.code).toBe(0);
+    const bad = await runCli(["--check", "test-fixture t.crust.ts --bogus x # comment"]);
+    expect(bad.code).toBe(1);
+    expect(bad.stderr).toContain("--bogus");
+  });
+
+  test("a quoted # is an argument, not a comment", async () => {
+    const r = await runCli(["--check", 'test-fixture "fixtures/t #1.crust.ts"']);
+    expect(r.code).toBe(0);
+  });
+
+  test("dotenv status: comment stripped, real junk rejected", async () => {
+    const ok = await runCli(["-c", "dotenv status # note"]);
+    expect(ok.code).toBe(0);
+    const bad = await runCli(["-c", "dotenv status --nonsense"]);
+    expect(bad.code).toBe(2);
+    expect(bad.stderr).toContain('unexpected argument "--nonsense"');
+    const check = await runCli(["--check", "dotenv status --nonsense"]);
+    expect(check.code).toBe(1);
+    expect(check.stderr).toContain('unexpected argument "--nonsense"');
+  });
+});
