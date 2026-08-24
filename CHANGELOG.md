@@ -4,7 +4,16 @@ Notable changes to crust. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project is
 pre-1.0, so minor versions may carry breaking changes.
 
-## [0.2.0] — unreleased
+## [0.2.1] — 2026-08-24
+
+### Changed
+
+- The documentation site is now linked from everything that ships. `README.md`,
+  `npm/README.md` and `docs/USAGE.md` carried no reference to it, and the
+  `homepage` field in both manifests pointed back at the README — so someone
+  arriving from npm had no path to the documentation.
+
+## [0.2.0] — 2026-08-24
 
 First public release. crust has been developed and dogfooded privately against a
 real 97-operation production API; this is the first version published to GitHub
@@ -43,4 +52,5 @@ Releases and npm.
 - A `$ref` inside `output.schema` errors loudly instead of passing vacuously.
 - Trailing `#` comments parse on builtin lines, like shell stages.
 
+[0.2.1]: https://github.com/lariocpt/crust/releases/tag/v0.2.1
 [0.2.0]: https://github.com/lariocpt/crust/releases/tag/v0.2.0
