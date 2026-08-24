@@ -5,8 +5,8 @@
 > project has since been repositioned as a pipeline-first devops toolkit
 > built on Bun — see `README.md` and `docs/USAGE.md` for current
 > positioning and behavior. Kept unedited because the pipeline architecture
-> decisions here still govern the code. References to `lariocpt`
-> name a defunct GitHub org.
+> decisions here still govern the code. Repository URLs in it are historical
+> and no longer resolve.
 
 ## Context
 

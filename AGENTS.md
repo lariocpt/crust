@@ -99,7 +99,7 @@ Details in `docs/INTERNAL.md`.
 
 ## Docs are part of the deliverable
 
-`docs/USAGE.md` and the website (`~/Projects/static-websites/crust-website`) must
+`docs/USAGE.md` and the website (the `crust-website` repo) must
 describe what the binary actually does — this project once advertised a load
 pipeline that didn't parse. If you add or change a capability, update both,
 and never document behavior you haven't run through `bun src/index.ts -c`.

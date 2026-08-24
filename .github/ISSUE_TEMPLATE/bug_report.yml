@@ -1,0 +1,34 @@
+name: Bug report
+description: Something crust did that it shouldn't, or didn't do that it should
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A line that reproduces the problem is worth more than a description of it.
+  - type: input
+    id: version
+    attributes:
+      label: crust version
+      description: Output of `crust -V`
+      placeholder: "0.2.0"
+    validations: { required: true }
+  - type: input
+    id: platform
+    attributes:
+      label: OS and architecture
+      placeholder: "Ubuntu 24.04, x64 — or macOS 15, arm64"
+    validations: { required: true }
+  - type: textarea
+    id: repro
+    attributes:
+      label: The line you ran
+      description: The exact crust line or script. `crust --check '<line>'` output helps too.
+      render: shell
+    validations: { required: true }
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected, and what happened instead
+      description: Include the exit code if it matters — a wrong exit code is a bug in its own right.
+    validations: { required: true }

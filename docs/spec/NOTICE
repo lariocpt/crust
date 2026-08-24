@@ -1,0 +1,13 @@
+Third-party content in this directory
+=====================================
+
+bash-reference.txt is the GNU Bash Reference Manual, included verbatim as the
+reference crust's shell-line semantics are compared against.
+
+  Copyright (C) 2000, 2001, 2002, 2007, 2008 Free Software Foundation, Inc.
+
+It is distributed under the GNU Free Documentation License, and is NOT covered
+by this project's MIT LICENSE. The GFDL text is included at the end of that
+file (Appendix C). Source: https://www.gnu.org/software/bash/manual/
+
+Everything else in this repository is MIT-licensed — see ../../LICENSE.
