@@ -71,6 +71,17 @@ beforeAll(() => {
       if (p === "/sitemap-meta.xml") {
         return xml(`<urlset><url><loc>${base}/about</loc></url></urlset>`);
       }
+      // Bare origin (no trailing slash) and slashed origin — the two spellings
+      // real sitemaps use for the home page, byte-different but URL-identical.
+      if (p === "/sitemap-root.xml") {
+        return xml(`<urlset><url><loc>${base}</loc></url></urlset>`);
+      }
+      if (p === "/sitemap-root-slash.xml") {
+        return xml(`<urlset><url><loc>${base}/</loc></url></urlset>`);
+      }
+      if (p === "/sitemap-login.xml") {
+        return xml(`<urlset><url><loc>${base}/login</loc></url></urlset>`);
+      }
       if (p === "/sitemap-index.xml") {
         return xml(
           `<sitemapindex><sitemap><loc>${base}/sitemap-good.xml</loc></sitemap></sitemapindex>`,
@@ -110,6 +121,14 @@ beforeAll(() => {
       }
       if (p === "/og.png") {
         return new Response("PNGFAKE", { headers: { "content-type": "image/png" } });
+      }
+      if (p === "/") {
+        return html(
+          `<head><title>Home</title><meta property="og:title" content="Home"></head><body>Welcome</body>`,
+        );
+      }
+      if (p === "/login") {
+        return html(`<head><title>Login</title></head><body>Log in</body>`);
       }
       return new Response("not found", { status: 404 });
     },
@@ -228,6 +247,64 @@ describe("verify-web-links CLI", () => {
       ]);
       expect(r2.code).toBe(1);
       expect(r2.stdout).toContain("meta-mismatch");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("meta fixture URLs match URL-normalized, not byte-for-byte", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "crust-vwl-canon-"));
+    try {
+      // Fixture written with a trailing slash; sitemap <loc> is the bare origin.
+      const slashFixture = join(dir, "home.slash.crust.ts");
+      await Bun.write(
+        slashFixture,
+        `export default { url: "${base}/", meta: { "og:title": "Home" } };\n`,
+      );
+      const r1 = await runCli([
+        "--site-map-url",
+        `${base}/sitemap-root.xml`,
+        "--fixtures",
+        slashFixture,
+      ]);
+      expect(r1.code).toBe(0);
+      expect(r1.stdout).not.toContain("meta-fixture-no-page");
+
+      // And the other way round: bare fixture, slashed <loc>.
+      const bareFixture = join(dir, "home.bare.crust.ts");
+      await Bun.write(
+        bareFixture,
+        `export default { url: "${base}", meta: { "og:title": "Home" } };\n`,
+      );
+      const r2 = await runCli([
+        "--site-map-url",
+        `${base}/sitemap-root-slash.xml`,
+        "--fixtures",
+        bareFixture,
+      ]);
+      expect(r2.code).toBe(0);
+      expect(r2.stdout).not.toContain("meta-fixture-no-page");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("non-root trailing slash is NOT collapsed — /login/ is not /login", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "crust-vwl-canon-ctrl-"));
+    try {
+      const fixture = join(dir, "login.crust.ts");
+      await Bun.write(
+        fixture,
+        `export default { url: "${base}/login/", meta: { "title": "Login" } };\n`,
+      );
+      const r = await runCli([
+        "--site-map-url",
+        `${base}/sitemap-login.xml`,
+        "--fixtures",
+        fixture,
+      ]);
+      expect(r.code).toBe(1);
+      expect(r.stdout).toContain("meta-fixture-no-page");
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

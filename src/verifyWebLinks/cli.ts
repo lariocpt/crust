@@ -101,6 +101,14 @@ export async function runCli(args: string[]): Promise<number> {
   return failures.length > 0 ? 1 : 0;
 }
 
+function canonicalUrl(u: string): string {
+  try {
+    return new URL(u).href;
+  } catch {
+    return u;
+  }
+}
+
 function collectFailures(
   results: Map<string, import("./types").CrawlResult>,
   fixtures: MetaFixture[],
@@ -172,8 +180,15 @@ function collectFailures(
     }
   }
 
+  // Fixture URLs are matched URL-normalized, not byte-for-byte: `new URL().href`
+  // adds the root path (`http://h:3000` → `http://h:3000/`), lowercases the
+  // host, and drops default ports — so a fixture written with a trailing slash
+  // matches a sitemap <loc> written without one. Non-root trailing slashes are
+  // NOT collapsed (/login/ and /login are different pages).
+  const byCanonical = new Map<string, import("./types").CrawlResult>();
+  for (const [key, r] of results) byCanonical.set(canonicalUrl(stripFragment(key)), r);
   for (const fx of fixtures) {
-    const r = results.get(stripFragment(fx.url));
+    const r = byCanonical.get(canonicalUrl(stripFragment(fx.url)));
     if (!r) {
       failures.push({
         kind: "meta-fixture-no-page",
