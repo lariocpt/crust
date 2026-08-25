@@ -4,6 +4,37 @@ Notable changes to crust. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project is
 pre-1.0, so minor versions may carry breaking changes.
 
+## [0.2.4] — 2026-08-25
+
+Both of these came out of dogfooding crust against a fresh codebase
+(bun-next-hono-starter): 104 fixtures and 15 pipes written from scratch, which
+is exactly the situation where a sharp edge shows up.
+
+### Fixed
+
+- **A zero-argument `output` matcher returning a boolean is now an error.**
+  Arity silently decides meaning in `output`: no arguments makes a function a
+  thunk supplying the EXPECTED value, one or more makes it a predicate over the
+  actual one. So `data: () => true` — the most natural way to write "any value
+  here" — became the literal `true` and was compared against the body. It
+  failed with a diff that explained nothing, and, if the body genuinely was
+  `true`, it PASSED for the wrong reason. That is a false pass, which this
+  project treats as the one unacceptable bug class. It now throws, names the
+  field, and gives both fixes: `(v) => ...` for a predicate, `true` for the
+  literal. Thunks returning real values are untouched.
+
+### Changed
+
+- **`DELETE` can open a pipeline.** It carries no body, so requiring
+  `{} | DELETE $URL` was ceremony with nothing behind it — `DELETE :3000/x`
+  now works like `GET`. `POST`/`PUT`/`PATCH` still cannot be sources, because
+  they genuinely have nothing to send until an item arrives, and the error says
+  so instead of the bare "needs upstream items".
+- `gen-fixtures` explains what `scopeParam` is for when a setup module omits
+  it, and tells you to export `null` when the API has no scoped resources.
+  It stays required: whether 403 cases are generated at all hangs on it, so it
+  should be a decision, not a default.
+
 ## [0.2.3] — 2026-08-25
 
 ### Changed

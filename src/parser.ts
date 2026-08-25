@@ -191,14 +191,20 @@ export function buildSource(kind: StageKind, ctx?: Context): Pipeline<unknown> {
         follow: kind.follow,
       }) as Pipeline<unknown>;
     case "http":
-      if (kind.verb === "GET") {
-        return sources.GET(
+      // GET and DELETE carry no body, so they have everything they need to open
+      // a pipeline. POST/PUT/PATCH have nothing to send until an item arrives.
+      if (kind.verb === "GET" || kind.verb === "DELETE") {
+        return sources.request(
+          kind.verb,
           normalizeUrl(expandEnv(kind.url)),
           httpOpts(kind.headers),
           kind.timeoutMs,
         ) as Pipeline<unknown>;
       }
-      throw new Error(`${kind.verb} cannot be a source — needs upstream items`);
+      throw new Error(
+        `${kind.verb} cannot be a source — it sends a body, so it needs an ` +
+          `upstream item to send. Pipe one in: {} | ${kind.verb} ${kind.url}`,
+      );
     case "shell":
       return shellSource(kind.text);
     case "grep":

@@ -22,7 +22,7 @@ file. `capture` chains requests; `sql` verifies the database inline:
 {"name": "Court", "floors": 3} | POST $BASE/api/buildings -H "authorization: Bearer $TOKEN" | assert (r => r.status === 201) | (r => r.json()) | capture BID (b => b.building.id)
 GET $BASE/api/buildings/$BID -H "authorization: Bearer $TOKEN" | expect 200
 sql "SELECT count(*)::int AS c FROM buildings WHERE name = 'Court'" | assert (r => r.c === 1)
-{} | DELETE $BASE/api/buildings/$BID -H "authorization: Bearer $TOKEN" | expect 204
+DELETE $BASE/api/buildings/$BID -H "authorization: Bearer $TOKEN" | expect 204
 GET $BASE/api/buildings/$BID -H "authorization: Bearer $TOKEN" | expect 404
 ```
 

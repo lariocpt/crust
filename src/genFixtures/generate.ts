@@ -781,7 +781,11 @@ export async function generateFixtures(opts: GenerateOpts): Promise<GenerateResu
   };
   if (!("scopeParam" in setupMod)) {
     throw new Error(
-      `gen-fixtures: setup module ${opts.setup} must export scopeParam (string | null)`,
+      `gen-fixtures: setup module ${opts.setup} must export scopeParam. It names ` +
+        "the path param that marks a resource as belonging to a scope, and " +
+        "decides whether 403 cases are generated at all — so it is deliberate, " +
+        "not defaulted. If this API has no scoped resources, export it as null: " +
+        "`export const scopeParam = null;`",
     );
   }
   const scope: ScopeConfig = {

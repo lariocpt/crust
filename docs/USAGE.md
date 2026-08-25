@@ -166,6 +166,9 @@ GET https://api.example.com/  # → Pipeline<Response> (single item)
 GET :3000/health                  # localhost shorthand
 GET localhost:3000/health         # bare host[:port] — http:// is assumed
 GET example.com/status            # …as is a bare hostname
+DELETE :3000/things/42            # bodyless verbs open a pipeline too
+# POST/PUT/PATCH cannot: they have nothing to send until an item arrives, so
+# they need one piped in — `{"name": "Court"} | POST :3000/things`.
 # Unknown flags are an ERROR, single-dash included: `-t 2s` is not `--timeout 2s`,
 # and a curl-style lowercase `-h` is not `-H`. Only -H and --timeout are accepted.
 read fixtures/*.json              # whole-file contents, ONE item per file
@@ -889,6 +892,23 @@ Supported `.env` syntax: `KEY=value`, `KEY="quoted value"`, `KEY='single quoted'
 
 Runs `.crust.ts` fixture files against an HTTP service. Each file is a normal TypeScript module that default-exports a fixture (or array of fixtures) with `input` and `output` objects. Fields can be values *or* zero-argument functions (resolved + awaited at run time). In `output`, a function with at least one parameter is treated as a predicate matcher over the actual value.
 
+**Arity decides meaning in `output`, so watch it.** A function taking no
+arguments is a *thunk* supplying the expected value; a function taking one or
+more is a *predicate* over the actual value:
+
+```ts
+output: {
+  data: (d) => d.id === 42,   // predicate — receives the body
+  data: () => ({ id: 42 }),   // thunk — the expected body IS { id: 42 }
+}
+```
+
+The trap is `data: () => true`, which reads like "any value here" but means "the
+body must equal `true`". That is now a hard error naming the fix rather than a
+silent mis-comparison — it used to fail with a diff that explained nothing, or,
+if the body really was `true`, pass for the wrong reason. Write `(v) => true`
+for a predicate, or `true` for the literal.
+
 **`output.schema`**: give it a JSON Schema and the response body must
 conform. Violations fail the fixture with per-field pointer paths
 (`output.data/items/0/name — minLength: …`). The schema must be inline —
@@ -997,7 +1017,7 @@ test-pipes --target 'tests/**/*.pipes' --out report.xml   # JUnit for CI
 {"name": "Court", "floors": 3} | POST $BASE/api/buildings -H "authorization: Bearer $TOKEN" | assert (r => r.status === 201) | (r => r.json()) | capture BID (b => b.building.id)
 GET $BASE/api/buildings/$BID -H "authorization: Bearer $TOKEN" | expect 200
 sql "SELECT count(*)::int AS c FROM buildings WHERE name = 'Court'" | assert (r => r.c === 1)
-{} | DELETE $BASE/api/buildings/$BID -H "authorization: Bearer $TOKEN" | expect 204
+DELETE $BASE/api/buildings/$BID -H "authorization: Bearer $TOKEN" | expect 204
 GET $BASE/api/buildings/$BID -H "authorization: Bearer $TOKEN" | expect 404
 ```
 
