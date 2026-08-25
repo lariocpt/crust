@@ -1,7 +1,8 @@
 # crust — agent guide
 
-A pipeline-first devops toolkit with an interactive REPL and `.crust` script
-runner, compiled to a single Bun binary. TypeScript, `bun:test`, Biome,
+The whole test stack — spec-driven mocks, generated fixtures, load gates, and
+log tooling — baked into one Bun binary with zero dependencies, driven from an
+interactive REPL or a `.crust` script runner. TypeScript, `bun:test`, Biome,
 husky + lint-staged.
 
 ## Architecture (read these before touching the pipeline)

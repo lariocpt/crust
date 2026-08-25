@@ -1,7 +1,7 @@
 {
   "name": "crust",
   "version": "0.2.0-dev",
-  "description": "Pipeline-first devops toolkit built on Bun: OpenAPI mock server, fixture & load testing, process orchestration, link checking \u2014 one stream model, one binary",
+  "description": "Mock it, test it, load it, tail it: the whole test stack baked into one binary. Spec-driven, generated, zero dependencies.",
   "license": "MIT",
   "author": "Lario Borges",
   "repository": {
@@ -18,6 +18,8 @@
     "mock-server",
     "openapi",
     "testing",
+    "fixtures",
+    "test-generation",
     "cli"
   ],
   "type": "module",

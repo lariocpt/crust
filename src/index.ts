@@ -17,7 +17,7 @@ interface UserCrustGlobals {
   prompt?: (cwd: string, git: string | null, ctx?: Context) => string;
 }
 
-const USAGE = `crust ${pkg.version} — pipeline-first devops toolkit on Bun
+const USAGE = `crust ${pkg.version} — the whole test stack, baked into one binary
 usage:
   crust                    start interactive REPL
   crust <file.crust>       run a script file and exit

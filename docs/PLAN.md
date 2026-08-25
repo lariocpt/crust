@@ -2,8 +2,8 @@
 
 > **Historical design document.** crust began life as the shell for a
 > Fedora-COSMIC-based distro concept, which is the framing below. The
-> project has since been repositioned as a pipeline-first devops toolkit
-> built on Bun — see `README.md` and `docs/USAGE.md` for current
+> project has since been repositioned as the whole test stack baked into one
+> Bun binary — see `README.md` and `docs/USAGE.md` for current
 > positioning and behavior. Kept unedited because the pipeline architecture
 > decisions here still govern the code. Repository URLs in it are historical
 > and no longer resolve.

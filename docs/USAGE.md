@@ -1,6 +1,6 @@
 # crust — usage
 
-A pipeline-first devops toolkit built on Bun. Shell commands, TypeScript lambdas, HTTP verbs, globs, and parallel workers all compose under one `|` / `.pipe()` model; the mock server, fixture runners, and load pipelines are builtins on that same stream. v0.2.
+Mock it, test it, load it, tail it: the whole test stack baked into one binary. Spec-driven, generated, zero dependencies — and it never reports a false pass. Shell commands, TypeScript lambdas, HTTP verbs, globs, and parallel workers all compose under one `|` / `.pipe()` model; the mock server, fixture runners, and load pipelines are builtins on that same stream. v0.2.
 
 **Mental model:** every crust line is an inline JavaScript global-scope script run in Bun. Whether it arrives from the REPL, `crust -c`, piped stdin, or a `.crust` file, the line runs in a Bun context where `Pipeline`, `range`, `GET`/`POST`, `parallel`, `$` (Bun.$), and anything you registered in `~/.config/crust/init.ts` are globals. Shell commands and TS lambdas are equal citizens; both are stages on the same pipeline.
 

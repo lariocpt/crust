@@ -4,6 +4,22 @@ Notable changes to crust. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project is
 pre-1.0, so minor versions may carry breaking changes.
 
+## [0.2.3] — 2026-08-25
+
+### Changed
+
+- crust described itself nine different ways across the surfaces people
+  actually read — both READMEs, both manifests, the `--help` banner,
+  `docs/USAGE.md`, `CONTRIBUTING.md`, `AGENTS.md`, and five more variants on
+  the website. Every one led with "a pipeline-first devops toolkit built on
+  Bun", which names the mechanism and not the problem solved. There is now one
+  tagline: mock it, test it, load it, tail it — the whole test stack baked into
+  one binary, spec-driven, generated, zero dependencies.
+- The false-pass invariant is stated on the front page instead of being
+  discoverable only by reading `AGENTS.md` or this changelog. It is the design
+  rule the whole tool is built around, so it gets its own line under the
+  tagline everywhere the tagline appears.
+
 ## [0.2.2] — 2026-08-24
 
 ### Changed

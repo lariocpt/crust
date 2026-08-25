@@ -1,9 +1,14 @@
 # crust
 
-A pipeline-first devops toolkit built on Bun, shipped as one binary: a
-spec-driven OpenAPI mock server, fixture and load-test runners, a process
-orchestrator, and a link checker — every tool composes on the same `|` stream,
-driven from an interactive REPL, a `crust -c` one-liner, or a `.crust` script.
+**Mock it, test it, load it, tail it: the whole test stack baked into one
+binary.** Spec-driven, generated, zero dependencies.
+
+Never reports a false pass — a run that measured nothing fails.
+
+An OpenAPI mock server, fixture suites generated from the spec, load gates CI
+can fail on, a process orchestrator, and a link checker — every tool composes
+on the same `|` stream, driven from an interactive REPL, a `crust -c`
+one-liner, or a `.crust` script.
 
 ```bash
 npm i -g @lariocpt/crust

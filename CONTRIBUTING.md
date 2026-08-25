@@ -1,7 +1,7 @@
 # Contributing to crust
 
-Thanks for taking a look. crust is a pipeline-first devops toolkit built on Bun,
-shipped as one compiled binary.
+Thanks for taking a look. crust is the whole test stack — mock, fixtures, load,
+logs — baked into one compiled Bun binary, with zero dependencies.
 
 ## Getting set up
 
