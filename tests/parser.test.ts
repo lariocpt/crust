@@ -72,6 +72,19 @@ describe("filter stage", () => {
     expect(() => parse("filter (x => x)")()).toThrow("filter cannot be a source");
   });
 
+  test("DELETE opens a pipeline; body verbs still cannot", () => {
+    // DELETE carries no body, so requiring `{} | DELETE $URL` was a papercut
+    // with no meaning behind it. POST/PUT/PATCH genuinely have nothing to send
+    // until an item arrives, and now say so.
+    expect(() => parse("DELETE :9/gone")()).not.toThrow();
+    expect(() => parse("GET :9/thing")()).not.toThrow();
+    for (const verb of ["POST", "PUT", "PATCH"]) {
+      expect(() => parse(`${verb} :9/thing`)()).toThrow(
+        `${verb} cannot be a source — it sends a body`,
+      );
+    }
+  });
+
   test("does not consume the parallel modifier", () => {
     expect(() => parse("range(0, 3) | parallel 2 | filter (x => x)")()).toThrow(
       "parallel 2: only applies to http, lambda, or function stages — got filter",

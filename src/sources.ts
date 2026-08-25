@@ -416,9 +416,21 @@ export async function* mergeAsync<T>(gens: AsyncGenerator<T>[]): AsyncGenerator<
 }
 
 export function GET(url: string, opts?: RequestInit, timeoutMs?: number): Pipeline<Response> {
+  return request("GET", url, opts, timeoutMs);
+}
+
+// Opens a pipeline with one request. Only verbs that carry NO body belong here:
+// a body-taking verb has nothing to send until an upstream item arrives, which
+// is why the parser rejects POST/PUT/PATCH in source position.
+export function request(
+  method: "GET" | "DELETE",
+  url: string,
+  opts?: RequestInit,
+  timeoutMs?: number,
+): Pipeline<Response> {
   return Pipeline.of(
     (async function* () {
-      const init: RequestInit = { ...opts, method: "GET" };
+      const init: RequestInit = { ...opts, method };
       // Minted at generator start (one request per source); a caller signal
       // wins, and only a MINTED signal's abort is ever labeled a timeout.
       let minted = false;
@@ -430,16 +442,16 @@ export function GET(url: string, opts?: RequestInit, timeoutMs?: number): Pipeli
         const res = await fetch(url, init);
         // The budget keeps governing the body stream downstream — label
         // body-phase timeouts too instead of a bare "operation timed out".
-        yield minted ? labelBodyTimeout(res, "GET", url, timeoutMs!) : res;
+        yield minted ? labelBodyTimeout(res, method, url, timeoutMs!) : res;
       } catch (err) {
         if (minted && isTimeoutError(err)) {
-          throw new HttpTimeoutError("GET", url, timeoutMs!);
+          throw new HttpTimeoutError(method, url, timeoutMs!);
         }
         // Same labelling as the transform path: name the request that failed.
         const hostHint = url.startsWith("/")
           ? ' — no host in the URL (did an env var expand to ""? use `:3000/path` for localhost)'
           : "";
-        throw new Error(`GET ${url}: ${(err as Error).message}${hostHint}`);
+        throw new Error(`${method} ${url}: ${(err as Error).message}${hostHint}`);
       }
     })(),
   );

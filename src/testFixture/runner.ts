@@ -263,10 +263,33 @@ async function runOne(
 // ctx-consumer and gets called with the setup context; in OUTPUT it is a
 // matcher predicate and must be left alone for diffAsync (which calls it with
 // (actual, ctx)). 0-arg functions resolve on both sides, as before.
-async function resolveDeep(value: unknown, ctx: unknown, callUnary: boolean): Promise<unknown> {
+async function resolveDeep(
+  value: unknown,
+  ctx: unknown,
+  callUnary: boolean,
+  path = callUnary ? "input" : "output",
+): Promise<unknown> {
   if (typeof value === "function") {
     if ((value as Function).length === 0) {
-      return await (value as () => unknown)();
+      const resolved = await (value as () => unknown)();
+      // In OUTPUT, arity silently decides meaning: 0 args is a thunk supplying
+      // the EXPECTED value, >=1 is a predicate over the actual one. `() => true`
+      // is the most natural way to write "any value here" and it means the
+      // opposite — the literal `true`, compared against the body. It then FAILS
+      // for a reason the diff does not explain, or worse PASSES when the body
+      // really is `true`. A boolean is never a plausible expected value for a
+      // status or header, and as a body it can be written literally, so treat
+      // this as the authoring slip it almost always is.
+      if (!callUnary && typeof resolved === "boolean") {
+        throw new Error(
+          `${path}: a zero-argument function returned ${resolved}. In output a ` +
+            "0-arg function supplies the EXPECTED value, so this compares " +
+            `${resolved} against the actual one. Write a predicate by giving it ` +
+            `a parameter — (v) => ... — or, if you really expect the literal, ` +
+            `write ${resolved} directly.`,
+        );
+      }
+      return resolved;
     }
     if (callUnary && (value as Function).length === 1) {
       return await (value as (c: unknown) => unknown)(ctx);
@@ -276,12 +299,14 @@ async function resolveDeep(value: unknown, ctx: unknown, callUnary: boolean): Pr
   if (value === null || typeof value !== "object") return value;
   if (Array.isArray(value)) {
     const out: unknown[] = [];
-    for (const v of value) out.push(await resolveDeep(v, ctx, callUnary));
+    for (const [i, v] of value.entries()) {
+      out.push(await resolveDeep(v, ctx, callUnary, `${path}[${i}]`));
+    }
     return out;
   }
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(value)) {
-    out[k] = await resolveDeep(v, ctx, callUnary);
+    out[k] = await resolveDeep(v, ctx, callUnary, `${path}.${k}`);
   }
   return out;
 }

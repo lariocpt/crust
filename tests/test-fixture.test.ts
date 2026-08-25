@@ -130,6 +130,48 @@ describe("test-fixture runner", () => {
     expect(report.results[1]!.failures[0]!.path).toBe("output.data");
   });
 
+  test("a 0-arg output matcher returning a boolean is an ERROR, not a literal", async () => {
+    mode = "ok";
+    // Arity silently decides meaning in output: 0 args supplies the expected
+    // value, >=1 is a predicate. `() => true` reads as "any value" and used to
+    // become the literal `true` compared against the body — failing for a
+    // reason the diff never explained, or passing when the body really was
+    // `true`. It is now named as the authoring slip it is.
+    const file = await writeFixture(
+      "zero-arity-matcher.crust.ts",
+      `export default [
+        {
+          name: "0-arg matcher returning true",
+          input: { url: "${baseUrl}/users/42" },
+          output: { status: 200, data: async () => true },
+        },
+      ];\n`,
+    );
+    const report = await runFixtures({ target: file, threads: 1 });
+    expect(report.totals.pass).toBe(0);
+    expect(report.totals.error).toBe(1);
+    const msg = report.results[0]!.error!.message;
+    expect(msg).toContain("output.data");
+    expect(msg).toContain("zero-argument function returned true");
+    expect(msg).toContain("(v) => ...");
+  });
+
+  test("a 0-arg output thunk supplying a real value still works", async () => {
+    mode = "ok";
+    const file = await writeFixture(
+      "zero-arity-thunk.crust.ts",
+      `export default [
+        {
+          name: "0-arg thunk supplies the expected object",
+          input: { url: "${baseUrl}/users/42" },
+          output: { status: 200, data: () => ({ id: 42 }) },
+        },
+      ];\n`,
+    );
+    const report = await runFixtures({ target: file, threads: 1 });
+    expect(report.totals.pass).toBe(1);
+  });
+
   test("input as a function receives the setup context", async () => {
     mode = "ok";
     const file = await writeFixture(
