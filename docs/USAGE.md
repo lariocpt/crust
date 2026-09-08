@@ -1183,6 +1183,8 @@ missing `scopeParam`), `2` bad args.
 
 Boots a `Bun.serve` instance that mocks every operation in an OpenAPI 3.x spec — useful for frontend dev before the backend exists, demoing a pipeline, or seeding fixture tests against an upstream you don't want to spin up.
 
+OpenAPI 3.1 made `paths` optional, so a document describing only `webhooks` (or only reusable `components`) loads and mocks **0 routes** — the boot line names the webhook count, because webhooks are callbacks the API *sends* you, not endpoints to serve. A document with no `paths`, no `webhooks` and no `components` is still a load error.
+
 ```bash
 mock-server --swagger ./openapi.yaml --port 4000
 mock-server --swagger https://petstore3.swagger.io/api/v3/openapi.json --port 4747

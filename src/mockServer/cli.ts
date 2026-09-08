@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import { FlagError, type FlagSpec, parseFlags } from "../args";
 import { loadSpec } from "./loadSpec";
+import { countWebhookOperations } from "./router";
 import { startServer } from "./server";
 import { normalizeStateUrl, stateDialect } from "./state";
 
@@ -172,7 +173,16 @@ export async function runCli(args: string[]): Promise<number> {
     process.stderr.write(`mock-server: ${(err as Error).message}\n`);
     return 1;
   }
-  process.stdout.write(`mock-server: ${server.routes.length} route(s) from ${loaded.origin}\n`);
+  // A 3.1 webhooks-only document legitimately mocks nothing. Say so, or "0 route(s)" reads as a
+  // spec crust failed to understand — the two are indistinguishable from the outside otherwise.
+  const hooks = countWebhookOperations(loaded.spec);
+  const hookNote =
+    server.routes.length === 0 && hooks > 0
+      ? ` (${hooks} webhook operation(s) not mocked — webhooks are callbacks you receive, not endpoints)`
+      : "";
+  process.stdout.write(
+    `mock-server: ${server.routes.length} route(s) from ${loaded.origin}${hookNote}\n`,
+  );
   const modes = `${stateful ? " (stateful)" : ""}${validate && proxy === undefined ? " (validate)" : ""}${strict ? " (strict)" : ""}${
     proxy !== undefined ? ` (proxy -> ${proxy})` : ""
   }${state !== undefined ? ` (state: ${stateDialect(state)})` : ""}${

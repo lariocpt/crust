@@ -99,3 +99,24 @@ function extractParams(route: Route, m: RegExpExecArray): Record<string, string>
   }
   return params;
 }
+
+/**
+ * How many operations a 3.1 document describes under `webhooks`.
+ *
+ * Webhooks are callbacks the API SENDS to you; they are not endpoints it serves, so they are
+ * deliberately not routed. A webhooks-only spec therefore mocks 0 routes, which is correct but
+ * indistinguishable — from the outside — from a spec crust failed to parse. mock-server reports
+ * this count so the operator can tell those two apart.
+ */
+export function countWebhookOperations(spec: unknown): number {
+  const hooks = (spec as { webhooks?: unknown } | null | undefined)?.webhooks;
+  if (!hooks || typeof hooks !== "object" || Array.isArray(hooks)) return 0;
+  let n = 0;
+  for (const item of Object.values(hooks as Record<string, unknown>)) {
+    if (!item || typeof item !== "object") continue;
+    for (const method of Object.keys(item as Record<string, unknown>)) {
+      if (HTTP_METHODS.has(method.toLowerCase())) n++;
+    }
+  }
+  return n;
+}

@@ -63,8 +63,18 @@ export async function loadSpec(source: string): Promise<{ spec: OpenApiSpec; ori
   // Normalise Swagger 2.0 documents into the OpenAPI 3.x shape the mock server
   // consumes (so a Flasgger/Swagger-2.0 spec works without manual conversion).
   if (isSwagger2(spec)) swagger2to3(spec);
+  // OpenAPI 3.1 made `paths` OPTIONAL: a document describing only `webhooks` (and/or reusable
+  // `components`) is valid and has nothing to serve. Rejecting it outright turned a conformant
+  // spec into a load failure, so accept it with an empty paths object and let the caller report
+  // "0 route(s)" plus the webhook count. A document with none of the three is still an error —
+  // that is a spec we genuinely cannot use, not one that legitimately mocks nothing.
   if (!spec.paths || typeof spec.paths !== "object") {
-    throw new Error(`spec at ${source} has no 'paths' object`);
+    const hasWebhooks = !!(spec as { webhooks?: unknown }).webhooks;
+    const hasComponents = !!(spec as { components?: unknown }).components;
+    if (!hasWebhooks && !hasComponents) {
+      throw new Error(`spec at ${source} has no 'paths' object`);
+    }
+    spec.paths = {};
   }
   return { spec, origin: source };
 }
