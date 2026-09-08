@@ -4,7 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadSpec, type OpenApiSpec } from "../src/mockServer/loadSpec";
 import { pickResponse, synthesizeBody } from "../src/mockServer/mockResponse";
-import { buildRoutes, countWebhookOperations, matchRoute } from "../src/mockServer/router";
+import {
+  buildRoutes,
+  countColonParamPaths,
+  countWebhookOperations,
+  matchRoute,
+} from "../src/mockServer/router";
 import { startServer } from "../src/mockServer/server";
 import { validateSchema } from "../src/mockServer/validateRequest";
 
@@ -872,5 +877,48 @@ describe("numeric bounds in synthesised bodies", () => {
     const schema = { type: "object", properties: { x: { type: "integer" } } };
     const body = synthesizeBody({ schema } as never, wrap(schema)) as Record<string, number>;
     expect(body.x).toBe(0);
+  });
+});
+
+// OpenAPI templates path parameters as `{id}`. Express, Zuplo and several codegen tools write
+// `:id`, and a spec that does is non-conformant — but crust matched those segments LITERALLY and
+// said nothing, so the mock served `GET /v1/characters/:characterId` as a literal path no client
+// will ever request, and the operator got a route count that looked healthy. 7 of the 17 usable
+// specs in the react corpus are written this way (21 paths), so it is a real-world shape, not a
+// curiosity. crust still will not guess — rewriting someone's spec is worse — but it must say so.
+describe("Express-style :param paths", () => {
+  const spec = {
+    openapi: "3.1.0",
+    info: { title: "c", version: "1" },
+    paths: {
+      "/v1/characters": { get: { responses: { "200": { description: "ok" } } } },
+      "/v1/characters/:characterId": { get: { responses: { "200": { description: "ok" } } } },
+      "/v1/locations/:locationId": { get: { responses: { "200": { description: "ok" } } } },
+      "/v1/proper/{properId}": { get: { responses: { "200": { description: "ok" } } } },
+    },
+  } as unknown as OpenApiSpec;
+
+  test("counts the paths that look mis-templated", () => {
+    expect(countColonParamPaths(spec)).toBe(2);
+  });
+
+  test("a spec using only OpenAPI templating counts zero (control)", () => {
+    const ok = {
+      openapi: "3.1.0",
+      info: { title: "k", version: "1" },
+      paths: { "/a/{id}": { get: { responses: { "200": { description: "ok" } } } } },
+    } as unknown as OpenApiSpec;
+    expect(countColonParamPaths(ok)).toBe(0);
+  });
+
+  test("the colon segment is still routed literally — crust does not rewrite the spec", () => {
+    const routes = buildRoutes(spec);
+    const colon = routes.find((r) => r.template === "/v1/characters/:characterId");
+    expect(colon).toBeDefined();
+    // literal, so a real id must NOT match it
+    expect(matchRoute(routes, "GET", "/v1/characters/42").matched).toBeNull();
+    expect(matchRoute(routes, "GET", "/v1/characters/:characterId").matched).toBeDefined();
+    // and the properly-templated sibling still works
+    expect(matchRoute(routes, "GET", "/v1/proper/42").matched).toBeDefined();
   });
 });

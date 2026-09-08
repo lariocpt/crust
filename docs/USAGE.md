@@ -1202,6 +1202,8 @@ Response bodies are picked example-first, schema-fallback:
 
 Status code selection within a matched operation: `200` → `201` → first `2xx` → `default` → first defined. `application/json` content is preferred; otherwise the first content type. Routes with literal segments take precedence over `{param}` siblings, so `GET /pets/mine` wins over `GET /pets/{id}`.
 
+A path templated the Express way — `/things/:id` rather than OpenAPI's `/things/{id}` — is matched **literally**, because rewriting someone's spec is a worse failure than the one it fixes. mock-server names the count on stderr at boot, since the route total would otherwise look healthy while those routes are unreachable by any real client.
+
 Unmatched paths return `404`; matched paths with the wrong method return `405`. Per request, one line goes to stderr:
 
 ```text
