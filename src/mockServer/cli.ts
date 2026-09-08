@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { FlagError, type FlagSpec, parseFlags } from "../args";
 import { loadSpec } from "./loadSpec";
-import { countWebhookOperations } from "./router";
+import { countColonParamPaths, countWebhookOperations } from "./router";
 import { startServer } from "./server";
 import { normalizeStateUrl, stateDialect } from "./state";
 
@@ -183,6 +183,16 @@ export async function runCli(args: string[]): Promise<number> {
   process.stdout.write(
     `mock-server: ${server.routes.length} route(s) from ${loaded.origin}${hookNote}\n`,
   );
+  // A path templated the Express way (`/things/:id`) is matched LITERALLY — see
+  // countColonParamPaths. The route count above would otherwise look healthy while those routes
+  // are unreachable by any real client: the quiet kind of wrong this tool exists not to be.
+  const colon = countColonParamPaths(loaded.spec);
+  if (colon > 0) {
+    process.stderr.write(
+      `mock-server: ${colon} path(s) use Express-style ':param' — OpenAPI templates parameters as ` +
+        `'{param}', so these are matched LITERALLY and will not match a real value\n`,
+    );
+  }
   const modes = `${stateful ? " (stateful)" : ""}${validate && proxy === undefined ? " (validate)" : ""}${strict ? " (strict)" : ""}${
     proxy !== undefined ? ` (proxy -> ${proxy})` : ""
   }${state !== undefined ? ` (state: ${stateDialect(state)})` : ""}${

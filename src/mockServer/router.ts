@@ -120,3 +120,24 @@ export function countWebhookOperations(spec: unknown): number {
   }
   return n;
 }
+
+/**
+ * How many paths template their parameters the Express way (`/things/:id`) instead of the OpenAPI
+ * way (`/things/{id}`).
+ *
+ * Such a path is not conformant, and crust deliberately does NOT rewrite it — silently reinterpreting
+ * someone's spec is a worse failure than the one it fixes, and a literal `:id` segment is legal.
+ * But matched literally it produces a route no client will ever request, while the boot line still
+ * reports a healthy-looking count. 7 of the 17 usable specs in the react corpus are written this
+ * way (21 paths, all from the Zuplo ecosystem), so mock-server names the number and lets the
+ * operator decide.
+ */
+export function countColonParamPaths(spec: unknown): number {
+  const paths = (spec as { paths?: unknown } | null | undefined)?.paths;
+  if (!paths || typeof paths !== "object" || Array.isArray(paths)) return 0;
+  let n = 0;
+  for (const template of Object.keys(paths as Record<string, unknown>)) {
+    if (template.split("/").some((seg) => /^:[A-Za-z_][A-Za-z0-9_]*$/.test(seg))) n++;
+  }
+  return n;
+}
