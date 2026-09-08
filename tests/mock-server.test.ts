@@ -769,3 +769,108 @@ describe("openapi 3.1 webhooks-only documents", () => {
     expect(countWebhookOperations(spec)).toBe(0);
   });
 });
+
+// A response object may itself be a $ref into components.responses — extremely common in
+// hand-written specs (95 of tonkeeper/ton-console's 99 operations). pickMedia read `res.content`
+// directly, which is undefined on a $ref node, so the mock answered 200 with a `null` body for
+// every one of them while the spec documented a required object.
+describe("$ref'd response objects", () => {
+  const refSpec = {
+    openapi: "3.1.0",
+    info: { title: "r", version: "1" },
+    paths: { "/keys": { get: { responses: { "200": { $ref: "#/components/responses/Keys" } } } } },
+    components: {
+      responses: {
+        Keys: {
+          description: "the keys",
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["keys"],
+                properties: { keys: { type: "array", items: { type: "string" } } },
+              },
+            },
+          },
+        },
+      },
+    },
+  } as unknown as OpenApiSpec;
+
+  test("the documented body is synthesised, not null", () => {
+    const route = buildRoutes(refSpec)[0]!;
+    const picked = pickResponse(route.operation, refSpec);
+    expect(picked.media).not.toBeNull();
+    const body = synthesizeBody(picked.media, refSpec) as Record<string, unknown>;
+    expect(body).not.toBeNull();
+    expect(Array.isArray(body.keys)).toBe(true);
+  });
+
+  test("and it self-conforms: the validator accepts what the mock produced", () => {
+    const route = buildRoutes(refSpec)[0]!;
+    const picked = pickResponse(route.operation, refSpec);
+    const schema = (picked.media as { schema?: unknown })?.schema;
+    const body = synthesizeBody(picked.media, refSpec);
+    expect(validateSchema(body, schema, refSpec, "")).toEqual([]);
+  });
+
+  test("an inline response object still works (control)", () => {
+    const inline = {
+      openapi: "3.0.0",
+      info: { title: "i", version: "1" },
+      paths: {
+        "/x": {
+          get: {
+            responses: {
+              "200": {
+                description: "ok",
+                content: { "application/json": { schema: { type: "object" } } },
+              },
+            },
+          },
+        },
+      },
+    } as unknown as OpenApiSpec;
+    const route = buildRoutes(inline)[0]!;
+    expect(pickResponse(route.operation, inline).media).not.toBeNull();
+  });
+});
+
+// The synthesiser answered 0 for every integer/number regardless of `minimum`, so a schema saying
+// `{type:"integer", minimum:1}` got a body its own validator rejects ("0 < minimum 1"). 16 of
+// openconcho's 41 checkable operations failed this way — page/size pagination fields. genFixtures'
+// validValue already honoured minimum; the mock did not.
+describe("numeric bounds in synthesised bodies", () => {
+  const wrap = (schema: unknown) =>
+    ({ openapi: "3.1.0", info: { title: "n", version: "1" }, paths: {} }) as unknown as OpenApiSpec;
+
+  test("minimum is honoured", () => {
+    const schema = { type: "object", properties: { page: { type: "integer", minimum: 1 } } };
+    const spec = wrap(schema);
+    const body = synthesizeBody({ schema } as never, spec) as Record<string, number>;
+    expect(body.page).toBeGreaterThanOrEqual(1);
+    expect(validateSchema(body, schema, spec, "")).toEqual([]);
+  });
+
+  test("exclusiveMinimum (3.1 numeric form) is honoured", () => {
+    const schema = { type: "object", properties: { n: { type: "integer", exclusiveMinimum: 5 } } };
+    const spec = wrap(schema);
+    const body = synthesizeBody({ schema } as never, spec) as Record<string, number>;
+    expect(body.n).toBeGreaterThan(5);
+    expect(validateSchema(body, schema, spec, "")).toEqual([]);
+  });
+
+  test("a negative maximum is honoured (0 is too big)", () => {
+    const schema = { type: "object", properties: { t: { type: "integer", maximum: -3 } } };
+    const spec = wrap(schema);
+    const body = synthesizeBody({ schema } as never, spec) as Record<string, number>;
+    expect(body.t).toBeLessThanOrEqual(-3);
+    expect(validateSchema(body, schema, spec, "")).toEqual([]);
+  });
+
+  test("an unconstrained number is still 0 (control)", () => {
+    const schema = { type: "object", properties: { x: { type: "integer" } } };
+    const body = synthesizeBody({ schema } as never, wrap(schema)) as Record<string, number>;
+    expect(body.x).toBe(0);
+  });
+});

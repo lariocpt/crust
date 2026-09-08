@@ -58,7 +58,7 @@ export function computeEnvelopes(routes: Route[], spec: OpenApiSpec): Map<string
     let create: string | null = null;
     let req: string | null = null;
     if (post) {
-      create = detectEnvelopeKey(synthesizeBody(pickResponse(post.operation).media, spec));
+      create = detectEnvelopeKey(synthesizeBody(pickResponse(post.operation, spec).media, spec));
       // A request envelope is only trusted when it AGREES with the response
       // side: a lone object-valued request prop that isn't the response's
       // envelope key (e.g. an `owner: {...}` sub-object on a flat create) is
@@ -71,7 +71,7 @@ export function computeEnvelopes(routes: Route[], spec: OpenApiSpec): Map<string
     let item = create;
     const itemGet = itemGets.get(key);
     if (itemGet) {
-      const body = synthesizeBody(pickResponse(itemGet.operation).media, spec);
+      const body = synthesizeBody(pickResponse(itemGet.operation, spec).media, spec);
       if (isPlainObject(body)) item = detectEnvelopeKey(body);
     }
     if (create !== null || item !== null || req !== null) out.set(key, { create, item, req });

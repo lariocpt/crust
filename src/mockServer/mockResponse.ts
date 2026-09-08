@@ -6,7 +6,12 @@ export interface PickedResponse {
   media: MediaTypeObject | null;
 }
 
-export function pickResponse(op: OperationObject): PickedResponse {
+/**
+ * `spec` is optional only for backward compatibility; pass it whenever you have one, or a
+ * response written as `{ $ref: "#/components/responses/Foo" }` cannot be resolved and the
+ * operation silently mocks a null body.
+ */
+export function pickResponse(op: OperationObject, spec?: OpenApiSpec): PickedResponse {
   const responses = op.responses ?? {};
   const keys = Object.keys(responses);
   const order: string[] = ["200", "201"];
@@ -19,7 +24,7 @@ export function pickResponse(op: OperationObject): PickedResponse {
   for (const k of order) {
     const r = responses[k];
     if (!r) continue;
-    return { status: parseStatus(k), media: pickMedia(r) };
+    return { status: parseStatus(k), media: pickMedia(r, spec) };
   }
   return { status: 200, media: null };
 }
@@ -30,8 +35,21 @@ function parseStatus(key: string): number {
   return Number.isFinite(n) ? n : 200;
 }
 
-function pickMedia(res: ResponseObject): MediaTypeObject | null {
-  const content = res.content;
+function pickMedia(res: ResponseObject, spec?: OpenApiSpec): MediaTypeObject | null {
+  // A RESPONSE may itself be a $ref into components.responses — distinct from a $ref'd schema,
+  // and the common style in hand-written specs (95 of ton-console's 99 operations). Reading
+  // `.content` off the unresolved node yields undefined, so the operation answered 200 with a
+  // null body while its spec documented a required object.
+  let node = res as ResponseObject & { $ref?: unknown };
+  const seen = new Set<string>();
+  while (typeof node.$ref === "string" && spec) {
+    if (seen.has(node.$ref)) return null; // cyclic — no media rather than a hang
+    seen.add(node.$ref);
+    const target = resolveRef(node.$ref, spec);
+    if (!target || typeof target !== "object") return null;
+    node = target as ResponseObject & { $ref?: unknown };
+  }
+  const content = node.content;
   if (!content) return null;
   if (content["application/json"]) return content["application/json"]!;
   for (const v of Object.values(content)) if (v) return v;
@@ -103,7 +121,7 @@ function generateFromSchema(schema: unknown, spec: OpenApiSpec, visited: Set<str
       return stringDefault(s.format as string | undefined);
     case "integer":
     case "number":
-      return 0;
+      return numberDefault(s, type === "integer");
     case "boolean":
       return false;
     case "array": {
@@ -125,6 +143,29 @@ function generateFromSchema(schema: unknown, spec: OpenApiSpec, visited: Set<str
     default:
       return null;
   }
+}
+
+/**
+ * A number inside the schema's own bounds. 0 is the friendly default, but a schema saying
+ * `minimum: 1` (every paginated `page`/`size` field) made 0 a body our own validator rejects.
+ * Handles both `exclusiveMinimum` spellings: 3.1's numeric bound and 3.0's boolean modifier on
+ * `minimum`. Integers step by 1, plain numbers by 1 as well — the value only has to be legal,
+ * not interesting.
+ */
+function numberDefault(s: Record<string, unknown>, isInt = true): number {
+  const num = (v: unknown): number | null =>
+    typeof v === "number" && Number.isFinite(v) ? v : null;
+  let lo = num(s.minimum);
+  let hi = num(s.maximum);
+  const exMin = num(s.exclusiveMinimum);
+  const exMax = num(s.exclusiveMaximum);
+  if (exMin !== null) lo = exMin + (isInt ? 1 : Number.EPSILON);
+  else if (s.exclusiveMinimum === true && lo !== null) lo += isInt ? 1 : Number.EPSILON;
+  if (exMax !== null) hi = exMax - (isInt ? 1 : Number.EPSILON);
+  else if (s.exclusiveMaximum === true && hi !== null) hi -= isInt ? 1 : Number.EPSILON;
+  if (lo !== null && lo > 0) return lo;
+  if (hi !== null && hi < 0) return hi;
+  return 0;
 }
 
 /** `normaliseType`'s single-value counterpart: the type to synthesise a value for. */
