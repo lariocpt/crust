@@ -180,7 +180,7 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
 
     if (!isItemPath) {
       if (route.method === "POST") {
-        const picked = pickResponse(route.operation);
+        const picked = pickResponse(route.operation, opts.spec);
         const synth = synthesizeBody(picked.media, opts.spec);
         let base: Record<string, unknown> = {};
         if (env.create) {
@@ -200,7 +200,7 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
       if (route.method === "GET") {
         if (!(await backend.has(collectionKey))) return null;
         const items = await backend.list(collectionKey);
-        const picked = pickResponse(route.operation);
+        const picked = pickResponse(route.operation, opts.spec);
         const synth = synthesizeBody(picked.media, opts.spec);
         // Mirror the spec's documented collection shape: a bare array responds
         // as-is; an object with a single array-valued property (e.g.
@@ -496,7 +496,7 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
             if (stateful) {
               response = stateful;
             } else {
-              const picked = pickResponse(lookup.matched.operation);
+              const picked = pickResponse(lookup.matched.operation, opts.spec);
               const body = synthesizeBody(picked.media, opts.spec);
               if (picked.status === 204 || body === undefined) {
                 response = new Response(null, { status: picked.status });

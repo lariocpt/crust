@@ -1196,9 +1196,9 @@ Flags: `--swagger <url-or-path>` (required; URL or local `.json`/`.yaml`/`.yml`;
 
 Response bodies are picked example-first, schema-fallback:
 
-1. `content.<media>.example` wins outright.
+1. `content.<media>.example` wins outright. A response written as `{ $ref: "#/components/responses/Foo" }` is resolved first — before this, such an operation mocked a `null` body.
 2. Otherwise the first entry in `content.<media>.examples`.
-3. Otherwise the schema is walked: `string` → `"string"` (or a format-aware default for `email`, `date-time`, `uuid`, `uri`), `integer`/`number` → `0`, `boolean` → `false`, `array` → `[item]`, `object` → every property generated, `enum` → first value, `const` → that value, schema-level `examples` → first entry, `allOf` merged, `oneOf`/`anyOf` → first branch. The 3.1 union form `type: ["string","null"]` synthesises the first **non-`null`** member, so a nullable field still gets representative data — and, for a union that does not include `null`, a body `--validate` would otherwise have rejected. Local `$ref`s into `components.schemas.*` are resolved (cyclic refs return `null`).
+3. Otherwise the schema is walked: `string` → `"string"` (or a format-aware default for `email`, `date-time`, `uuid`, `uri`), `integer`/`number` → `0` **or the nearest value the schema's own `minimum`/`maximum` allows** (both `exclusiveMinimum`/`exclusiveMaximum` spellings honoured), so a `{"minimum": 1}` field is never mocked as `0`, `boolean` → `false`, `array` → `[item]`, `object` → every property generated, `enum` → first value, `const` → that value, schema-level `examples` → first entry, `allOf` merged, `oneOf`/`anyOf` → first branch. The 3.1 union form `type: ["string","null"]` synthesises the first **non-`null`** member, so a nullable field still gets representative data — and, for a union that does not include `null`, a body `--validate` would otherwise have rejected. Local `$ref`s into `components.schemas.*` are resolved (cyclic refs return `null`).
 
 Status code selection within a matched operation: `200` → `201` → first `2xx` → `default` → first defined. `application/json` content is preferred; otherwise the first content type. Routes with literal segments take precedence over `{param}` siblings, so `GET /pets/mine` wins over `GET /pets/{id}`.
 
