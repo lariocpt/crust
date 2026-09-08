@@ -1,4 +1,5 @@
 import type { MediaTypeObject, OpenApiSpec, OperationObject, ResponseObject } from "./loadSpec";
+import { normaliseType } from "./schemaTypes";
 
 export interface PickedResponse {
   status: number;
@@ -64,6 +65,12 @@ function generateFromSchema(schema: unknown, spec: OpenApiSpec, visited: Set<str
   }
 
   if ("example" in s && s.example !== undefined) return s.example;
+  // 3.1 replaced the singular `example` with an `examples` ARRAY on the schema itself (distinct
+  // from the media-type `examples` map handled in synthesizeBody).
+  if (Array.isArray(s.examples) && s.examples.length > 0) return s.examples[0];
+  // JSON Schema `const` pins the only legal value; synthesising anything else is a body our own
+  // validator rejects.
+  if ("const" in s && s.const !== undefined) return s.const;
 
   if (Array.isArray(s.enum) && s.enum.length > 0) return s.enum[0];
 
@@ -85,7 +92,12 @@ function generateFromSchema(schema: unknown, spec: OpenApiSpec, visited: Set<str
     return generateFromSchema(s.anyOf[0], spec, visited);
   }
 
-  const type = s.type as string | undefined;
+  // OpenAPI 3.1 allows `type: ["string","null"]` — the form that replaced 3.0's `nullable: true`.
+  // Reading it as a bare string made every union fall through to `default: return null`, which for
+  // a union without "null" is a body validateRequest.ts itself rejects. Prefer the first
+  // non-"null" member so a nullable field still gets representative data; a schema whose only type
+  // is "null" still yields null.
+  const type = pickType(s.type);
   switch (type) {
     case "string":
       return stringDefault(s.format as string | undefined);
@@ -113,6 +125,13 @@ function generateFromSchema(schema: unknown, spec: OpenApiSpec, visited: Set<str
     default:
       return null;
   }
+}
+
+/** `normaliseType`'s single-value counterpart: the type to synthesise a value for. */
+function pickType(raw: unknown): string | undefined {
+  const types = normaliseType(raw);
+  if (types.length === 0) return undefined;
+  return types.find((t) => t !== "null") ?? "null";
 }
 
 function stringDefault(format: string | undefined): string {

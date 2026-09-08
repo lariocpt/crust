@@ -1088,7 +1088,11 @@ Derived cases:
   treated as an "unbounded" sentinel and skipped), and pattern violation
   (deduped when the required-field wrong-type case already sends an
   unparseable string). Nullable zod-style `anyOf: [X, {type: "null"}]`
-  wrappers are unwrapped, so nullable fields get their boundary cases too.
+  wrappers are unwrapped, and OpenAPI 3.1's `type: ["string","null"]` union
+  form is read the same way, so nullable fields get their boundary cases too
+  under either spelling — and the wrong-type case for such a field is a value
+  of a genuinely wrong type, never `null` (which the union permits and so
+  would assert nothing).
   One op-level **unexpected extra property** case is added when the body
   schema has `additionalProperties: false`; it asserts only status +
   `code === "validation"` (unknown-key naming in `fieldErrors` varies by
@@ -1192,7 +1196,7 @@ Response bodies are picked example-first, schema-fallback:
 
 1. `content.<media>.example` wins outright.
 2. Otherwise the first entry in `content.<media>.examples`.
-3. Otherwise the schema is walked: `string` → `"string"` (or a format-aware default for `email`, `date-time`, `uuid`, `uri`), `integer`/`number` → `0`, `boolean` → `false`, `array` → `[item]`, `object` → every property generated, `enum` → first value, `allOf` merged, `oneOf`/`anyOf` → first branch. Local `$ref`s into `components.schemas.*` are resolved (cyclic refs return `null`).
+3. Otherwise the schema is walked: `string` → `"string"` (or a format-aware default for `email`, `date-time`, `uuid`, `uri`), `integer`/`number` → `0`, `boolean` → `false`, `array` → `[item]`, `object` → every property generated, `enum` → first value, `const` → that value, schema-level `examples` → first entry, `allOf` merged, `oneOf`/`anyOf` → first branch. The 3.1 union form `type: ["string","null"]` synthesises the first **non-`null`** member, so a nullable field still gets representative data — and, for a union that does not include `null`, a body `--validate` would otherwise have rejected. Local `$ref`s into `components.schemas.*` are resolved (cyclic refs return `null`).
 
 Status code selection within a matched operation: `200` → `201` → first `2xx` → `default` → first defined. `application/json` content is preferred; otherwise the first content type. Routes with literal segments take precedence over `{param}` siblings, so `GET /pets/mine` wins over `GET /pets/{id}`.
 

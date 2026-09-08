@@ -14,6 +14,7 @@
 import type { OpenApiSpec, ParameterObject, RequestBodyObject, ResponseObject } from "./loadSpec";
 import { resolveRef } from "./mockResponse";
 import type { Route } from "./router";
+import { normaliseType } from "./schemaTypes";
 
 export interface SchemaViolation {
   /** JSON pointer into the value ("/items/0/name"); param name for path/query. */
@@ -197,14 +198,10 @@ export function validateSchema(
     }
   }
 
-  // type — string form, 3.1 array form, plus 3.0 `nullable`.
+  // type — string form, 3.1 array form, plus 3.0 `nullable`. Shared with mockResponse.ts and
+  // genFixtures so the mock cannot synthesise a body this validator rejects.
   const rawType = s.type;
-  const types = Array.isArray(rawType)
-    ? rawType.filter((t): t is string => typeof t === "string")
-    : typeof rawType === "string"
-      ? [rawType]
-      : [];
-  if (s.nullable === true && !types.includes("null") && types.length > 0) types.push("null");
+  const types = normaliseType(rawType, s.nullable);
   if (types.length > 0 && !types.some((t) => matchesType(value, t))) {
     out.push({
       pointer,

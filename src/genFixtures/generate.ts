@@ -66,9 +66,11 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
 import { loadSpec, type OpenApiSpec } from "../mockServer/loadSpec";
 import { resolveRef } from "../mockServer/mockResponse";
+import { normaliseType } from "../mockServer/schemaTypes";
 
 type Schema = {
-  type?: string;
+  /** 3.0 writes a string; 3.1 may write a union array (`["string","null"]`). Read via primaryType. */
+  type?: string | string[];
   properties?: Record<string, Schema>;
   required?: string[];
   items?: Schema;
@@ -147,12 +149,13 @@ export function validValue(s: Schema | undefined, key = ""): unknown {
   // Only fall into combinators when the node has no type of its own —
   // zod emits e.g. { type: "string", allOf: [pattern, pattern] } where the
   // branches are refinements, not alternatives.
-  if (!s.type) {
+  const t = primaryType(s);
+  if (!t) {
     if (s.anyOf?.length) return validValue(s.anyOf[0], key);
     if (s.oneOf?.length) return validValue(s.oneOf[0], key);
     if (s.allOf?.length) return validValue(s.allOf[0], key);
   }
-  switch (s.type) {
+  switch (t) {
     case "string": {
       if (s.format === "email" || /email/i.test(key)) return "gen@crust.fixture";
       // Fixed, not random: emitted files must be byte-stable so a checked-in
@@ -205,13 +208,27 @@ export function sampleFromPattern(pattern: string): string {
   return /[\\[\](){}|?*+]/.test(out) ? "gen-value-x" : out;
 }
 
+/**
+ * The type to reason about for a schema node: the first non-"null" member of 3.1's array form,
+ * or the plain 3.0 string. Shared reading via normaliseType so the generator, the mock and the
+ * validator cannot drift apart on what a schema means.
+ */
+function primaryType(s: Schema | undefined): string | undefined {
+  const types = normaliseType((s as { type?: unknown } | undefined)?.type);
+  if (types.length === 0) return undefined;
+  return types.find((x) => x !== "null") ?? "null";
+}
+
 export function wrongTypeFor(s: Schema | undefined): unknown {
+  // 3.1 may write `type: ["string","null"]`; judge on the non-null member so a nullable field
+  // still gets a genuinely wrong value (null would be LEGAL there and would assert nothing).
+  const t = primaryType(s);
   // Coercing fields (dates, digit patterns) happily swallow numbers, so the
   // wrong-typed value for constrained strings must be an unparseable STRING.
-  if (s?.type === "string" && (s.format === "date" || s.format === "date-time" || s.pattern)) {
+  if (t === "string" && (s?.format === "date" || s?.format === "date-time" || s?.pattern)) {
     return "!!not-a-valid-value!!";
   }
-  switch (s?.type) {
+  switch (t) {
     case "string":
       return 12345;
     case "integer":
@@ -380,8 +397,9 @@ function deriveCases(path: string, method: string, op: Operation, scope: ScopeCo
           expectStatus: 400,
           expectValidationField: field,
         });
-      const isString = fs.type === "string";
-      const isNumeric = fs.type === "integer" || fs.type === "number";
+      const ft = primaryType(fs);
+      const isString = ft === "string";
+      const isNumeric = ft === "integer" || ft === "number";
       if (isString && typeof fs.minLength === "number" && fs.minLength >= 1) {
         push("too short", "x".repeat(fs.minLength - 1));
       }

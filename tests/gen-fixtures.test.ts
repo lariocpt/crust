@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { envNameFor, generateFixtures, idPathFor } from "../src/genFixtures/generate";
+import { envNameFor, generateFixtures, idPathFor, wrongTypeFor } from "../src/genFixtures/generate";
 import type { OpenApiSpec } from "../src/mockServer/loadSpec";
 import { startServer } from "../src/mockServer/server";
 import { runPipes } from "../src/testPipes/runner";
@@ -1119,6 +1119,67 @@ describe("response-schema emission", () => {
     const perCase = text.split("name:").slice(1);
     for (const c of perCase) {
       if (c.includes("schema:")) expect(c).toContain("status: 400");
+    }
+  });
+});
+
+// OpenAPI 3.1 `type: ["string","null"]` reached the boundary matrix as a non-string, so
+// `fs.type === "string"` was false and minLength/maxLength cases were never emitted. The
+// generator did not fail — it produced nothing for those fields and reported success, which is
+// the false pass design rule 1 forbids. wrongTypeFor had the same blind spot via its switch.
+describe("openapi 3.1 union types in generated fixtures", () => {
+  test("wrongTypeFor picks a genuinely wrong type for a 3.1 union", () => {
+    // a union of string|null must be violated by a NUMBER, not by null (null is legal here)
+    expect(typeof wrongTypeFor({ type: ["string", "null"] } as never)).toBe("number");
+    // numeric union must be violated by a string
+    expect(typeof wrongTypeFor({ type: ["integer", "null"] } as never)).toBe("string");
+    // 3.0 forms unchanged
+    expect(typeof wrongTypeFor({ type: "string" } as never)).toBe("number");
+    expect(typeof wrongTypeFor({ type: "integer" } as never)).toBe("string");
+  });
+
+  test("length boundary cases are still generated for a 3.1 nullable string", async () => {
+    const spec31 = {
+      openapi: "3.1.0",
+      info: { title: "b", version: "1" },
+      paths: {
+        "/things": {
+          post: {
+            tags: ["things"],
+            requestBody: {
+              required: true,
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    required: ["name"],
+                    properties: { name: { type: ["string", "null"], minLength: 3, maxLength: 8 } },
+                  },
+                },
+              },
+            },
+            responses: { "201": { description: "created" }, "400": { description: "bad" } },
+          },
+        },
+      },
+    };
+    const dir = await mkdtemp(join(tmpdir(), "crust-gen31-"));
+    try {
+      await writeFile(join(dir, "spec.json"), JSON.stringify(spec31));
+      await writeFile(join(dir, "setup.ts"), SETUP);
+      const result = await generateFixtures({
+        swagger: join(dir, "spec.json"),
+        out: join(dir, "out"),
+        setup: join(dir, "setup.ts"),
+        flows: false,
+        log: () => {},
+      });
+      const text = await Bun.file(result.files[0]!).text();
+      // before the fix these were absent: the boundary matrix skipped the field entirely
+      expect(text).toContain("too short");
+      expect(text).toContain("too long");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
     }
   });
 });

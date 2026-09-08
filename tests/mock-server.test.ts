@@ -6,6 +6,7 @@ import { loadSpec, type OpenApiSpec } from "../src/mockServer/loadSpec";
 import { pickResponse, synthesizeBody } from "../src/mockServer/mockResponse";
 import { buildRoutes, matchRoute } from "../src/mockServer/router";
 import { startServer } from "../src/mockServer/server";
+import { validateSchema } from "../src/mockServer/validateRequest";
 
 const minimalSpec = {
   openapi: "3.0.0",
@@ -634,5 +635,80 @@ describe("failure injection (/__crust/override)", () => {
     } finally {
       await server.stop();
     }
+  });
+});
+
+// OpenAPI 3.1 lets `type` be an array (`["string","null"]`), the form that replaced 3.0's
+// `nullable: true`. validateRequest.ts has always understood it; mockResponse.ts read `type` as a
+// bare string, so an array matched no case in its switch and fell through to `default: return
+// null` — every 3.1 union field was synthesised as null. For a union that does not include "null"
+// that is a body crust's OWN validator rejects, which is the one thing a mock must never produce.
+describe("openapi 3.1 union types", () => {
+  const specOf = (schema: unknown) =>
+    ({
+      openapi: "3.1.0",
+      info: { title: "u", version: "1" },
+      paths: {
+        "/u": {
+          get: {
+            responses: {
+              "200": { description: "ok", content: { "application/json": { schema } } },
+            },
+          },
+        },
+      },
+    }) as unknown as OpenApiSpec;
+
+  test("a non-nullable union synthesises a value its own validator accepts", () => {
+    const schema = {
+      type: "object",
+      required: ["id"],
+      properties: { id: { type: ["string", "integer"] } },
+    };
+    const spec = specOf(schema);
+    const body = synthesizeBody({ schema } as never, spec) as Record<string, unknown>;
+    // the bug: id was null, and "expected string | integer, got null" is a violation crust
+    // reports against a body crust itself produced.
+    expect(body.id).not.toBeNull();
+    expect(validateSchema(body, schema, spec, "")).toEqual([]);
+  });
+
+  test("a nullable union prefers the real type over null", () => {
+    const schema = {
+      type: "object",
+      required: ["name"],
+      properties: { name: { type: ["string", "null"] } },
+    };
+    const spec = specOf(schema);
+    const body = synthesizeBody({ schema } as never, spec) as Record<string, unknown>;
+    expect(typeof body.name).toBe("string");
+    expect(validateSchema(body, schema, spec, "")).toEqual([]);
+  });
+
+  test("3.0 nullable and plain string forms are unchanged", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        legacy: { type: "string", nullable: true },
+        plain: { type: "string" },
+      },
+    };
+    const spec = specOf(schema);
+    const body = synthesizeBody({ schema } as never, spec) as Record<string, unknown>;
+    expect(typeof body.legacy).toBe("string");
+    expect(typeof body.plain).toBe("string");
+  });
+
+  test("const and 3.1 examples are honoured over a synthesised default", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        kind: { const: "widget" },
+        tag: { type: "string", examples: ["from-examples"] },
+      },
+    };
+    const body = synthesizeBody({ schema } as never, specOf(schema)) as Record<string, unknown>;
+    expect(body.kind).toBe("widget");
+    expect(body.tag).toBe("from-examples");
   });
 });
