@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadSpec, type OpenApiSpec } from "../src/mockServer/loadSpec";
 import { pickResponse, synthesizeBody } from "../src/mockServer/mockResponse";
-import { buildRoutes, matchRoute } from "../src/mockServer/router";
+import { buildRoutes, countWebhookOperations, matchRoute } from "../src/mockServer/router";
 import { startServer } from "../src/mockServer/server";
 import { validateSchema } from "../src/mockServer/validateRequest";
 
@@ -148,6 +148,39 @@ describe("loadSpec", () => {
 
   test("rejects when file not found", async () => {
     await expect(loadSpec(`${dir}/nope.json`)).rejects.toThrow(/not found/);
+  });
+
+  // 3.1 made `paths` optional: a document describing only webhooks (or only reusable components)
+  // is conformant and simply has nothing to serve. The control above still stands — a document
+  // with none of the three is a spec we genuinely cannot use.
+  test("accepts a 3.1 webhooks-only document with no paths", async () => {
+    const path = `${dir}/hooks.json`;
+    await Bun.write(
+      path,
+      JSON.stringify({
+        openapi: "3.1.0",
+        info: { title: "h", version: "1" },
+        webhooks: { newThing: { post: { responses: { "200": { description: "ok" } } } } },
+      }),
+    );
+    const { spec } = await loadSpec(path);
+    expect(spec.paths).toEqual({});
+    expect(buildRoutes(spec)).toEqual([]);
+    expect(countWebhookOperations(spec)).toBe(1);
+  });
+
+  test("accepts a components-only document with no paths", async () => {
+    const path = `${dir}/components.json`;
+    await Bun.write(
+      path,
+      JSON.stringify({
+        openapi: "3.1.0",
+        info: { title: "c", version: "1" },
+        components: { schemas: { Widget: { type: "object" } } },
+      }),
+    );
+    const { spec } = await loadSpec(path);
+    expect(spec.paths).toEqual({});
   });
 });
 
@@ -710,5 +743,29 @@ describe("openapi 3.1 union types", () => {
     const body = synthesizeBody({ schema } as never, specOf(schema)) as Record<string, unknown>;
     expect(body.kind).toBe("widget");
     expect(body.tag).toBe("from-examples");
+  });
+});
+
+// A 3.1 document may describe only `webhooks` — callbacks the API SENDS — with no `paths` at all.
+// Those are not endpoints to mock, so 0 routes is the right answer; serving nothing while printing
+// a bare "0 route(s)" is not, because the operator cannot tell a webhooks-only spec from a spec
+// crust failed to understand.
+describe("openapi 3.1 webhooks-only documents", () => {
+  test("countWebhooks reports the operations that are deliberately not routed", () => {
+    const spec = {
+      openapi: "3.1.0",
+      info: { title: "h", version: "1" },
+      webhooks: {
+        newThing: { post: { responses: { "200": { description: "ok" } } } },
+        goneThing: { delete: { responses: { "204": { description: "gone" } } } },
+      },
+    } as unknown as OpenApiSpec;
+    expect(countWebhookOperations(spec)).toBe(2);
+    expect(buildRoutes(spec)).toEqual([]);
+  });
+
+  test("a spec with neither paths nor webhooks reports no webhooks", () => {
+    const spec = { openapi: "3.1.0", info: { title: "e", version: "1" } } as unknown as OpenApiSpec;
+    expect(countWebhookOperations(spec)).toBe(0);
   });
 });
