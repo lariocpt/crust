@@ -1529,3 +1529,52 @@ describe("a field-name guess never breaks a declared bound", () => {
     );
   });
 });
+
+describe("the last three divergences from the mock", () => {
+  // Each of these the mock handles and the generator did not — the same split that produced most of
+  // the defects on this axis.
+  const ok = (schema: Record<string, unknown>, key = "") =>
+    validateSchema(validValue(schema as never, key), schema, {} as never, "");
+
+  // `exclusiveMaximum: true` is 3.0's BOOLEAN modifier on `maximum`; 3.1 writes a number. Clamping
+  // to `maximum` itself yields exactly the excluded value.
+  test("exclusive bounds are honoured in both spellings", () => {
+    expect(
+      ok({
+        type: "number",
+        minimum: 0,
+        maximum: 1,
+        exclusiveMinimum: true,
+        exclusiveMaximum: true,
+      }),
+    ).toEqual([]);
+    expect(ok({ type: "integer", exclusiveMaximum: 5 })).toEqual([]);
+    expect(ok({ type: "integer", exclusiveMinimum: 5 })).toEqual([]);
+  });
+
+  // `format: email` beside a pattern whose TLD is 2-5 letters: "gen@crust.fixture" has seven.
+  test("a pattern the format constant cannot satisfy is sampled instead", () => {
+    expect(
+      ok({
+        type: "string",
+        format: "email",
+        pattern: "^([a-zA-Z0-9_.-]+)@([a-zA-Z0-9_.-]+)\\.([a-zA-Z]{2,5})$",
+      }),
+    ).toEqual([]);
+  });
+
+  // A field called `first_email_date` declaring `format: date-time` got the email constant, because
+  // the NAME heuristic ran regardless of what the schema said.
+  test("an explicit format is not overridden by the field name", () => {
+    expect(ok({ type: "string", format: "date-time" }, "first_email_date")).toEqual([]);
+    expect(ok({ type: "string", format: "uuid" }, "customer_email")).toEqual([]);
+  });
+
+  // Control: the name heuristics still work where the schema states nothing.
+  test("the name heuristics still apply to an unconstrained string", () => {
+    expect(validValue({ type: "string" } as never, "customer_email")).toBe("gen@crust.fixture");
+    expect(validValue({ type: "string" } as never, "order_id")).toBe(
+      "00000000-0000-4000-8000-00000000c0de",
+    );
+  });
+});
