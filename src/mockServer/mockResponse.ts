@@ -87,8 +87,14 @@ function generateFromSchema(schema: unknown, spec: OpenApiSpec, visited: Set<str
 
   if (typeof s.$ref === "string") {
     const refName = s.$ref;
-    if (visited.has(refName)) return null;
     const resolved = resolveRef(refName, spec);
+    if (visited.has(refName)) {
+      // A cycle has to stop somewhere, but stopping with `null` puts a value of the WRONG TYPE in
+      // the body, which crust's own validator then rejects — a self-inflicted violation on any spec
+      // with a recursive model (AWS amplifyuibuilder, athena). The empty shape of the declared type
+      // terminates the recursion just as firmly and is a body the validator accepts.
+      return emptyOfDeclaredType(resolved);
+    }
     if (!resolved) return null;
     const next = new Set(visited);
     next.add(refName);
@@ -119,6 +125,12 @@ function generateFromSchema(schema: unknown, spec: OpenApiSpec, visited: Set<str
     for (const branch of s.allOf) {
       const value = generateFromSchema(branch, spec, visited);
       if (value && typeof value === "object" && !Array.isArray(value)) {
+        // An EMPTY object contributed nothing, and treating it as a contribution let it outrank a
+        // sibling that had real content. AWS writes every field as
+        // `allOf: [{$ref: RealThing}, {description: "..."}]`, and the description-only branch
+        // synthesises `{}`; where RealThing was a LIST, the `{}` won and the array was discarded —
+        // 12 self-inflicted "expected array, got object" violations in one spec.
+        if (Object.keys(value).length === 0) continue;
         Object.assign(merged, value);
         sawObject = true;
       } else if (scalar === undefined && value !== undefined && value !== null) {
@@ -126,7 +138,11 @@ function generateFromSchema(schema: unknown, spec: OpenApiSpec, visited: Set<str
       }
     }
     if (sawObject) return merged;
-    return scalar !== undefined ? scalar : merged;
+    if (scalar !== undefined) return scalar;
+    // Every branch was documentation-only or unbuildable. `{}` is right for an object and wrong for
+    // anything else, so let the node's own `type` have the last word before defaulting to it.
+    const declared = emptyOfDeclaredType(s);
+    return declared !== null ? declared : merged;
   }
 
   if (Array.isArray(s.oneOf) && s.oneOf.length > 0) {
@@ -222,6 +238,26 @@ function pickType(raw: unknown): string | undefined {
  * length bounds clamp whatever came out. A pattern crust cannot sample falls back to the padded
  * default rather than to something that merely looks plausible.
  */
+/**
+ * The empty value of whatever type a schema declares: `{}` for an object, `[]` for an array, and
+ * `null` when nothing is declared and no honest guess exists. Used wherever crust gives up on
+ * building a value — a `$ref` cycle, an `allOf` with nothing in it — because giving up is not a
+ * licence to emit the wrong type. `null` where `type: object` is declared is a violation crust
+ * inflicts on itself.
+ */
+function emptyOfDeclaredType(schema: unknown): unknown {
+  if (!schema || typeof schema !== "object") return null;
+  const s = schema as Record<string, unknown>;
+  const types = normaliseType(s);
+  if (types.includes("object")) return {};
+  if (types.includes("array")) return [];
+  // `type` is optional in JSON Schema and real specs leave it out constantly. The shape is still
+  // legible from the keywords, and guessing from them beats emitting `null` into a typed slot.
+  if (s.properties !== undefined || s.additionalProperties !== undefined) return {};
+  if (s.items !== undefined) return [];
+  return null;
+}
+
 function stringDefault(s: Record<string, unknown>): string {
   const format = s.format as string | undefined;
   const min = typeof s.minLength === "number" ? s.minLength : null;

@@ -182,6 +182,11 @@ function pickFromClass(body: string): string | null {
       if (c === "d") return "1";
       if (c === "w") return "a";
       if (c === "s") return " ";
+      // \uXXXX is how AWS writes an ordinary ASCII range: [\u0031-\u0039] IS [1-9]. Abandoning the
+      // class meant a plain digit field fell back to the neutral value on dozens of real specs.
+      if (c === "u" && /^[0-9a-fA-F]{4}$/.test(body.slice(i + 2, i + 6))) {
+        return String.fromCharCode(Number.parseInt(body.slice(i + 2, i + 6), 16));
+      }
       if (c && /[.\\/:+*?()[\]{}|^$@-]/.test(c)) return c;
       return null; // \p{...} and friends
     }
