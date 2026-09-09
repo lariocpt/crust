@@ -2079,3 +2079,39 @@ describe("the node budget does not truncate scalars", () => {
     for (const s of seen) expect(["live", "dead"]).toContain(s);
   });
 });
+
+describe("the enum member picked fits the declared type", () => {
+  // probely writes `{type: "string", enum: [null, "trial", "plan", "subscribe"]}` — the null means
+  // "no action required" and is documented in the description. crust took enum[0] blindly and
+  // emitted null, which its own validator rejects against `type: string`.
+  //
+  // The schema contradicts itself, but only about ONE member: the other three are strings and
+  // satisfy everything the schema says. Picking one of those is not a guess, it is reading the rest
+  // of the same enum.
+  const body = (schema: Record<string, unknown>): Record<string, unknown> =>
+    synthesizeBody(
+      { schema: { type: "object", properties: { v: schema }, required: ["v"] } },
+      {},
+    ) as Record<string, unknown>;
+
+  test("a leading null is skipped when the type says string", () => {
+    expect(body({ type: "string", enum: [null, "trial", "plan"] }).v).toBe("trial");
+  });
+
+  test("a leading string is skipped when the type says integer", () => {
+    expect(body({ type: "integer", enum: ["none", 1, 2] }).v).toBe(1);
+  });
+
+  // Control: with no declared type, or when the first member already fits, enum[0] still wins —
+  // this must not become "prefer the second member".
+  test("enum[0] is still the answer when it fits, or when nothing says otherwise", () => {
+    expect(body({ type: "string", enum: ["live", "dead"] }).v).toBe("live");
+    expect(body({ enum: [null, "trial"] }).v).toBeNull();
+  });
+
+  // Control: where NO member fits, the schema is unsatisfiable and crust does not invent a value —
+  // enum[0] is the honest answer and --validate reports the contradiction.
+  test("where no member fits, enum[0] stands and the contradiction stays visible", () => {
+    expect(body({ type: "integer", enum: ["a", "b"] }).v).toBe("a");
+  });
+});
