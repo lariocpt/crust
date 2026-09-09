@@ -90,6 +90,8 @@ type Schema = {
   maxItems?: number;
   minimum?: number;
   maximum?: number;
+  exclusiveMinimum?: boolean | number;
+  exclusiveMaximum?: boolean | number;
   additionalProperties?: boolean | Schema;
   anyOf?: Schema[];
   allOf?: Schema[];
@@ -301,22 +303,32 @@ export function validValue(s: Schema | undefined, key = ""): unknown {
       const fits = (v: string): boolean =>
         (typeof s.maxLength !== "number" || v.length <= s.maxLength) &&
         (typeof s.minLength !== "number" || v.length >= s.minLength);
-      const named = !s.pattern;
-      if (s.format === "email") return "gen@crust.fixture";
+      // A guess from the NAME applies only where the schema states nothing of its own — not beside a
+      // `pattern` (PR #44), not beside a length bound (PR #47), and not beside a `format`. A field
+      // called `first_email_date` declaring `format: date-time` was getting the email constant.
+      const named = !s.pattern && !s.format;
+      if (s.format === "email" && !s.pattern) return "gen@crust.fixture";
       if (named && /email/i.test(key) && fits("gen@crust.fixture")) return "gen@crust.fixture";
       // Fixed, not random: emitted files must be byte-stable so a checked-in
       // matrix can be CI-diffed against a regeneration.
-      if (s.format === "uuid") return "00000000-0000-4000-8000-00000000c0de";
+      if (s.format === "uuid" && !s.pattern) return "00000000-0000-4000-8000-00000000c0de";
       if (named && /(^|_)id$/.test(key) && fits("00000000-0000-4000-8000-00000000c0de"))
         return "00000000-0000-4000-8000-00000000c0de";
-      if (s.format === "date") return "2026-08-12";
-      if (s.format === "date-time") return "2026-08-12T10:00:00.000Z";
+      if (s.format === "date" && !s.pattern) return "2026-08-12";
+      if (s.format === "date-time" && !s.pattern) return "2026-08-12T10:00:00.000Z";
       // Anything else the mock knows how to satisfy — `uri`/`url` above all, which is 972 of the
       // 1,090 format failures across the corpus. The four constants above keep their own values so
       // existing generated matrices do not churn; this only covers formats that had NO value at all.
       if (s.format && !s.pattern) {
         const known = formatDefault(s.format);
         if (known !== null) return known;
+      }
+      // Both declared: the PATTERN is the narrower statement, and the mock already resolves it that
+      // way. `format: email` beside a pattern whose TLD is 2-5 letters rejects "gen@crust.fixture",
+      // which has seven — the constant is a fine email and the wrong one for this field.
+      if (s.format && s.pattern) {
+        const known = formatDefault(s.format);
+        if (known !== null && matchesPattern(s.pattern, known)) return known;
       }
       const min = s.minLength ?? 1;
       const max = typeof s.maxLength === "number" ? s.maxLength : null;
@@ -337,8 +349,16 @@ export function validValue(s: Schema | undefined, key = ""): unknown {
     }
     case "integer":
     case "number": {
-      const min = typeof s.minimum === "number" ? s.minimum : null;
-      const max = typeof s.maximum === "number" ? s.maximum : null;
+      // Both spellings: 3.0 writes `exclusiveMinimum: true` as a MODIFIER on `minimum`, 3.1 writes a
+      // number of its own. Clamping to `maximum` when it is exclusive yields exactly the value the
+      // schema excludes — `{maximum: 1, exclusiveMaximum: true}` was answered with 1.
+      const step = primaryType(s) === "integer" ? 1 : Number.EPSILON * 8;
+      let min = typeof s.minimum === "number" ? s.minimum : null;
+      let max = typeof s.maximum === "number" ? s.maximum : null;
+      if (s.exclusiveMinimum === true && min !== null) min += step;
+      else if (typeof s.exclusiveMinimum === "number") min = s.exclusiveMinimum + step;
+      if (s.exclusiveMaximum === true && max !== null) max -= step;
+      else if (typeof s.exclusiveMaximum === "number") max = s.exclusiveMaximum - step;
       // 1 stays the friendly default, but a `{maximum: 0}` field was violated by it.
       let n = min !== null ? Math.max(min, 1) : 1;
       if (max !== null && n > max) n = max;
