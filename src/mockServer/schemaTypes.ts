@@ -122,13 +122,27 @@ function buildFromPattern(pattern: string, extra = 0): string | null {
   const extraBudget = extra;
   let src = pattern.trim();
   if (!src) return null;
-  // alternation at the top level: take the first branch that yields something
+  // alternation at the top level: take the first branch that yields something.
+  //
+  // `includes("|")` is not the same question as "is there a top-level alternation". splitTopLevel
+  // is right to refuse to split inside `(...)` or `[...]`, so a nested pipe — `[\w|-]`, `(a|b)` —
+  // comes back as ONE branch identical to `src`, and recursing on it never shrinks the input:
+  // RangeError, taking the whole synthesis down. The guard below cannot catch that; it counts
+  // characters inside one call, not depth across calls. 198 of the 4,138 APIs-guru specs (4.8%)
+  // died here, and because the sweep ran a subprocess per spec it recorded every one as a spec
+  // that failed to LOAD, so the crash never surfaced as crust's.
+  //
+  // Only branch when there is really more than one branch. Otherwise fall through: the walk below
+  // reads a character class properly, which is what the nested pipe almost always is.
   if (src.includes("|")) {
-    for (const branch of splitTopLevel(src, "|")) {
-      const v = buildFromPattern(branch, extra);
-      if (v !== null) return v;
+    const branches = splitTopLevel(src, "|");
+    if (branches.length > 1) {
+      for (const branch of branches) {
+        const v = buildFromPattern(branch, extra);
+        if (v !== null) return v;
+      }
+      return null;
     }
-    return null;
   }
   src = src.replace(/^\^/, "").replace(/^\^/, "").replace(/\$$/, "");
 
@@ -164,6 +178,15 @@ function buildFromPattern(pattern: string, extra = 0): string | null {
       continue;
     } else if ("+*?{".includes(src[i]!)) {
       return null; // a quantifier with nothing before it
+    } else if (src[i] === "|") {
+      // A bare `|` here is an alternation the walk cannot choose between — it is only reached when
+      // the pipe was nested in a group, since a top-level one was split off above and a class one is
+      // consumed by the class reader. Treating it as a literal built BOTH branches joined by a pipe:
+      // `(0000000000-|AAAAAAAA-…)` became "0000000000-|AAAAAAAA-…", 48 characters against a
+      // maxLength of 47. Worse, it survived verification — matchesPattern is an UNANCHORED test, so
+      // the regex found one branch inside the joined string and pronounced it good. 36 such values
+      // across the corpus. Decline instead; the caller's fallback is the honest answer.
+      return null;
     } else {
       atom = src[i]!;
       i += 1;
