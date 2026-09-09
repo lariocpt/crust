@@ -265,7 +265,7 @@ describe("response synthesis", () => {
     expect((body[0] as Record<string, unknown>).name).toBe("string");
   });
 
-  test("cycle guard returns null on re-entry", () => {
+  test("cycle guard terminates on re-entry with the empty shape of the declared type", () => {
     const cyclic: OpenApiSpec = {
       openapi: "3.0.0",
       paths: {
@@ -292,7 +292,11 @@ describe("response synthesis", () => {
       cyclic.paths!["/x"]!.get!.responses!["200"]!.content!["application/json"]!,
       cyclic,
     ) as Record<string, unknown>;
-    expect(body.child).toBeNull();
+    // This assertion used to read `toBeNull()`. Terminating the recursion is still the point, but
+    // `null` in a slot the spec declares `type: object` is a body crust's OWN validator rejects —
+    // 15 such violations across 300 real-world specs, every one self-inflicted. `{}` stops the
+    // recursion just as firmly and is a body that validates.
+    expect(body.child).toEqual({});
   });
 
   test("204 path has no body to synthesise", () => {
@@ -1273,5 +1277,87 @@ describe("length clamping never breaks a verified pattern", () => {
   test("without a pattern, minLength and maxLength still apply", () => {
     expect((body({ type: "string", minLength: 9 }).v as string).length).toBeGreaterThanOrEqual(9);
     expect((body({ type: "string", maxLength: 2 }).v as string).length).toBeLessThanOrEqual(2);
+  });
+});
+
+describe("a construct crust cannot build still respects the declared type", () => {
+  // Found by classifying the residue of 300 real-world specs: after spec-supplied examples,
+  // self-contradictory schemas and crust's own deliberate pattern fallback were accounted for, 40
+  // violations remained and collapsed into these three shapes. All share one mistake — when crust
+  // cannot construct a value it fell back to a value of the WRONG TYPE, so its own validator
+  // rejected the body. A shape crust cannot fill should still be the right shape.
+  const body = (
+    schema: Record<string, unknown>,
+    spec: Record<string, unknown> = {},
+  ): Record<string, unknown> =>
+    synthesizeBody(
+      { schema: { type: "object", properties: { v: schema }, required: ["v"] } },
+      spec,
+    ) as Record<string, unknown>;
+
+  test("a cyclic $ref under type: object yields {} rather than null", () => {
+    const spec = {
+      components: {
+        schemas: {
+          Node: { type: "object", properties: { self: { $ref: "#/components/schemas/Node" } } },
+        },
+      },
+    };
+    const v = body({ $ref: "#/components/schemas/Node" }, spec).v as Record<string, unknown>;
+    expect(v).not.toBeNull();
+    expect(typeof v).toBe("object");
+    expect(Array.isArray(v)).toBe(false);
+  });
+
+  test("an array whose items cannot be built is still an array", () => {
+    const spec = {
+      components: {
+        schemas: {
+          Kid: {
+            type: "object",
+            properties: { kids: { type: "array", items: { $ref: "#/components/schemas/Kid" } } },
+          },
+        },
+      },
+    };
+    const v = body({ $ref: "#/components/schemas/Kid" }, spec).v as Record<string, unknown>;
+    expect(Array.isArray(v.kids)).toBe(true);
+  });
+
+  test("a documentation-only allOf branch does not discard a sibling's array", () => {
+    // AWS writes every field as `allOf: [{$ref: Real}, {description}]`. The description-only branch
+    // synthesises {} and, treated as a contribution, silently outranked a sibling LIST.
+    const spec = {
+      components: { schemas: { List: { type: "array", items: { type: "string" } } } },
+    };
+    const v = body(
+      { allOf: [{ $ref: "#/components/schemas/List" }, { description: "the list" }] },
+      spec,
+    ).v;
+    expect(Array.isArray(v)).toBe(true);
+  });
+
+  test("a cyclic $ref with no declared type is read from its keywords", () => {
+    const spec = {
+      components: {
+        schemas: {
+          N: { properties: { kids: { type: "array", items: { $ref: "#/components/schemas/N" } } } },
+        },
+      },
+    };
+    const v = body({ $ref: "#/components/schemas/N" }, spec).v as Record<string, unknown>;
+    expect(Array.isArray((v.kids as unknown[])?.[0] ?? null)).toBe(false);
+    expect((v.kids as unknown[])[0]).not.toBeNull();
+  });
+
+  test("\\uXXXX escapes inside a character class are sampled, not abandoned", () => {
+    // ^[1-9][0-9]{0,2}$ written the way gamelift's spec writes it.
+    const v = body({
+      type: "string",
+      pattern: "^[\\u0031-\\u0039][\\u0030-\\u0039]{0,2}$",
+      minLength: 1,
+      maxLength: 3,
+    }).v as string;
+    expect(/^[\u0031-\u0039][\u0030-\u0039]{0,2}$/.test(v)).toBe(true);
   });
 });
