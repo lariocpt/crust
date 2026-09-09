@@ -2226,3 +2226,46 @@ describe("$ref siblings apply", () => {
     expect(annotated.v).toBe("string");
   });
 });
+
+describe("an allOf node's own required names are present", () => {
+  // codat writes `{allOf: [...], required: ["amount", "date", ...], type: "object"}` — the required
+  // list on the node, the properties in the branches. `date` is required and described nowhere, and
+  // the allOf path never added placeholders for its own required names: only the plain object path
+  // did. So the body came back missing a property its own schema demands.
+  test("a required name no branch describes is still present", () => {
+    const out = synthesizeBody(
+      {
+        schema: {
+          type: "object",
+          required: ["amount", "date"],
+          allOf: [
+            {
+              type: "object",
+              properties: { amount: { type: "number" }, other: { type: "string" } },
+            },
+          ],
+        },
+      },
+      {},
+    ) as Record<string, unknown>;
+    expect(out.amount).toBeDefined();
+    expect(out.other).toBeDefined();
+    expect(Object.hasOwn(out, "date")).toBe(true);
+  });
+
+  // Control: a required name a branch DOES describe keeps that branch's value — the placeholder must
+  // not reappear and clobber it, which is the fault PR #35 fixed.
+  test("a required name a branch describes keeps the branch's value", () => {
+    const out = synthesizeBody(
+      {
+        schema: {
+          type: "object",
+          required: ["amount"],
+          allOf: [{ type: "object", properties: { amount: { type: "string" } } }],
+        },
+      },
+      {},
+    ) as Record<string, unknown>;
+    expect(out.amount).toBe("string");
+  });
+});
