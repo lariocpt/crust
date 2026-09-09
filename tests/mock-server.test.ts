@@ -1555,3 +1555,79 @@ describe("a cycle through an allOf-composed schema", () => {
     expect(out.inner).not.toBeNull();
   });
 });
+
+describe("a shared schema graph does not explode", () => {
+  // presalytics.io/ooxml made synthesis issue 176 MILLION generateFromSchema calls for 134
+  // responses — 25 million for a single one, 53 seconds for the file. Nothing there is recursive:
+  // the schema graph is a DAG, and every path to a shared node regenerated its whole subtree.
+  // A user booting mock-server against that spec sees a hang and no explanation.
+  test("a DAG of shared $refs generates in linear time, not exponential", () => {
+    // Each level references the one below TWICE. At depth 22 the naive walk is 4M+ nodes; with
+    // shared subtrees reused it is 22. The assertion is that this returns at all, promptly.
+    const schemas: Record<string, unknown> = {
+      L0: { type: "object", properties: { v: { type: "string" } } },
+    };
+    for (let i = 1; i <= 22; i++) {
+      schemas[`L${i}`] = {
+        type: "object",
+        properties: {
+          a: { $ref: `#/components/schemas/L${i - 1}` },
+          b: { $ref: `#/components/schemas/L${i - 1}` },
+        },
+      };
+    }
+    const spec = { components: { schemas } };
+    const started = performance.now();
+    const out = synthesizeBody({ schema: { $ref: "#/components/schemas/L22" } }, spec) as Record<
+      string,
+      unknown
+    >;
+    const elapsed = performance.now() - started;
+    expect(out).toBeDefined();
+    expect((out.a as Record<string, unknown>).a as Record<string, unknown>).toBeDefined();
+    expect(elapsed).toBeLessThan(1000);
+  });
+});
+
+describe("a mutually recursive schema graph is bounded, not endless", () => {
+  // presalytics.io/ooxml: `Slide.Slides.Details` references `Shared.*.Details` which references
+  // back. With per-path cycle detection the cost of a complete body grows with the number of PATHS
+  // rather than nodes — 52 million expansions for 134 responses, 53 seconds for the file, which
+  // from outside is a hang with no explanation. Reuse cannot rescue it: in a mutually recursive
+  // graph nearly every subtree genuinely does depend on the path that reached it.
+  test("two schemas referencing each other still return promptly", () => {
+    const spec = {
+      components: {
+        schemas: {
+          A: {
+            type: "object",
+            required: ["id"],
+            properties: {
+              id: { type: "string" },
+              b1: { $ref: "#/components/schemas/B" },
+              b2: { $ref: "#/components/schemas/B" },
+            },
+          },
+          B: {
+            type: "object",
+            required: ["tag"],
+            properties: {
+              tag: { type: "string" },
+              a1: { $ref: "#/components/schemas/A" },
+              a2: { $ref: "#/components/schemas/A" },
+            },
+          },
+        },
+      },
+    };
+    const started = performance.now();
+    const out = synthesizeBody({ schema: { $ref: "#/components/schemas/A" } }, spec) as Record<
+      string,
+      unknown
+    >;
+    expect(performance.now() - started).toBeLessThan(2000);
+    // Bounded, but still the shape the schema promises: truncation terminates the way a cycle does.
+    expect(out.id).toBeDefined();
+    expect((out.b1 as Record<string, unknown>).tag).toBeDefined();
+  });
+});
