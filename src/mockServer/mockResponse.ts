@@ -300,7 +300,7 @@ function generateFromSchema(schema: unknown, spec: OpenApiSpec, visited: Set<str
   // validator rejects.
   if ("const" in s && s.const !== undefined) return s.const;
 
-  if (Array.isArray(s.enum) && s.enum.length > 0) return s.enum[0];
+  if (Array.isArray(s.enum) && s.enum.length > 0) return pickEnumMember(s.enum, s);
 
   if (Array.isArray(s.allOf)) {
     // allOf means "this, refined", and the thing being refined is not always an object: AWS's
@@ -448,6 +448,32 @@ function generateFromSchema(schema: unknown, spec: OpenApiSpec, visited: Set<str
     default:
       return null;
   }
+}
+
+/**
+ * The first enum member that satisfies the schema's own declared type.
+ *
+ * probely writes `{type: "string", enum: [null, "trial", "plan", "subscribe"]}` — the null means
+ * "no action required" and is explained in the description — and taking enum[0] blindly emitted a
+ * value crust's own validator rejects. The schema contradicts itself about ONE member; the other
+ * three satisfy everything it says. Preferring one of those is not a guess, it is reading the rest
+ * of the same enum.
+ *
+ * Where NO member fits, enum[0] stands: the schema is unsatisfiable and inventing a value outside
+ * the enum would be worse than reporting the contradiction it already has.
+ */
+function pickEnumMember(members: unknown[], schema: Record<string, unknown>): unknown {
+  const declared = normaliseType(schema.type, schema.nullable);
+  if (declared.length === 0) return members[0];
+  const fits = (value: unknown): boolean => {
+    const actual =
+      value === null ? "null" : Array.isArray(value) ? "array" : (typeof value as string);
+    if (declared.includes(actual)) return true;
+    // JSON has one number type; the schema may say `integer` or `number` for the same member.
+    return actual === "number" && (declared.includes("integer") || declared.includes("number"));
+  };
+  const match = members.find(fits);
+  return match !== undefined ? match : members[0];
 }
 
 /**
