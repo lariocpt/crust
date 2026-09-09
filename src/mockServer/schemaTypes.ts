@@ -27,3 +27,23 @@ export function normaliseType(raw: unknown, nullable?: unknown): string[] {
   if (nullable === true && types.length > 0 && !types.includes("null")) types.push("null");
   return types;
 }
+
+/**
+ * A string that satisfies a simple `pattern`, best effort.
+ *
+ * Lived in genFixtures until 2026-09-09, when the mock needed it too: a sweep of 300 real-world
+ * specs showed the mock synthesising "string" for pattern-constrained fields and its own validator
+ * rejecting the result. Moved here rather than copied, so the generator and the mock cannot drift
+ * apart about what satisfies a pattern.
+ *
+ * Deliberately conservative: if regex syntax survives the substitutions it could not be sampled,
+ * so it returns a neutral value rather than something that merely looks plausible.
+ */
+export function sampleFromPattern(pattern: string): string {
+  let out = pattern.replace(/^\^/, "").replace(/\$$/, "");
+  out = out.replace(/\\d\{(\d+),\d+\}/g, (_m, n) => "1".repeat(Number(n)));
+  out = out.replace(/\\d\{(\d+)\}/g, (_m, n) => "1".repeat(Number(n)));
+  out = out.replace(/\\d/g, "1");
+  // If regex syntax survives, we couldn't sample it — return something sane.
+  return /[\\[\](){}|?*+]/.test(out) ? "gen-value-x" : out;
+}

@@ -1001,3 +1001,67 @@ describe("response content-type follows the spec", () => {
     }
   });
 });
+
+// Same family as the numeric-bounds fix, found at scale: swept across 300 real-world specs from
+// APIs-guru/openapi-directory, `stringDefault` returned the literal "string" regardless of the
+// schema's own maxLength, minLength or pattern — 1,444 violations that crust's OWN validator
+// rejects. genFixtures' validValue had always honoured these; the mock had not. The asymmetry is
+// the tell: two crust tools reading one schema and disagreeing about what satisfies it.
+describe("string bounds in synthesised bodies", () => {
+  const wrap = {
+    openapi: "3.1.0",
+    info: { title: "s", version: "1" },
+    paths: {},
+  } as unknown as OpenApiSpec;
+  const synth = (schema: unknown) =>
+    synthesizeBody({ schema } as never, wrap) as Record<string, unknown>;
+
+  test("maxLength is not exceeded", () => {
+    const schema = { type: "object", properties: { code: { type: "string", maxLength: 3 } } };
+    const body = synth(schema);
+    expect(String(body.code).length).toBeLessThanOrEqual(3);
+    expect(validateSchema(body, schema, wrap, "")).toEqual([]);
+  });
+
+  test("minLength is met", () => {
+    const schema = { type: "object", properties: { tok: { type: "string", minLength: 12 } } };
+    const body = synth(schema);
+    expect(String(body.tok).length).toBeGreaterThanOrEqual(12);
+    expect(validateSchema(body, schema, wrap, "")).toEqual([]);
+  });
+
+  test("a pattern is satisfied where it CAN be sampled", () => {
+    const schema = { type: "object", properties: { n: { type: "string", pattern: "^\\d{3}$" } } };
+    const body = synth(schema);
+    expect(String(body.n)).toMatch(/^\d{3}$/);
+    expect(validateSchema(body, schema, wrap, "")).toEqual([]);
+  });
+
+  // The honest limit, asserted so nobody later mistakes it for a bug or "fixes" it by inventing a
+  // value that merely looks right. sampleFromPattern handles \d{n} forms; a character class like
+  // [0-9]+ it cannot sample, and it returns a neutral value rather than guessing. The mock is then
+  // knowingly wrong for that field — better than confidently wrong, and the pattern violation is
+  // visible under --validate rather than hidden.
+  test("an unsamplable pattern falls back rather than guessing", () => {
+    const schema = { type: "object", properties: { n: { type: "string", pattern: "^[0-9]+$" } } };
+    expect(String(synth(schema).n)).toBe("gen-value-x");
+  });
+
+  test("both bounds together are satisfiable", () => {
+    const schema = {
+      type: "object",
+      properties: { s: { type: "string", minLength: 4, maxLength: 6 } },
+    };
+    const body = synth(schema);
+    const len = String(body.s).length;
+    expect(len).toBeGreaterThanOrEqual(4);
+    expect(len).toBeLessThanOrEqual(6);
+  });
+
+  test('an unconstrained string is still "string", and a format still wins (controls)', () => {
+    const plain = { type: "object", properties: { a: { type: "string" } } };
+    expect(synth(plain).a).toBe("string");
+    const fmt = { type: "object", properties: { e: { type: "string", format: "email" } } };
+    expect(synth(fmt).e).toBe("user@example.com");
+  });
+});

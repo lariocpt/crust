@@ -66,7 +66,7 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
 import { loadSpec, type OpenApiSpec } from "../mockServer/loadSpec";
 import { resolveRef } from "../mockServer/mockResponse";
-import { normaliseType } from "../mockServer/schemaTypes";
+import { normaliseType, sampleFromPattern } from "../mockServer/schemaTypes";
 
 type Schema = {
   /** 3.0 writes a string; 3.1 may write a union array (`["string","null"]`). Read via primaryType. */
@@ -199,14 +199,6 @@ function baseBody(schema: Schema): Record<string, unknown> {
 // Minimal sampler for simple digit/dash regexes (^\d{6}$, ^\d{4,16}$,
 // ^\d{4}-\d{2}-\d{2}$). Anything fancier falls back to a generic string —
 // a failing case will point at the gap.
-export function sampleFromPattern(pattern: string): string {
-  let out = pattern.replace(/^\^/, "").replace(/\$$/, "");
-  out = out.replace(/\\d\{(\d+),\d+\}/g, (_m, n) => "1".repeat(Number(n)));
-  out = out.replace(/\\d\{(\d+)\}/g, (_m, n) => "1".repeat(Number(n)));
-  out = out.replace(/\\d/g, "1");
-  // If regex syntax survives, we couldn't sample it — return something sane.
-  return /[\\[\](){}|?*+]/.test(out) ? "gen-value-x" : out;
-}
 
 /**
  * The type to reason about for a schema node: the first non-"null" member of 3.1's array form,

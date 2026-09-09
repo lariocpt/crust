@@ -1,5 +1,5 @@
 import type { MediaTypeObject, OpenApiSpec, OperationObject, ResponseObject } from "./loadSpec";
-import { normaliseType } from "./schemaTypes";
+import { normaliseType, sampleFromPattern } from "./schemaTypes";
 
 export interface PickedResponse {
   status: number;
@@ -131,7 +131,7 @@ function generateFromSchema(schema: unknown, spec: OpenApiSpec, visited: Set<str
   const type = pickType(s.type);
   switch (type) {
     case "string":
-      return stringDefault(s.format as string | undefined);
+      return stringDefault(s);
     case "integer":
     case "number":
       return numberDefault(s, type === "integer");
@@ -188,7 +188,37 @@ function pickType(raw: unknown): string | undefined {
   return types.find((t) => t !== "null") ?? "null";
 }
 
-function stringDefault(format: string | undefined): string {
+/**
+ * A string that satisfies the schema's own constraints.
+ *
+ * Was: the literal "string" for anything without a known format. Swept across 300 real-world
+ * specs that produced 1,444 violations crust's own validator raised against crust's own mock —
+ * "string" is 6 characters, so it breaks every maxLength below 6, every minLength above it, and
+ * every pattern. genFixtures' validValue had always honoured these; the mock had not.
+ *
+ * Order matters: `format` wins (an email must look like an email), then `pattern`, then the
+ * length bounds clamp whatever came out. A pattern crust cannot sample falls back to the padded
+ * default rather than to something that merely looks plausible.
+ */
+function stringDefault(s: Record<string, unknown>): string {
+  const format = s.format as string | undefined;
+  const min = typeof s.minLength === "number" ? s.minLength : null;
+  const max = typeof s.maxLength === "number" ? s.maxLength : null;
+
+  let value = formatDefault(format);
+  if (value === null) {
+    const pattern = typeof s.pattern === "string" ? s.pattern : null;
+    value = pattern ? sampleFromPattern(pattern) : "string";
+  } else if (min === null && max === null) {
+    return value; // a formatted value with no length bounds: leave it exactly as it was
+  }
+
+  if (max !== null && value.length > max) value = value.slice(0, Math.max(0, max));
+  if (min !== null && value.length < min) value = value.padEnd(min, "x");
+  return value;
+}
+
+function formatDefault(format: string | undefined): string | null {
   switch (format) {
     case "email":
       return "user@example.com";
@@ -204,7 +234,7 @@ function stringDefault(format: string | undefined): string {
     case "byte":
       return "";
     default:
-      return "string";
+      return null;
   }
 }
 
