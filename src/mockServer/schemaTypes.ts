@@ -278,3 +278,29 @@ export function inferType(s: Record<string, unknown>): string | undefined {
   }
   return undefined;
 }
+
+/**
+ * A value satisfying a well-known `format`, or null when the format is not one crust knows.
+ *
+ * Shared by the mock and the fixture generator: the generator had no `uri` at all and fell to its
+ * neutral value, which is not a URI — 972 of its 1,090 format failures across the corpus.
+ */
+export function formatDefault(format: string | undefined): string | null {
+  switch (format) {
+    case "email":
+      return "user@example.com";
+    case "date-time":
+      return "1970-01-01T00:00:00.000Z";
+    case "date":
+      return "1970-01-01";
+    case "uuid":
+      return "00000000-0000-0000-0000-000000000000";
+    case "uri":
+    case "url":
+      return "https://example.com";
+    case "byte":
+      return "";
+    default:
+      return null;
+  }
+}
