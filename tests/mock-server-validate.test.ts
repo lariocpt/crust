@@ -1133,3 +1133,43 @@ describe("an operation documenting no responses at all", () => {
     expect(v.some((x) => x.rule === "undocumented-status")).toBe(true);
   });
 });
+
+// JSON Schema's `pattern` is an ECMA-262 regex, and Unicode property escapes (\p{L}, \P{C}) only
+// mean what they say when the regex is compiled with the `u` flag. Without it they degrade to the
+// literal characters p, {, L, } — so crust reported "does not match pattern" for values that DO
+// match, which is the walker inventing a violation. 623 occurrences across 300 real-world specs;
+// AWS uses \p{L} classes throughout.
+//
+// The fallback is not optional: `u` mode BANS identity escapes that plain mode allows, and specs
+// use them constantly (\/ and \: appear in most ARN patterns). Compiling only with `u` would turn
+// those into uncompilable — which passes, so it would hide real violations instead of inventing
+// them. Try `u`, fall back to plain, and only then give up.
+describe("pattern compilation", () => {
+  const spec = {
+    openapi: "3.1.0",
+    info: { title: "p", version: "1" },
+    paths: {},
+  } as unknown as OpenApiSpec;
+  const check = (pattern: string, value: string) =>
+    validateSchema(value, { type: "string", pattern }, spec, "").map((v) => v.rule);
+
+  test("a unicode property class matches what it should", () => {
+    expect(check("^([\\p{L}\\p{Z}\\p{N}_.:/=+\\-@]*)$", "gen-value-x")).toEqual([]);
+    expect(check("^\\P{C}*$", "gen-value-x")).toEqual([]);
+  });
+
+  test("a unicode class still REJECTS a genuine mismatch (control)", () => {
+    // \p{N} is a number; a letter must not satisfy a digits-only class
+    expect(check("^\\p{N}+$", "abc")).toEqual(["pattern"]);
+  });
+
+  test("an identity-escape pattern that only compiles WITHOUT u still works (control)", () => {
+    // \/ and \: are invalid identity escapes under u; plain mode accepts them
+    expect(check("^arn[\\/\\:\\-\\_\\.a-zA-Z0-9]+$", "arn:aws:iam")).toEqual([]);
+    expect(check("^arn[\\/\\:\\-\\_\\.a-zA-Z0-9]+$", "nope!")).toEqual(["pattern"]);
+  });
+
+  test("an uncompilable pattern still passes (governing rule)", () => {
+    expect(check("([unclosed", "anything")).toEqual([]);
+  });
+});
