@@ -1361,3 +1361,34 @@ describe("a construct crust cannot build still respects the declared type", () =
     expect(/^[\u0031-\u0039][\u0030-\u0039]{0,2}$/.test(v)).toBe(true);
   });
 });
+
+describe("a required property the schema never describes", () => {
+  // Found by the dogfooding residue on ton-console: `Participant` lists `date_create` in `required`
+  // and defines no such property. crust omitted it and its own validator then rejected the body —
+  // a self-inflicted violation. Since no schema constrains the name, ANY value satisfies it, so
+  // emitting one is both legal and strictly better than emitting a body that fails.
+  const body = (schema: Record<string, unknown>): Record<string, unknown> =>
+    synthesizeBody({ schema }, {}) as Record<string, unknown>;
+
+  test("the key is present, so the body satisfies its own required list", () => {
+    const out = body({
+      type: "object",
+      required: ["id", "date_create"],
+      properties: { id: { type: "integer" } },
+    });
+    expect(Object.hasOwn(out, "date_create")).toBe(true);
+  });
+
+  // Control: with additionalProperties: false the schema forbids the very key it requires. Nothing
+  // can satisfy it, and inventing the key would break the stricter rule instead. crust leaves it,
+  // and the contradiction stays visible as the spec's.
+  test("additionalProperties: false makes it unsatisfiable, and crust does not paper over it", () => {
+    const out = body({
+      type: "object",
+      additionalProperties: false,
+      required: ["id", "date_create"],
+      properties: { id: { type: "integer" } },
+    });
+    expect(Object.hasOwn(out, "date_create")).toBe(false);
+  });
+});
