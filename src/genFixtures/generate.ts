@@ -760,21 +760,84 @@ ${urlLines}
 // cyclic ref is cut to {} — a cyclic request body can't be instantiated as a
 // finite valid example anyway, and missing coverage beats wrong output.
 // OpenAPI 3.1 $ref siblings are merged over the resolved target.
-export function derefSchemas(node: unknown, spec: OpenApiSpec, stack: string[] = []): unknown {
-  if (Array.isArray(node)) return node.map((n) => derefSchemas(n, spec, stack));
+interface DerefContext {
+  /** Resolved form of each ref, reused wherever that ref appears. */
+  cache: Map<string, unknown>;
+  /** How many times a cycle has been cut, used to decide what may be cached. */
+  cuts: number;
+  /** Nodes left to build before inlining stops. */
+  budget: number;
+  /** Whether the budget has already been reported. */
+  warned: boolean;
+}
+
+/**
+ * How many nodes the inlined spec may contain.
+ *
+ * Sharing resolved refs takes azure's network-applicationGateway from 17.4s and 2.2 GB to 12.5s and
+ * 1.2 GB, and that is still unusable: the cache serves 85% of 4.7 MILLION lookups for one file, and
+ * the 15% it must refuse — resolutions that cut a cycle, and so depend on the path that reached them
+ * — each rebuild a deep tree. No amount of sharing fixes a walk that large.
+ *
+ * So it is bounded. Past the budget a `$ref` inlines as `{}`, exactly as a cyclic one does, and
+ * gen-fixtures says so. This module already accepts that trade for cycles — "missing coverage beats
+ * wrong output" — and a spec that cannot be inlined in 200,000 nodes is the same situation: fewer
+ * generated cases, none of them wrong.
+ */
+const DEREF_NODE_BUDGET = 200_000;
+
+export function derefSchemas(
+  node: unknown,
+  spec: OpenApiSpec,
+  stack: string[] = [],
+  ctx: DerefContext = { cache: new Map(), cuts: 0, budget: DEREF_NODE_BUDGET, warned: false },
+): unknown {
+  if (Array.isArray(node)) return node.map((n) => derefSchemas(n, spec, stack, ctx));
   if (!node || typeof node !== "object") return node;
   const obj = node as Record<string, unknown>;
   const ref = obj.$ref;
   if (typeof ref === "string") {
-    if (stack.includes(ref)) return {};
+    if (stack.includes(ref)) {
+      ctx.cuts++;
+      return {};
+    }
     const target = resolveRef(ref, spec);
     if (!target || typeof target !== "object") return {};
-    const { $ref: _drop, ...siblings } = obj;
-    const resolved = derefSchemas(target, spec, [...stack, ref]) as Record<string, unknown>;
-    return { ...resolved, ...(derefSchemas(siblings, spec, stack) as Record<string, unknown>) };
+    if (ctx.budget <= 0) {
+      if (!ctx.warned) {
+        ctx.warned = true;
+        process.stderr.write(
+          `gen-fixtures: spec too large to inline fully; \`$ref\`s past ${DEREF_NODE_BUDGET} nodes ` +
+            "are cut, so fewer cases are generated — none of them wrong\n",
+        );
+      }
+      return {};
+    }
+    ctx.budget--;
+
+    // Resolve each ref ONCE and share the result. Inlining a fresh deep copy at every occurrence
+    // makes the output grow with the number of PATHS through the schema graph rather than its size:
+    // azure's network-applicationGateway is a DAG of a few schemas referenced from many places, and
+    // a few-MB spec became a 2.03 GB structure — 8 seconds on the versions that survived, and out of
+    // memory on five of the nine. `gen-fixtures` there did not run slowly, it did not run.
+    //
+    // A resolution that CUT a cycle is not shareable: what it produced depends on which refs were
+    // already open on the path that reached it. `cuts` is how that is detected.
+    let resolved = ctx.cache.get(ref) as Record<string, unknown> | undefined;
+    if (resolved === undefined) {
+      const before = ctx.cuts;
+      resolved = derefSchemas(target, spec, [...stack, ref], ctx) as Record<string, unknown>;
+      if (ctx.cuts === before) ctx.cache.set(ref, resolved);
+    }
+
+    const { $ref: _drop, ...rawSiblings } = obj;
+    const siblings = derefSchemas(rawSiblings, spec, stack, ctx) as Record<string, unknown>;
+    // Shared when there is nothing to overlay; a shallow copy when there is. Consumers below read
+    // these nodes structurally and never mutate them, which is what makes sharing safe.
+    return Object.keys(siblings).length === 0 ? resolved : { ...resolved, ...siblings };
   }
   const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(obj)) out[k] = derefSchemas(v, spec, stack);
+  for (const [k, v] of Object.entries(obj)) out[k] = derefSchemas(v, spec, stack, ctx);
   return out;
 }
 

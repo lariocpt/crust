@@ -3,7 +3,13 @@ import { existsSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { envNameFor, generateFixtures, idPathFor, wrongTypeFor } from "../src/genFixtures/generate";
+import {
+  derefSchemas,
+  envNameFor,
+  generateFixtures,
+  idPathFor,
+  wrongTypeFor,
+} from "../src/genFixtures/generate";
 import type { OpenApiSpec } from "../src/mockServer/loadSpec";
 import { startServer } from "../src/mockServer/server";
 import { runPipes } from "../src/testPipes/runner";
@@ -1181,5 +1187,62 @@ describe("openapi 3.1 union types in generated fixtures", () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("derefSchemas does not materialise an exponential tree", () => {
+  // azure's network-applicationGateway is a DAG: a few schemas, each referenced from many places.
+  // Inlining a FRESH deep copy at every occurrence turned a few-MB spec into a 2.03 GB structure —
+  // 8 seconds on the versions that survived, and OUT OF MEMORY on five of the nine. `gen-fixtures`
+  // against those specs does not run slowly; it does not run.
+  //
+  // The resolved form of a ref is the same wherever it appears, so it is resolved once and shared.
+  test("a DAG of shared refs stays linear", () => {
+    const schemas: Record<string, unknown> = {
+      Leaf: { type: "object", properties: { a: { type: "string" }, b: { type: "string" } } },
+    };
+    // Each level references the one below eight times. At depth 8 the copying walk is 8^8 nodes.
+    for (let i = 1; i <= 8; i++) {
+      const props: Record<string, unknown> = {};
+      for (let k = 0; k < 8; k++)
+        props[`k${k}`] = { $ref: `#/components/schemas/${i === 1 ? "Leaf" : `L${i - 1}`}` };
+      schemas[`L${i}`] = { type: "object", properties: props };
+    }
+    const spec = { components: { schemas } } as never;
+    const started = performance.now();
+    const out = derefSchemas({ $ref: "#/components/schemas/L8" }, spec) as Record<string, unknown>;
+    expect(performance.now() - started).toBeLessThan(2000);
+    // Still correct: the leaf is reachable through the whole depth.
+    let node: Record<string, unknown> = out;
+    for (let i = 0; i < 8; i++)
+      node = (node.properties as Record<string, Record<string, unknown>>).k0;
+    expect((node.properties as Record<string, unknown>).a).toEqual({ type: "string" });
+  });
+
+  // Control: a cyclic ref is still cut to {}, which is the documented behaviour — a cyclic request
+  // body cannot be instantiated as a finite valid example.
+  test("a cyclic ref is still cut", () => {
+    const spec = {
+      components: {
+        schemas: {
+          N: { type: "object", properties: { self: { $ref: "#/components/schemas/N" } } },
+        },
+      },
+    } as never;
+    const out = derefSchemas({ $ref: "#/components/schemas/N" }, spec) as Record<string, unknown>;
+    expect((out.properties as Record<string, unknown>).self).toEqual({});
+  });
+
+  // Control: $ref siblings still merge over the resolved target.
+  test("siblings still override the resolved target", () => {
+    const spec = {
+      components: { schemas: { S: { type: "string", description: "base" } } },
+    } as never;
+    const out = derefSchemas(
+      { $ref: "#/components/schemas/S", description: "mine" },
+      spec,
+    ) as Record<string, unknown>;
+    expect(out.type).toBe("string");
+    expect(out.description).toBe("mine");
   });
 });
