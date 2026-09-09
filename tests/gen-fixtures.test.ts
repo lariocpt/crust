@@ -1578,3 +1578,69 @@ describe("the last three divergences from the mock", () => {
     );
   });
 });
+
+describe("an object whose properties live in a union branch", () => {
+  // The last nine invalid base values in the corpus, one cause. A node declaring `type: "object"`
+  // AND a `oneOf`/`anyOf` whose branches carry the properties produced `{}`: the explicit type sends
+  // it straight to the object case, which composes through `allOf` only, so the branches were never
+  // read. whatsapp writes every media field this way (`audio`, `image`, `video`, `document`), and
+  // mailscript writes it on array items.
+  //
+  // The same node WITHOUT `type` worked, which is what made it invisible — the combinator path
+  // handles it, and only the typed spelling falls through.
+  const ok = (schema: Record<string, unknown>) =>
+    validateSchema(validValue(schema as never), schema, {} as never, "");
+
+  const AUDIO = {
+    type: "object",
+    description: "The media object containing audio",
+    oneOf: [
+      {
+        title: "AudioById",
+        type: "object",
+        properties: { id: { type: "string" } },
+        required: ["id"],
+      },
+      {
+        title: "AudioByLink",
+        type: "object",
+        properties: { link: { type: "string" } },
+        required: ["link"],
+      },
+    ],
+  };
+
+  test("a typed object with a oneOf gets the branch's properties", () => {
+    expect(ok(AUDIO)).toEqual([]);
+    expect((validValue(AUDIO as never) as Record<string, unknown>).id).toBeDefined();
+  });
+
+  test("the same holds inside array items", () => {
+    const items = {
+      type: "array",
+      items: {
+        type: "object",
+        oneOf: [
+          {
+            properties: { key: { type: "string" }, value: { type: "string" } },
+            required: ["key", "value"],
+          },
+        ],
+      },
+    };
+    expect(ok(items)).toEqual([]);
+  });
+
+  // Control: a node with its OWN properties keeps them, and the untyped spelling is unchanged.
+  test("the node's own properties still win, and the untyped form is unchanged", () => {
+    const both = {
+      type: "object",
+      required: ["own"],
+      properties: { own: { type: "string" } },
+      oneOf: [{ properties: { other: { type: "string" } }, required: ["other"] }],
+    };
+    expect((validValue(both as never) as Record<string, unknown>).own).toBeDefined();
+    const { type: _drop, ...untyped } = AUDIO;
+    expect((validValue(untyped as never) as Record<string, unknown>).id).toBeDefined();
+  });
+});
