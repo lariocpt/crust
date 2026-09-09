@@ -1896,3 +1896,82 @@ describe("oneOf/anyOf does not swallow its node's own properties", () => {
     expect(out.fromBranch).toBeDefined();
   });
 });
+
+describe("an optional property crust cannot represent is omitted", () => {
+  // telegram.org: Message -> pinned_message -> Chat -> pinned_message -> Message. `Chat` is reached
+  // outside the cycle so it generates ALL its properties, including the OPTIONAL `pinned_message`,
+  // which re-enters the cycle and came back as `{}` — an object carrying none of Message's required
+  // fields. 138 violations in one spec.
+  //
+  // An optional property may simply be absent, and absent always validates. Emitting a value known
+  // to be invalid is strictly worse than emitting nothing, which is the whole of this fix.
+  const SPEC = {
+    components: {
+      schemas: {
+        Message: {
+          type: "object",
+          required: ["message_id", "chat"],
+          properties: {
+            message_id: { type: "integer" },
+            chat: { $ref: "#/components/schemas/Chat" },
+            // Optional and self-referential: this is the edge that reaches the marker level.
+            pinned_message: { $ref: "#/components/schemas/Message" },
+          },
+        },
+        Chat: {
+          type: "object",
+          required: ["id"],
+          properties: {
+            id: { type: "integer" },
+            pinned_message: { $ref: "#/components/schemas/Message" },
+          },
+        },
+      },
+    },
+  };
+
+  test("no object in the body is missing its own required properties", () => {
+    const out = synthesizeBody(
+      { schema: { $ref: "#/components/schemas/Message" } },
+      SPEC,
+    ) as Record<string, unknown>;
+    const walkMessage = (m: Record<string, unknown>): void => {
+      expect(m.message_id).toBeDefined();
+      expect(m.chat).toBeDefined();
+      walkChat(m.chat as Record<string, unknown>);
+      if (m.pinned_message !== undefined) walkMessage(m.pinned_message as Record<string, unknown>);
+    };
+    const walkChat = (c: Record<string, unknown>): void => {
+      expect(c.id).toBeDefined();
+      // Optional: present or absent, but never present-and-invalid.
+      if (c.pinned_message !== undefined) walkMessage(c.pinned_message as Record<string, unknown>);
+    };
+    walkMessage(out);
+  });
+
+  // Control: a required property that cannot be represented is still PRESENT, because absent would
+  // fail `required` outright — the empty shape remains the least-bad answer there.
+  test("a required property that cannot be represented is still present", () => {
+    const spec = {
+      components: {
+        schemas: {
+          A: {
+            type: "object",
+            required: ["b"],
+            properties: { b: { $ref: "#/components/schemas/B" } },
+          },
+          B: {
+            type: "object",
+            required: ["a"],
+            properties: { a: { $ref: "#/components/schemas/A" } },
+          },
+        },
+      },
+    };
+    const out = synthesizeBody({ schema: { $ref: "#/components/schemas/A" } }, spec) as Record<
+      string,
+      unknown
+    >;
+    expect(out.b).toBeDefined();
+  });
+});

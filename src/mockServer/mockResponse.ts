@@ -80,7 +80,9 @@ export function synthesizeBody(media: MediaTypeObject | null, spec: OpenApiSpec)
   if (media.schema !== undefined) {
     nodeBudget = NODE_BUDGET;
     try {
-      return generateFromSchema(media.schema, spec, new Set());
+      // The sentinel is internal: a body is never the symbol itself.
+      const value = generateFromSchema(media.schema, spec, new Set());
+      return value === UNREPRESENTABLE ? null : value;
     } finally {
       nodeBudget = 0;
     }
@@ -104,6 +106,20 @@ export function synthesizeBody(media: MediaTypeObject | null, spec: OpenApiSpec)
  */
 let nodeBudget = 0;
 let budgetWarned = false;
+
+/**
+ * "Nothing valid can be produced here." Returned where a cycle has already been expanded as far as
+ * it can be, and distinct from `null` — which is a VALUE, and a legal one for a nullable field.
+ *
+ * telegram.org is the case that needs it: Message -> pinned_message -> Chat -> pinned_message ->
+ * Message. `Chat` sits outside the cycle, so it generates all its properties including the OPTIONAL
+ * `pinned_message`, which re-enters and came back as `{}` — an object carrying none of Message's
+ * required fields. 138 violations in one spec, every one crust's own.
+ *
+ * An optional property may simply be ABSENT, and absent always validates. So the caller decides:
+ * omit it if it is optional, and fall back to the empty shape only where `required` forces presence.
+ */
+const UNREPRESENTABLE = Symbol("unrepresentable");
 
 /**
  * How many schema nodes one response body may expand before crust stops going deeper.
@@ -249,7 +265,7 @@ function generateFromSchema(schema: unknown, spec: OpenApiSpec, visited: Set<str
       // empty shape.
       // The marker is what makes "one shallow level" true rather than aspirational: a REQUIRED
       // property that closes the loop lands here again, sees it, and stops with the empty shape.
-      if (visited.has(`${refName}#shallow`)) return emptyOfDeclaredType(resolved, spec);
+      if (visited.has(`${refName}#shallow`)) return UNREPRESENTABLE;
       return shallowForCycle(resolved, spec, visited, refName);
     }
     if (!resolved) return null;
@@ -376,7 +392,10 @@ function generateFromSchema(schema: unknown, spec: OpenApiSpec, visited: Set<str
       // Honour the schema's own bounds. One element was the default and remains it, but minItems
       // and maxItems are as binding here as minLength is on a string — a maxItems of 0 means the
       // empty array, and synthesising one element there is a body our own validator rejects.
-      const item = generateFromSchema(s.items, spec, visited);
+      const generatedItem = generateFromSchema(s.items, spec, visited);
+      // An array whose element cannot be represented is the EMPTY array, not an array of nothing.
+      if (generatedItem === UNREPRESENTABLE) return [];
+      const item = generatedItem;
       const min = typeof s.minItems === "number" ? s.minItems : null;
       const max = typeof s.maxItems === "number" ? s.maxItems : null;
       let count = 1;
@@ -390,8 +409,20 @@ function generateFromSchema(schema: unknown, spec: OpenApiSpec, visited: Set<str
       const props = s.properties as Record<string, unknown> | undefined;
       if (!props || typeof props !== "object") return type === "object" ? {} : null;
       const out: Record<string, unknown> = {};
+      const requiredHere = new Set(
+        Array.isArray(s.required)
+          ? s.required.filter((r): r is string => typeof r === "string")
+          : [],
+      );
       for (const [k, v] of Object.entries(props)) {
-        out[k] = generateFromSchema(v, spec, visited);
+        const generated = generateFromSchema(v, spec, visited);
+        if (generated === UNREPRESENTABLE) {
+          // Optional: leave it out, which always validates. Required: presence is forced, so the
+          // empty shape is the least-bad answer and the violation that remains is the schema's.
+          if (requiredHere.has(k)) out[k] = emptyOfDeclaredType(deref(v, spec), spec) ?? {};
+          continue;
+        }
+        out[k] = generated;
       }
       // A name in `required` that `properties` never describes. Real specs do this (ton-console's
       // Participant requires `date_create` and defines no such property), and omitting it made the
