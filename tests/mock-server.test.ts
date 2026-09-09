@@ -1631,3 +1631,56 @@ describe("a mutually recursive schema graph is bounded, not endless", () => {
     expect((out.b1 as Record<string, unknown>).tag).toBeDefined();
   });
 });
+
+describe("a node's own properties narrow what it inherits through allOf", () => {
+  // Azure writes `allOf: [{$ref: CustomAlertRule}]` to inherit `ruleType: {type: string}` and then
+  // restates that property with an `enum` to narrow it. Merging generated VALUES cannot resolve
+  // that: both precedences were measured on all 4,138 specs and both lose — letting the branch win
+  // emits the inherited "string" the enum forbids, letting the node win costs 668 violations
+  // elsewhere, because a node's own fragment is often the vaguer one. Keywords settle it.
+  const body = (
+    schema: Record<string, unknown>,
+    spec: Record<string, unknown>,
+  ): Record<string, unknown> => synthesizeBody({ schema }, spec) as Record<string, unknown>;
+
+  const SPEC = {
+    components: {
+      schemas: {
+        Base: {
+          type: "object",
+          properties: { ruleType: { type: "string" } },
+          required: ["ruleType"],
+        },
+      },
+    },
+  };
+
+  test("an enum on the node constrains a property the base left open", () => {
+    const out = body(
+      {
+        type: "object",
+        allOf: [{ $ref: "#/components/schemas/Base" }],
+        properties: { ruleType: { type: "string", enum: ["Allowed", "Denied"] } },
+      },
+      SPEC,
+    );
+    expect(out.ruleType).toBe("Allowed");
+  });
+
+  test("properties that only the branch declares are still inherited", () => {
+    const out = body(
+      {
+        type: "object",
+        allOf: [
+          { $ref: "#/components/schemas/Base" },
+          { type: "object", properties: { onlyOnBranch: { type: "string" } } },
+        ],
+        properties: { own: { type: "string" } },
+      },
+      SPEC,
+    );
+    expect(out.onlyOnBranch).toBeDefined();
+    expect(out.own).toBeDefined();
+    expect(out.ruleType).toBeDefined();
+  });
+});

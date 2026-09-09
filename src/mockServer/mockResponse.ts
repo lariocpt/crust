@@ -206,15 +206,37 @@ function generateFromSchema(schema: unknown, spec: OpenApiSpec, visited: Set<str
     // and returning here dropped the siblings entirely. appcenter.ms writes
     // `allOf: [{allOf: [inner], properties: outer}]` and crust mocked 2 of 12 fields — the largest
     // single group in the full 4,138-spec sweep. Generated with `allOf` removed so this cannot
-    // recurse, and merged UNDER the branches, which are the more specific statement.
-    if (s.properties !== undefined) {
-      const { allOf: _ignored, ...own } = s;
-      const ownValue = generateFromSchema(own, spec, visited);
-      if (ownValue && typeof ownValue === "object" && !Array.isArray(ownValue)) {
-        if (Object.keys(ownValue).length > 0) {
-          return { ...ownValue, ...merged };
-        }
+    // recurse. Which side "wins" is the wrong question — see mergePropertySchemas below.
+    // If this allOf describes an OBJECT, build it from merged property SCHEMAS rather than from
+    // merged property values — see mergePropertySchemas. A fragment that adds `enum` to a property
+    // the base declared as a plain string then constrains the value instead of losing a race to it.
+    // Only the properties that are genuinely CONTESTED get rebuilt. A property declared once has
+    // already been generated correctly in `merged`; regenerating EVERY property from a merged
+    // schema made the full-corpus sweep run several times longer, because each property's own
+    // generation re-walked its ancestors' allOf trees. Rebuilding just the contested ones is the
+    // same answer for a fraction of the work.
+    const contested = contestedProperties(s, spec);
+    if (s.properties !== undefined || contested !== null) {
+      const out: Record<string, unknown> = {};
+      // The node's OWN properties first (PR #24: taking the allOf path used to drop them entirely),
+      // then the branches over them.
+      if (s.properties !== undefined) {
+        const { allOf: _ignored, ...own } = s;
+        const ownValue = generateFromSchema(own, spec, visited);
+        if (ownValue && typeof ownValue === "object" && !Array.isArray(ownValue))
+          Object.assign(out, ownValue);
       }
+      Object.assign(out, merged);
+      // Then the properties the chain declares MORE THAN ONCE, rebuilt from their merged schema.
+      // Neither side of that overlap is reliably the narrowing — azure inherits
+      // `ruleType: {type: string}` and restates it with an `enum`, and both value-level precedences
+      // were measured on the full corpus and both lose. Keywords settle it: the union of every
+      // fragment keeps the base's `type` AND the derived `enum`, because neither overwrites what
+      // the other alone declares. Only contested names are rebuilt; the rest are already right.
+      for (const [name, parts] of Object.entries(contested ?? {})) {
+        out[name] = generateFromSchema(Object.assign({}, ...parts), spec, visited);
+      }
+      if (Object.keys(out).length > 0) return out;
     }
     if (sawObject) return merged;
     if (scalar !== undefined) return scalar;
@@ -364,6 +386,69 @@ function shallowForCycle(
     out[name] = generateFromSchema(sub, spec, marked);
   }
   return out;
+}
+
+/**
+ * Every schema fragment declared for each property, merged keyword-by-keyword across an `allOf`
+ * chain and the node's own `properties`.
+ *
+ * Merging generated VALUES cannot work, and both precedences were tried on the full corpus to prove
+ * it: azure inherits `ruleType: {type: string}` from a base and restates it with an `enum`, so
+ * letting the branch win emits the inherited "string" that the enum forbids — but letting the node
+ * win instead cost 668 more violations elsewhere, because a node's own fragment is often the
+ * vaguer one. Neither side is reliably the narrowing.
+ *
+ * Keywords are. `allOf` is an intersection, so a property's effective schema is the union of every
+ * keyword any fragment declares: the base contributes `type`, the derived schema contributes
+ * `enum`, and Object.assign keeps both because the base never mentions `enum` to overwrite it.
+ */
+/** The properties an allOf chain declares MORE THAN ONCE — the only ones whose effective schema
+ *  differs from the single fragment that produced their value. */
+function contestedProperties(
+  schema: unknown,
+  spec: OpenApiSpec,
+): Record<string, Record<string, unknown>[]> | null {
+  const frags = mergePropertySchemas(schema, spec);
+  const out: Record<string, Record<string, unknown>[]> = {};
+  let any = false;
+  for (const [name, parts] of Object.entries(frags)) {
+    if (parts.length > 1) {
+      out[name] = parts;
+      any = true;
+    }
+  }
+  return any ? out : null;
+}
+
+function mergePropertySchemas(
+  schema: unknown,
+  spec: OpenApiSpec,
+  into: Record<string, Record<string, unknown>[]> = {},
+  depth = 0,
+): Record<string, Record<string, unknown>[]> {
+  if (!schema || typeof schema !== "object" || depth > 10) return into;
+  let s = schema as Record<string, unknown>;
+  if (typeof s.$ref === "string") {
+    const resolved = resolveRef(s.$ref, spec);
+    if (!resolved) return into;
+    s = resolved as Record<string, unknown>;
+  }
+  // Branches first, the node's own fragments last: on a keyword both genuinely declare, the node
+  // restating it is the deliberate act.
+  if (Array.isArray(s.allOf))
+    for (const branch of s.allOf) mergePropertySchemas(branch, spec, into, depth + 1);
+  if (s.properties && typeof s.properties === "object") {
+    for (const [name, sub] of Object.entries(s.properties as Record<string, unknown>)) {
+      if (!sub || typeof sub !== "object") continue;
+      let list = into[name];
+      if (!list) {
+        list = [];
+        into[name] = list;
+      }
+      list.push(sub as Record<string, unknown>);
+    }
+  }
+  return into;
 }
 
 /**
