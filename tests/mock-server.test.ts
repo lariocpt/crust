@@ -1447,3 +1447,61 @@ describe("a cycle terminator satisfies the schema it stands in for", () => {
     expect(JSON.stringify(out).length).toBeLessThan(2000);
   });
 });
+
+describe("allOf does not swallow its node's own keywords", () => {
+  // The largest group in the full 4,138-spec sweep. JSON Schema keywords are INDEPENDENT: a node
+  // carrying both `allOf` and its own `properties` must satisfy both, because allOf is an
+  // intersection and not a replacement. crust took the allOf path and returned early, so the
+  // node's own properties were dropped entirely — appcenter.ms mocks 2 of a schema's 12 fields,
+  // and every one of the 10 missing required ones is a violation crust hands itself.
+  const body = (
+    schema: Record<string, unknown>,
+    spec: Record<string, unknown> = {},
+  ): Record<string, unknown> => synthesizeBody({ schema }, spec) as Record<string, unknown>;
+
+  test("sibling properties survive alongside allOf", () => {
+    const out = body({
+      type: "object",
+      allOf: [
+        {
+          type: "object",
+          properties: { fromBranch: { type: "string" } },
+          required: ["fromBranch"],
+        },
+      ],
+      properties: { ownProperty: { type: "string" } },
+      required: ["ownProperty"],
+    });
+    expect(out.fromBranch).toBeDefined();
+    expect(out.ownProperty).toBeDefined();
+  });
+
+  test("it survives nesting, which is how real specs write it", () => {
+    // appcenter.ms's exact shape: allOf -> [ { allOf: [inner], properties: outer } ]
+    const out = body({
+      type: "object",
+      allOf: [
+        {
+          allOf: [
+            { type: "object", properties: { state: { type: "string" } }, required: ["state"] },
+          ],
+          properties: { appVersion: { type: "string" }, count: { type: "integer" } },
+          required: ["appVersion", "count"],
+        },
+      ],
+    });
+    expect(out.state).toBeDefined();
+    expect(out.appVersion).toBeDefined();
+    expect(out.count).toBeDefined();
+  });
+
+  // Control: an allOf with no sibling properties still behaves exactly as before, so the fix
+  // cannot be "always generate the object" wearing a disguise.
+  test("an allOf around a scalar is still a scalar", () => {
+    const out = body({
+      type: "object",
+      properties: { status: { allOf: [{ type: "string", enum: ["live", "dead"] }] } },
+    });
+    expect(out.status).toBe("live");
+  });
+});
