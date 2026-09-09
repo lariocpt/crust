@@ -106,14 +106,27 @@ function generateFromSchema(schema: unknown, spec: OpenApiSpec, visited: Set<str
   if (Array.isArray(s.enum) && s.enum.length > 0) return s.enum[0];
 
   if (Array.isArray(s.allOf)) {
+    // allOf means "this, refined", and the thing being refined is not always an object: AWS's
+    // specs wrap every enum as `allOf: [{$ref: '.../Status'}]`. Merging with Object.assign alone
+    // DISCARDED a scalar branch and returned {} — an empty object where an enum string belongs,
+    // which crust's own validator then rejected (4,538 times across 300 real-world specs).
+    // So: merge the object branches when there are any, and otherwise fall back to the first
+    // branch that produced a value at all. Objects still win a mixed allOf, because merging is
+    // the meaningful reading there and a stray scalar branch must not displace it.
     const merged: Record<string, unknown> = {};
+    let sawObject = false;
+    let scalar: unknown;
     for (const branch of s.allOf) {
       const value = generateFromSchema(branch, spec, visited);
       if (value && typeof value === "object" && !Array.isArray(value)) {
         Object.assign(merged, value);
+        sawObject = true;
+      } else if (scalar === undefined && value !== undefined && value !== null) {
+        scalar = value;
       }
     }
-    return merged;
+    if (sawObject) return merged;
+    return scalar !== undefined ? scalar : merged;
   }
 
   if (Array.isArray(s.oneOf) && s.oneOf.length > 0) {

@@ -1065,3 +1065,45 @@ describe("string bounds in synthesised bodies", () => {
     expect(synth(fmt).e).toBe("user@example.com");
   });
 });
+
+// allOf is the OpenAPI idiom for "this, refined" and is not restricted to objects: AWS's specs
+// wrap every enum as `allOf: [{$ref: '#/.../Status'}]`. generateFromSchema merged branches with
+// Object.assign, which silently DISCARDS a scalar branch, so such a field synthesised `{}` — an
+// empty object where an enum string belongs, rejected by crust's own validator. 4,538 occurrences
+// across 300 real-world specs, and the tell is that the same schema unwrapped works fine.
+describe("allOf around a scalar", () => {
+  const spec = {
+    openapi: "3.1.0",
+    info: { title: "a", version: "1" },
+    components: { schemas: { Status: { type: "string", enum: ["COMPLETED", "FAILED"] } } },
+    paths: {},
+  } as unknown as OpenApiSpec;
+  const synth = (schema: unknown) => synthesizeBody({ schema } as never, spec);
+
+  test("allOf wrapping a $ref'd enum yields the enum value, not {}", () => {
+    expect(synth({ allOf: [{ $ref: "#/components/schemas/Status" }] })).toBe("COMPLETED");
+  });
+
+  test("allOf wrapping an inline scalar yields the scalar", () => {
+    expect(synth({ allOf: [{ type: "string", enum: ["A", "B"] }] })).toBe("A");
+    expect(synth({ allOf: [{ type: "integer", minimum: 5 }] })).toBe(5);
+  });
+
+  test("allOf over objects still MERGES them (control)", () => {
+    const merged = synth({
+      allOf: [
+        { type: "object", properties: { a: { type: "string" } } },
+        { type: "object", properties: { b: { type: "integer" } } },
+      ],
+    }) as Record<string, unknown>;
+    expect(merged).toEqual({ a: "string", b: 0 });
+  });
+
+  test("a mixed allOf prefers the object merge (control)", () => {
+    // objects present: merging is the meaningful reading; a stray scalar branch must not win
+    const merged = synth({
+      allOf: [{ type: "object", properties: { a: { type: "string" } } }, { type: "string" }],
+    }) as Record<string, unknown>;
+    expect(merged).toEqual({ a: "string" });
+  });
+});
