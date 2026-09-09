@@ -427,6 +427,28 @@ function pickType(raw: unknown): string | undefined {
  * length bounds clamp whatever came out. A pattern crust cannot sample falls back to the padded
  * default rather than to something that merely looks plausible.
  */
+/** Resolve a `$ref` chain without generating anything. */
+function deref(schema: unknown, spec: OpenApiSpec, depth = 0): unknown {
+  let s = schema;
+  while (
+    s &&
+    typeof s === "object" &&
+    typeof (s as Record<string, unknown>).$ref === "string" &&
+    depth < 20
+  ) {
+    s = resolveRef((s as Record<string, unknown>).$ref as string, spec);
+    depth++;
+  }
+  return s;
+}
+
+/** True when an array's items point back at something already open on this path. */
+function itemsReenter(items: unknown, visited: Set<string>): boolean {
+  if (!items || typeof items !== "object") return false;
+  const ref = (items as Record<string, unknown>).$ref;
+  return typeof ref === "string" && visited.has(ref);
+}
+
 /**
  * The value a `$ref` cycle terminates with: an object carrying the properties its schema requires,
  * and nothing else. Optional properties are dropped — that is what stops the recursion, since the
@@ -457,6 +479,24 @@ function shallowForCycle(
     if (sub === undefined) {
       out[name] = null; // required but never described — the same rule as the object case
       continue;
+    }
+    // A required ARRAY of the type we are terminating: the empty array satisfies `required` and is
+    // finite, where one element would be a terminating level carrying none of ITS OWN required
+    // properties — valid at the top and invalid at every level below. bbc.co.uk's `ChildCategory`
+    // requires `child_categories`, an array of ChildCategory. The schema offers this answer itself;
+    // crust was declining to take it. `minItems` still wins where the spec asks for elements.
+    const subSchema = deref(sub, spec);
+    if (subSchema && typeof subSchema === "object") {
+      const ss = subSchema as Record<string, unknown>;
+      const wantsElements = typeof ss.minItems === "number" && ss.minItems > 0;
+      if (
+        normaliseType(ss.type, ss.nullable).includes("array") &&
+        !wantsElements &&
+        itemsReenter(ss.items, visited)
+      ) {
+        out[name] = [];
+        continue;
+      }
     }
     // `visited` still holds refName, so a required property that closes the loop lands back in the
     // cycle branch; the marker makes it terminate there with the empty shape instead of recursing.
@@ -553,7 +593,7 @@ function composedShape(
     if (!resolved || depth >= 10) return out;
     s = resolved as Record<string, unknown>;
   }
-  out.types.push(...normaliseType(s));
+  out.types.push(...normaliseType(s.type, s.nullable));
   if (s.properties && typeof s.properties === "object") Object.assign(out.properties, s.properties);
   if (Array.isArray(s.required))
     out.required.push(...s.required.filter((r): r is string => typeof r === "string"));
@@ -580,7 +620,7 @@ function composedShape(
 function emptyOfDeclaredType(schema: unknown, spec?: OpenApiSpec): unknown {
   if (!schema || typeof schema !== "object") return null;
   const s = schema as Record<string, unknown>;
-  const types = normaliseType(s);
+  const types = normaliseType(s.type, s.nullable);
   if (types.includes("object")) return {};
   if (types.includes("array")) return [];
   // `type` is optional in JSON Schema and real specs leave it out constantly. The shape is still

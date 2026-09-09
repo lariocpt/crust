@@ -1795,3 +1795,65 @@ describe("a discriminator declared the inheritance way", () => {
     expect(["Thing.handle", "Thing.confirm"]).toContain(out.method as string);
   });
 });
+
+describe("a required array of a recursive type terminates as empty", () => {
+  // bbc.co.uk: `ChildCategory` requires both `category_type` and `child_categories`, and
+  // `child_categories` is an array of ChildCategory. The cycle terminator filled the array with one
+  // element, and that element — being the terminating level — carried none of ITS required
+  // properties. The nesting is finite but every level below the first is invalid.
+  //
+  // Such a schema is not unsatisfiable: the EMPTY array satisfies `required` and is finite. That is
+  // the answer the schema itself offers, and crust was declining to take it.
+  test("the recursive array is empty rather than holding an invalid element", () => {
+    const spec = {
+      components: {
+        schemas: {
+          Cat: {
+            type: "object",
+            required: ["name", "kids"],
+            properties: {
+              name: { type: "string" },
+              kids: { type: "array", items: { $ref: "#/components/schemas/Cat" } },
+            },
+          },
+        },
+      },
+    };
+    const out = synthesizeBody({ schema: { $ref: "#/components/schemas/Cat" } }, spec) as Record<
+      string,
+      unknown
+    >;
+    expect(out.name).toBeDefined();
+    const kids = out.kids as unknown[];
+    expect(Array.isArray(kids)).toBe(true);
+    // Whatever depth it stops at, no level may be an object missing its own required properties.
+    const check = (node: Record<string, unknown>): void => {
+      expect(node.name).toBeDefined();
+      expect(Array.isArray(node.kids)).toBe(true);
+      for (const kid of node.kids as Record<string, unknown>[]) check(kid);
+    };
+    check(out);
+  });
+
+  // Control: minItems still wins where the spec asks for elements, even inside a cycle.
+  test("minItems is still honoured on a recursive array", () => {
+    const spec = {
+      components: {
+        schemas: {
+          Node: {
+            type: "object",
+            required: ["kids"],
+            properties: {
+              kids: { type: "array", minItems: 1, items: { $ref: "#/components/schemas/Node" } },
+            },
+          },
+        },
+      },
+    };
+    const out = synthesizeBody({ schema: { $ref: "#/components/schemas/Node" } }, spec) as Record<
+      string,
+      unknown
+    >;
+    expect((out.kids as unknown[]).length).toBeGreaterThanOrEqual(1);
+  });
+});
