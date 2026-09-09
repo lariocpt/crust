@@ -406,10 +406,12 @@ function generateFromSchema(schema: unknown, spec: OpenApiSpec, visited: Set<str
         out[name] = generateFromSchema(Object.assign({}, ...parts), spec, visited);
       }
       repairPlaceholders(out, s, spec, visited);
+      addRequiredPlaceholders(out, s, spec);
       if (Object.keys(out).length > 0) return out;
     }
     if (sawObject) {
       repairPlaceholders(merged, s, spec, visited);
+      addRequiredPlaceholders(merged, s, spec);
       return merged;
     }
     if (scalar !== undefined) return scalar;
@@ -666,6 +668,24 @@ function shallowForCycle(
  * keyword any fragment declares: the base contributes `type`, the derived schema contributes
  * `enum`, and Object.assign keeps both because the base never mentions `enum` to overwrite it.
  */
+/**
+ * Required names on an allOf node that no branch describes.
+ *
+ * The plain object path already does this; the allOf path did not, and real specs put the `required`
+ * list on the NODE and the properties in the branches. codat writes
+ * `{allOf: [...], required: ["amount", "date", ...]}` where `date` is described nowhere, so the body
+ * came back missing a property its own schema demands.
+ */
+function addRequiredPlaceholders(
+  out: Record<string, unknown>,
+  s: Record<string, unknown>,
+  spec: OpenApiSpec,
+): void {
+  if (s.additionalProperties === false) return;
+  const required = composedShape(s, spec).required;
+  for (const name of required) if (!Object.hasOwn(out, name)) out[name] = null;
+}
+
 /**
  * Undo a placeholder that outranked a real description.
  *
