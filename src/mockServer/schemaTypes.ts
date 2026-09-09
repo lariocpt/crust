@@ -29,21 +29,178 @@ export function normaliseType(raw: unknown, nullable?: unknown): string[] {
 }
 
 /**
- * A string that satisfies a simple `pattern`, best effort.
+ * A string that satisfies a `pattern`, or a neutral fallback when one cannot be constructed.
  *
- * Lived in genFixtures until 2026-09-09, when the mock needed it too: a sweep of 300 real-world
- * specs showed the mock synthesising "string" for pattern-constrained fields and its own validator
- * rejecting the result. Moved here rather than copied, so the generator and the mock cannot drift
- * apart about what satisfies a pattern.
+ * THE SAFETY PROPERTY, which matters more than the coverage: whatever this builds is CHECKED
+ * against the real regex before being returned. A wrong guess degrades to FALLBACK rather than to
+ * a confidently wrong value, so sampling can never make a field worse than not sampling at all.
+ * Knowingly wrong beats confidently wrong — the caller can see `gen-value-x` and judge it, where a
+ * plausible-looking wrong value would just be believed.
  *
- * Deliberately conservative: if regex syntax survives the substitutions it could not be sampled,
- * so it returns a neutral value rather than something that merely looks plausible.
+ * It understands what real specs use, learned by counting them across 300 APIs-guru definitions:
+ * character classes (`[a-z]`, `[0-9]`, negated, ranges and literals), the shorthands `\d \w \s .`,
+ * the quantifiers `{n} {n,m} + * ?`, literal runs, and alternation (first branch). Anchors are
+ * stripped. Anything else — back-references, lookaround, unicode property classes — is left to the
+ * check to reject, which is exactly what the check is for.
  */
+export const PATTERN_FALLBACK = "gen-value-x";
+
 export function sampleFromPattern(pattern: string): string {
-  let out = pattern.replace(/^\^/, "").replace(/\$$/, "");
-  out = out.replace(/\\d\{(\d+),\d+\}/g, (_m, n) => "1".repeat(Number(n)));
-  out = out.replace(/\\d\{(\d+)\}/g, (_m, n) => "1".repeat(Number(n)));
-  out = out.replace(/\\d/g, "1");
-  // If regex syntax survives, we couldn't sample it — return something sane.
-  return /[\\[\](){}|?*+]/.test(out) ? "gen-value-x" : out;
+  const candidate = buildFromPattern(pattern);
+  if (candidate === null) return PATTERN_FALLBACK;
+  // The whole design rests on this line.
+  try {
+    if (new RegExp(pattern, "u").test(candidate)) return candidate;
+  } catch {
+    /* fall through to the non-unicode attempt */
+  }
+  try {
+    if (new RegExp(pattern).test(candidate)) return candidate;
+  } catch {
+    /* uncompilable — cannot verify, so do not claim */
+  }
+  return PATTERN_FALLBACK;
+}
+
+/** Structural walk over the pattern. Returns null the moment it meets something it cannot build. */
+function buildFromPattern(pattern: string): string | null {
+  let src = pattern.trim();
+  if (!src) return null;
+  // alternation at the top level: take the first branch that yields something
+  if (src.includes("|")) {
+    for (const branch of splitTopLevel(src, "|")) {
+      const v = buildFromPattern(branch);
+      if (v !== null) return v;
+    }
+    return null;
+  }
+  src = src.replace(/^\^/, "").replace(/^\^/, "").replace(/\$$/, "");
+
+  let out = "";
+  let i = 0;
+  let guard = 0;
+  while (i < src.length) {
+    if (++guard > 500) return null;
+    let atom: string | null = null;
+
+    if (src[i] === "\\") {
+      const c = src[i + 1];
+      i += 2;
+      if (c === "d") atom = "1";
+      else if (c === "w") atom = "a";
+      else if (c === "s") atom = " ";
+      else if (c && /[.\\/:+*?()[\]{}|^$@-]/.test(c))
+        atom = c; // escaped literal
+      else return null; // \p{...}, back-reference, anything unhandled
+    } else if (src[i] === "[") {
+      const close = findClassEnd(src, i);
+      if (close < 0) return null;
+      atom = pickFromClass(src.slice(i + 1, close));
+      if (atom === null) return null;
+      i = close + 1;
+    } else if (src[i] === ".") {
+      atom = "a";
+      i += 1;
+    } else if ("()".includes(src[i]!)) {
+      // a plain group adds no characters of its own; a special group we cannot read
+      if (src.startsWith("(?", i)) return null;
+      i += 1;
+      continue;
+    } else if ("+*?{".includes(src[i]!)) {
+      return null; // a quantifier with nothing before it
+    } else {
+      atom = src[i]!;
+      i += 1;
+    }
+
+    // quantifier attached to that atom
+    let count = 1;
+    if (src[i] === "{") {
+      const close = src.indexOf("}", i);
+      if (close < 0) return null;
+      const body = src.slice(i + 1, close);
+      const m = /^(\d+)(,(\d*))?$/.exec(body);
+      if (!m) return null;
+      count = Number(m[1]);
+      i = close + 1;
+    } else if (src[i] === "+") {
+      count = 1;
+      i += 1;
+    } else if (src[i] === "*") {
+      count = 0;
+      i += 1;
+    } else if (src[i] === "?") {
+      count = 0;
+      i += 1;
+    }
+    if (count > 256) return null; // refuse to build something unreviewable
+    out += atom.repeat(count);
+  }
+  return out;
+}
+
+/** A representative character from a character class, or null if it is negated-and-unreadable. */
+function pickFromClass(body: string): string | null {
+  if (!body) return null;
+  if (body.startsWith("^")) {
+    // negated: almost anything works; pick a letter unless the class excludes letters
+    return /[a-zA-Z]/.test(body.slice(1)) ? "0" : "a";
+  }
+  let i = 0;
+  while (i < body.length) {
+    if (body[i] === "\\") {
+      const c = body[i + 1];
+      if (c === "d") return "1";
+      if (c === "w") return "a";
+      if (c === "s") return " ";
+      if (c && /[.\\/:+*?()[\]{}|^$@-]/.test(c)) return c;
+      return null; // \p{...} and friends
+    }
+    // a range like a-z, and never the trailing hyphen of "a-z-"
+    if (body[i + 1] === "-" && i + 2 < body.length && body[i + 2] !== "]") {
+      return body[i]!;
+    }
+    if (body[i] !== "-") return body[i]!;
+    i += 1;
+  }
+  return null;
+}
+
+function findClassEnd(src: string, open: number): number {
+  for (let i = open + 1; i < src.length; i++) {
+    if (src[i] === "\\") {
+      i++;
+      continue;
+    }
+    if (src[i] === "]" && i > open + 1) return i;
+  }
+  return -1;
+}
+
+/** Split on a delimiter that is not inside a group or class. */
+function splitTopLevel(src: string, delim: string): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let inClass = false;
+  let cur = "";
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i]!;
+    if (c === "\\") {
+      cur += c + (src[i + 1] ?? "");
+      i++;
+      continue;
+    }
+    if (c === "[") inClass = true;
+    else if (c === "]") inClass = false;
+    else if (!inClass && c === "(") depth++;
+    else if (!inClass && c === ")") depth--;
+    if (c === delim && depth === 0 && !inClass) {
+      parts.push(cur);
+      cur = "";
+      continue;
+    }
+    cur += c;
+  }
+  parts.push(cur);
+  return parts;
 }

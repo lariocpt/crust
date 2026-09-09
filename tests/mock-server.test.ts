@@ -1038,12 +1038,12 @@ describe("string bounds in synthesised bodies", () => {
   });
 
   // The honest limit, asserted so nobody later mistakes it for a bug or "fixes" it by inventing a
-  // value that merely looks right. sampleFromPattern handles \d{n} forms; a character class like
-  // [0-9]+ it cannot sample, and it returns a neutral value rather than guessing. The mock is then
-  // knowingly wrong for that field — better than confidently wrong, and the pattern violation is
-  // visible under --validate rather than hidden.
-  test("an unsamplable pattern falls back rather than guessing", () => {
-    const schema = { type: "object", properties: { n: { type: "string", pattern: "^[0-9]+$" } } };
+  // value that merely looks right. Character classes ARE sampled now (2026-09-09); what remains
+  // beyond a structural sampler is back-references and lookaround. There the mock is knowingly
+  // wrong for that field — better than confidently wrong, and the violation stays visible under
+  // --validate rather than hidden behind a plausible-looking value.
+  test("a pattern beyond structural sampling falls back rather than guessing", () => {
+    const schema = { type: "object", properties: { n: { type: "string", pattern: "^(a)\\1$" } } };
     expect(String(synth(schema).n)).toBe("gen-value-x");
   });
 
@@ -1105,5 +1105,66 @@ describe("allOf around a scalar", () => {
       allOf: [{ type: "object", properties: { a: { type: "string" } } }, { type: "string" }],
     }) as Record<string, unknown>;
     expect(merged).toEqual({ a: "string" });
+  });
+});
+
+// The pattern sampler used to understand only \d{n}. Across 300 real-world specs that left 6,385
+// pattern violations: character classes, quantifiers and alternations are what specs actually use.
+// The safety property matters more than the coverage: whatever it constructs is CHECKED against
+// the real regex before being returned, so a wrong guess degrades to the neutral fallback rather
+// than to a confidently wrong value. It can never make a field worse than not sampling at all.
+describe("pattern sampling", () => {
+  const wrap = {
+    openapi: "3.1.0",
+    info: { title: "p", version: "1" },
+    paths: {},
+  } as unknown as OpenApiSpec;
+  const synth = (pattern: string, extra: Record<string, unknown> = {}) =>
+    String(
+      (
+        synthesizeBody(
+          {
+            schema: { type: "object", properties: { v: { type: "string", pattern, ...extra } } },
+          } as never,
+          wrap,
+        ) as any
+      ).v,
+    );
+
+  const matches = (pattern: string, value: string) => {
+    try {
+      return new RegExp(pattern, "u").test(value);
+    } catch {
+      return new RegExp(pattern).test(value);
+    }
+  };
+
+  for (const p of [
+    "^[0-9]+$",
+    "^[a-z]+$",
+    "^[A-Za-z0-9_-]+$",
+    "^[0-9]{12}$",
+    "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$",
+    "^\\d{3}$",
+    "^\\w+$",
+    "^[a-zA-Z0-9_.-]+$",
+  ]) {
+    test(`satisfies ${p}`, () => {
+      const v = synth(p);
+      expect(matches(p, v)).toBe(true);
+    });
+  }
+
+  test("a pattern it cannot construct still falls back rather than guessing", () => {
+    // a back-reference is beyond a structural sampler; the value must not pretend otherwise
+    expect(synth("^(a)\\1$")).toBe("gen-value-x");
+  });
+
+  test("the sampled value never violates the pattern it was built for", () => {
+    // the safety property, stated directly: sample or fall back, never a confident wrong answer
+    for (const p of ["^[0-9]{4}$", "^[a-z]{2,6}$", "^x[0-9]+y$"]) {
+      const v = synth(p);
+      expect(v === "gen-value-x" || matches(p, v)).toBe(true);
+    }
   });
 });
