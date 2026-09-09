@@ -11,7 +11,7 @@ import {
   countWebhookOperations,
   matchRoute,
 } from "../src/mockServer/router";
-import { matchesPattern, sampleFromPattern } from "../src/mockServer/schemaTypes";
+import { matchesPattern, PATTERN_FALLBACK, sampleFromPattern } from "../src/mockServer/schemaTypes";
 import { startServer } from "../src/mockServer/server";
 import { validateSchema } from "../src/mockServer/validateRequest";
 
@@ -2466,5 +2466,27 @@ describe("a nested alternation does not recurse forever", () => {
     expect(matchesPattern("^(alpha)$|^(gamma)$", sampleFromPattern("^(alpha)$|^(gamma)$"))).toBe(
       true,
     );
+  });
+});
+
+// A group alternation must DECLINE, not build both branches joined by a literal pipe.
+//
+// The first cut of the nested-pipe fix fell through to the character walk, which read the bare `|`
+// as an ordinary literal and emitted `(0000000000-|AAAA…)` as "0000000000-|AAAA…" — both branches
+// and the pipe. It passed verification because matchesPattern is an unanchored test: the regex
+// found one branch inside the joined string. 36 values across the APIs-guru corpus were built that
+// way, each one longer than its own maxLength.
+describe("a group alternation declines rather than joining its branches", () => {
+  test("the sample never contains a literal pipe the pattern did not ask for", () => {
+    expect(sampleFromPattern("^(0000000000-|AAAA-AAAA)$")).not.toContain("|");
+  });
+
+  test("a group alternation returns the announced fallback", () => {
+    expect(sampleFromPattern("^(a|b)$")).toBe(PATTERN_FALLBACK);
+  });
+
+  // Control: a pipe that is a real member of a character class is still built, not declined.
+  test("a class member pipe is still built", () => {
+    expect(matchesPattern("^[a|b]+$", sampleFromPattern("^[a|b]+$"))).toBe(true);
   });
 });

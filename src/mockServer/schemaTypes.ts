@@ -178,6 +178,15 @@ function buildFromPattern(pattern: string, extra = 0): string | null {
       continue;
     } else if ("+*?{".includes(src[i]!)) {
       return null; // a quantifier with nothing before it
+    } else if (src[i] === "|") {
+      // A bare `|` here is an alternation the walk cannot choose between — it is only reached when
+      // the pipe was nested in a group, since a top-level one was split off above and a class one is
+      // consumed by the class reader. Treating it as a literal built BOTH branches joined by a pipe:
+      // `(0000000000-|AAAAAAAA-…)` became "0000000000-|AAAAAAAA-…", 48 characters against a
+      // maxLength of 47. Worse, it survived verification — matchesPattern is an UNANCHORED test, so
+      // the regex found one branch inside the joined string and pronounced it good. 36 such values
+      // across the corpus. Decline instead; the caller's fallback is the honest answer.
+      return null;
     } else {
       atom = src[i]!;
       i += 1;
