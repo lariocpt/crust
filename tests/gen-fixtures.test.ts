@@ -8,10 +8,12 @@ import {
   envNameFor,
   generateFixtures,
   idPathFor,
+  validValue,
   wrongTypeFor,
 } from "../src/genFixtures/generate";
 import type { OpenApiSpec } from "../src/mockServer/loadSpec";
 import { startServer } from "../src/mockServer/server";
+import { validateSchema } from "../src/mockServer/validateRequest";
 import { runPipes } from "../src/testPipes/runner";
 
 let dir: string;
@@ -1346,5 +1348,41 @@ describe("no wrong-type case is generated that cannot fail", () => {
     ).join("\n");
     expect(written).toContain("wrong type for 'tight'");
     expect(written).not.toContain("wrong type for 'loose'");
+  });
+});
+
+describe("validValue respects the schema's own bounds", () => {
+  // `validValue` builds the VALID base body that every 400-case perturbs. Where it produces an
+  // invalid value the case perturbs an already-broken body, so the expected 400 can arrive for the
+  // wrong reason — a false pass, which is the one thing crust's design forbids. 4,004 request-body
+  // fields across 4,138 specs, the bulk of them length and item bounds the mock has honoured for
+  // some time and the generator never did.
+  const ok = (schema: Record<string, unknown>) =>
+    validateSchema(validValue(schema as never), schema, {} as never, "");
+
+  test("maxLength is honoured — the default is 11 characters", () => {
+    expect(ok({ type: "string", maxLength: 4 })).toEqual([]);
+    expect(ok({ type: "string", minLength: 2, maxLength: 5 })).toEqual([]);
+  });
+
+  test("maxItems is honoured — two elements are emitted by default", () => {
+    expect(ok({ type: "array", maxItems: 1, items: { type: "string" } })).toEqual([]);
+    expect(ok({ type: "array", minItems: 3, items: { type: "string" } })).toEqual([]);
+  });
+
+  test("maximum is honoured — the default is 1", () => {
+    expect(ok({ type: "integer", maximum: 0 })).toEqual([]);
+    expect(ok({ type: "integer", minimum: 5, maximum: 9 })).toEqual([]);
+  });
+
+  // Control: the byte-stable format values are unchanged, since checked-in matrices are CI-diffed
+  // against a regeneration and churning them is a cost with no finding behind it.
+  test("the fixed format values are unchanged", () => {
+    expect(validValue({ type: "string", format: "email" } as never)).toBe("gen@crust.fixture");
+    expect(validValue({ type: "string", format: "uuid" } as never)).toBe(
+      "00000000-0000-4000-8000-00000000c0de",
+    );
+    expect(validValue({ type: "string", format: "date" } as never)).toBe("2026-08-12");
+    expect(validValue({ type: "string" } as never)).toBe("gen-value-x");
   });
 });
