@@ -1386,3 +1386,35 @@ describe("validValue respects the schema's own bounds", () => {
     expect(validValue({ type: "string" } as never)).toBe("gen-value-x");
   });
 });
+
+describe("validValue covers uri, and an explicit pattern outranks a key guess", () => {
+  // 972 of 1,090 format failures across the corpus were `format: "uri"`, which validValue simply did
+  // not handle — it fell to "gen-value-x", which is not a URI. The mock has covered uri for some
+  // time; the generator never did.
+  //
+  // And the key heuristics (`*_id` -> a uuid, `*email*` -> an address) were applied BEFORE the
+  // field's own pattern, so a field named `job_id` carrying a pattern that is not a uuid got the
+  // uuid anyway: 47 rows where a guess from the NAME beat what the schema actually says.
+  const ok = (schema: Record<string, unknown>, key = "") =>
+    validateSchema(validValue(schema as never, key), schema, {} as never, "");
+
+  test("uri is honoured", () => {
+    expect(ok({ type: "string", format: "uri" })).toEqual([]);
+    expect(ok({ type: "string", format: "url" })).toEqual([]);
+  });
+
+  test("an explicit pattern beats the key heuristic", () => {
+    expect(ok({ type: "string", pattern: "^job-[0-9]{3}$" }, "job_id")).toEqual([]);
+    expect(ok({ type: "string", pattern: "^[a-z]{4}$" }, "user_email")).toEqual([]);
+  });
+
+  // Control: the byte-stable constants still apply where nothing contradicts them, because
+  // checked-in matrices are CI-diffed against a regeneration.
+  test("the fixed constants are unchanged where no pattern disagrees", () => {
+    expect(validValue({ type: "string" } as never, "job_id")).toBe(
+      "00000000-0000-4000-8000-00000000c0de",
+    );
+    expect(validValue({ type: "string", format: "email" } as never)).toBe("gen@crust.fixture");
+    expect(validValue({ type: "string", format: "date" } as never)).toBe("2026-08-12");
+  });
+});

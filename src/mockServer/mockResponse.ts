@@ -1,5 +1,11 @@
 import type { MediaTypeObject, OpenApiSpec, OperationObject, ResponseObject } from "./loadSpec";
-import { inferType, matchesPattern, normaliseType, sampleFromPattern } from "./schemaTypes";
+import {
+  formatDefault,
+  inferType,
+  matchesPattern,
+  normaliseType,
+  sampleFromPattern,
+} from "./schemaTypes";
 
 export interface PickedResponse {
   status: number;
@@ -898,26 +904,6 @@ function stringDefault(s: Record<string, unknown>): string {
   })(value);
   if (held && !matchesPattern(pattern, clamped)) return value;
   return clamped;
-}
-
-function formatDefault(format: string | undefined): string | null {
-  switch (format) {
-    case "email":
-      return "user@example.com";
-    case "date-time":
-      return "1970-01-01T00:00:00.000Z";
-    case "date":
-      return "1970-01-01";
-    case "uuid":
-      return "00000000-0000-0000-0000-000000000000";
-    case "uri":
-    case "url":
-      return "https://example.com";
-    case "byte":
-      return "";
-    default:
-      return null;
-  }
 }
 
 export function resolveRef(ref: string, spec: OpenApiSpec): unknown {

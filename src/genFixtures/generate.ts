@@ -67,6 +67,7 @@ import { isAbsolute, relative, resolve } from "node:path";
 import { loadSpec, type OpenApiSpec } from "../mockServer/loadSpec";
 import { resolveRef } from "../mockServer/mockResponse";
 import {
+  formatDefault,
   inferType,
   matchesPattern,
   normaliseType,
@@ -165,13 +166,24 @@ export function validValue(s: Schema | undefined, key = ""): unknown {
   }
   switch (t) {
     case "string": {
-      if (s.format === "email" || /email/i.test(key)) return "gen@crust.fixture";
+      // The key heuristics guess from a NAME; a `pattern` is what the schema actually says, so it
+      // wins. A field called `job_id` carrying `^job-[0-9]{3}$` was getting the uuid regardless —
+      // 47 rows where a guess beat a statement.
+      const named = !s.pattern;
+      if (s.format === "email" || (named && /email/i.test(key))) return "gen@crust.fixture";
       // Fixed, not random: emitted files must be byte-stable so a checked-in
       // matrix can be CI-diffed against a regeneration.
-      if (s.format === "uuid" || /(^|_)id$/.test(key))
+      if (s.format === "uuid" || (named && /(^|_)id$/.test(key)))
         return "00000000-0000-4000-8000-00000000c0de";
       if (s.format === "date") return "2026-08-12";
       if (s.format === "date-time") return "2026-08-12T10:00:00.000Z";
+      // Anything else the mock knows how to satisfy — `uri`/`url` above all, which is 972 of the
+      // 1,090 format failures across the corpus. The four constants above keep their own values so
+      // existing generated matrices do not churn; this only covers formats that had NO value at all.
+      if (s.format && !s.pattern) {
+        const known = formatDefault(s.format);
+        if (known !== null) return known;
+      }
       const min = s.minLength ?? 1;
       const max = typeof s.maxLength === "number" ? s.maxLength : null;
       if (s.pattern) {
