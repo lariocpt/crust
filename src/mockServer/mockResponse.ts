@@ -1,5 +1,5 @@
 import type { MediaTypeObject, OpenApiSpec, OperationObject, ResponseObject } from "./loadSpec";
-import { matchesPattern, normaliseType, sampleFromPattern } from "./schemaTypes";
+import { inferType, matchesPattern, normaliseType, sampleFromPattern } from "./schemaTypes";
 
 export interface PickedResponse {
   status: number;
@@ -562,46 +562,6 @@ function pickType(raw: unknown): string | undefined {
   const types = normaliseType(raw);
   if (types.length === 0) return undefined;
   return types.find((t) => t !== "null") ?? "null";
-}
-
-/**
- * The type a schema states without saying `type`.
- *
- * `type` is optional in JSON Schema, and the other keywords are not decoration: `format`, `pattern`
- * and the length bounds apply only to strings, the numeric bounds only to numbers. sinao writes
- * `items: {format: "string"}` — `format` where they meant `type` — and crust found no type, fell
- * through to null, and produced `[null]` against an array of strings.
- *
- * This reads what the schema already states rather than guessing what the author meant, and it adds
- * nothing where there is nothing: a schema with no such keywords still has no type.
- */
-function inferType(s: Record<string, unknown>): string | undefined {
-  if (s.properties !== undefined || s.additionalProperties !== undefined) return "object";
-  if (s.items !== undefined || s.minItems !== undefined || s.maxItems !== undefined) return "array";
-  if (
-    s.format !== undefined ||
-    s.pattern !== undefined ||
-    s.minLength !== undefined ||
-    s.maxLength !== undefined
-  ) {
-    return "string";
-  }
-  if (
-    s.minimum !== undefined ||
-    s.maximum !== undefined ||
-    s.exclusiveMinimum !== undefined ||
-    s.exclusiveMaximum !== undefined ||
-    s.multipleOf !== undefined
-  ) {
-    return "number";
-  }
-  if (Array.isArray(s.enum) && s.enum.length > 0) {
-    const first = s.enum.find((v) => v !== null);
-    if (typeof first === "string") return "string";
-    if (typeof first === "number") return "number";
-    if (typeof first === "boolean") return "boolean";
-  }
-  return undefined;
 }
 
 /**

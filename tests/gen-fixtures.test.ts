@@ -1246,3 +1246,105 @@ describe("derefSchemas does not materialise an exponential tree", () => {
     expect(out.description).toBe("mine");
   });
 });
+
+describe("the generator infers a missing type", () => {
+  // `{properties: {...}}` with no `type` is extremely common, and `properties` alone does not
+  // constrain a non-object — so `wrongTypeFor` returning 12345 there produced a body the validator
+  // ACCEPTS, and the generated case asserts `-> 400` for a request that should return 200. That is a
+  // false test, which is worse than a bad mock body: it fails against a correct implementation.
+  // 6,101 of them across 164,473 request-body field schemas.
+  test("an object without `type` gets a genuinely wrong value", () => {
+    expect(wrongTypeFor({ properties: { a: { type: "string" } } } as never)).toBe("not-an-object");
+  });
+
+  test("an array without `type` gets a genuinely wrong value", () => {
+    expect(wrongTypeFor({ items: { type: "string" } } as never)).toBe("not-an-array");
+  });
+
+  test("string-only keywords without `type` imply a string", () => {
+    expect(wrongTypeFor({ minLength: 3 } as never)).toBe(12345);
+    // A pattern makes it a coercion-resistant string, per the existing rule.
+    expect(wrongTypeFor({ pattern: "^a+$" } as never)).toBe("!!not-a-valid-value!!");
+  });
+
+  // Control: a declared type still wins, and a schema stating nothing keeps the old default.
+  test("a declared type wins, and a bare schema is unchanged", () => {
+    expect(wrongTypeFor({ type: "string" } as never)).toBe(12345);
+    expect(wrongTypeFor({ type: "object", properties: {} } as never)).toBe("not-an-object");
+    expect(wrongTypeFor({} as never)).toBe(12345);
+  });
+});
+
+describe("no wrong-type case is generated that cannot fail", () => {
+  // The wrong-type case was emitted unconditionally for every required field. Where the field's
+  // schema constrains nothing — `{properties: {...}}` with no `type`, or a description-only node —
+  // NO value is wrong, so the generated case asserts `-> 400` for a request a correct API answers
+  // 200. That is a false test: it fails against a correct implementation, and 6,101 of them were
+  // derivable from the corpus.
+  //
+  // crust owns the validator, so the case is only emitted when the wrong value is actually rejected.
+  let dir: string;
+  beforeAll(async () => {
+    dir = await mkdtemp(join(tmpdir(), "crust-gen-wrong-"));
+  });
+  afterAll(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  test("a field whose schema constrains nothing gets no wrong-type case", async () => {
+    const spec = {
+      openapi: "3.0.0",
+      paths: {
+        "/things": {
+          post: {
+            requestBody: {
+              required: true,
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    required: ["loose", "tight"],
+                    properties: {
+                      // No `type`: `properties` alone does not constrain a non-object.
+                      loose: { properties: { a: { type: "string" } } },
+                      tight: { type: "string" },
+                    },
+                  },
+                },
+              },
+            },
+            responses: { "200": { description: "ok" }, "400": { description: "bad" } },
+          },
+        },
+      },
+    };
+    const specPath = join(dir, "spec.json");
+    await writeFile(specPath, JSON.stringify(spec));
+    const setupPath = join(dir, "setup.ts");
+    await writeFile(
+      setupPath,
+      "export const scopeParam = null;\nexport async function shared() { return {}; }\n" +
+        "export function headersFor() { return { 'content-type': 'application/json' }; }\n" +
+        "export function resolvePath(_c, t) { return 'http://127.0.0.1:1' + t; }\n",
+    );
+    const out = join(dir, "out");
+    const result = await generateFixtures({
+      swagger: specPath,
+      out,
+      setup: setupPath,
+      log: () => {},
+    });
+    // Read whatever it wrote rather than guessing the filename.
+    const written = (
+      await Promise.all(
+        result.files.map((f) =>
+          Bun.file(f)
+            .text()
+            .catch(() => ""),
+        ),
+      )
+    ).join("\n");
+    expect(written).toContain("wrong type for 'tight'");
+    expect(written).not.toContain("wrong type for 'loose'");
+  });
+});

@@ -66,7 +66,8 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
 import { loadSpec, type OpenApiSpec } from "../mockServer/loadSpec";
 import { resolveRef } from "../mockServer/mockResponse";
-import { normaliseType, sampleFromPattern } from "../mockServer/schemaTypes";
+import { inferType, normaliseType, sampleFromPattern } from "../mockServer/schemaTypes";
+import { validateSchema } from "../mockServer/validateRequest";
 
 type Schema = {
   /** 3.0 writes a string; 3.1 may write a union array (`["string","null"]`). Read via primaryType. */
@@ -207,7 +208,11 @@ function baseBody(schema: Schema): Record<string, unknown> {
  */
 function primaryType(s: Schema | undefined): string | undefined {
   const types = normaliseType((s as { type?: unknown } | undefined)?.type);
-  if (types.length === 0) return undefined;
+  // `type` is optional in JSON Schema, and `{properties: {...}}` with none is extremely common.
+  // Without inference, wrongTypeFor fell to its 12345 default there — a value the validator ACCEPTS,
+  // since `properties` alone does not constrain a non-object — and the generated case asserted a 400
+  // for a request that should return 200. Shared with the mock: one implementation, not two.
+  if (types.length === 0) return inferType((s ?? {}) as Record<string, unknown>);
   return types.find((x) => x !== "null") ?? "null";
 }
 
@@ -346,15 +351,25 @@ function deriveCases(path: string, method: string, op: Operation, scope: ScopeCo
         expectStatus: 400,
         expectValidationField: field,
       });
-      cases.push({
-        name: `${method.toUpperCase()} ${path} wrong type for '${field}' -> 400`,
-        auth: validAuth,
-        method,
-        path,
-        body: { ...base, [field]: wrongTypeFor(props[field]) },
-        expectStatus: 400,
-        expectValidationField: field,
-      });
+      // Only when the value is ACTUALLY rejected. A field whose schema constrains nothing —
+      // `{properties: {...}}` with no `type`, a description-only node — has no wrong value, and the
+      // case would assert `-> 400` for a request a correct API answers 200. That is a false test: it
+      // fails against a correct implementation, and 6,101 were derivable from the corpus. crust owns
+      // the validator, so it is asked rather than guessed at.
+      const wrongValue = wrongTypeFor(props[field]);
+      // The spec is already fully inlined by derefSchemas at entry, so there is nothing left for the
+      // validator to resolve and an empty document is the honest argument.
+      if (validateSchema(wrongValue, props[field], {} as OpenApiSpec, "").length > 0) {
+        cases.push({
+          name: `${method.toUpperCase()} ${path} wrong type for '${field}' -> 400`,
+          auth: validAuth,
+          method,
+          path,
+          body: { ...base, [field]: wrongValue },
+          expectStatus: 400,
+          expectValidationField: field,
+        });
+      }
     }
     for (const [field, rawFs] of Object.entries(props)) {
       // effectiveSchema here is purely additive: it only unwraps nullable
