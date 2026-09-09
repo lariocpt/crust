@@ -122,6 +122,83 @@ let budgetWarned = false;
  */
 const NODE_BUDGET = 20_000;
 
+/**
+ * The other half of discriminator handling: the INHERITANCE idiom, which is what real specs use.
+ *
+ * The union form — a base with `oneOf` plus a discriminator — is what the specification's own
+ * example shows. Apple's sirikit-cloud-media writes the opposite way round, and so does most of the
+ * corpus: the derived schema carries `allOf: [{$ref: Base}]` AND the discriminator whose mapping
+ * names the keys that select IT. Several keys may map to the same schema; any of them is a correct
+ * answer, and leaving the property at its plain "string" default is not.
+ */
+function withOwnDiscriminator(value: unknown, resolved: unknown, refName: string): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  if (!resolved || typeof resolved !== "object") return value;
+  const disc = (resolved as Record<string, unknown>).discriminator as
+    | { propertyName?: unknown; mapping?: unknown }
+    | undefined;
+  const prop = disc?.propertyName;
+  const mapping = disc?.mapping;
+  if (typeof prop !== "string" || !mapping || typeof mapping !== "object") return value;
+
+  const out = value as Record<string, unknown>;
+  const existing = out[prop];
+  // Only fill a slot nothing has decided. A branch that pinned it with const/enum already said so.
+  if (typeof existing === "string" && existing !== "string" && existing !== "") return value;
+  for (const [key, target] of Object.entries(mapping as Record<string, unknown>)) {
+    if (target === refName) {
+      out[prop] = key;
+      return out;
+    }
+  }
+  return value;
+}
+
+/**
+ * Names the union branch that was actually chosen.
+ *
+ * crust picks the first branch and used to leave the discriminator property at whatever its schema
+ * said in general — usually the plain `"string"` default — so the body it produced matched NO branch
+ * of the union it came from, by crust's own validator. 28 of 61 sampled union violations across the
+ * corpus were exactly this.
+ *
+ * The value is not inferred. `discriminator.mapping` states which key selects which schema; without
+ * a mapping OpenAPI says the value is the schema's own name. A branch that pins the property itself
+ * — with `const`, or an `enum` of one — has already said what it is, and is left alone: the spec
+ * outranks anything derived from it.
+ */
+function withDiscriminator(
+  value: unknown,
+  branch: unknown,
+  union: Record<string, unknown>,
+): unknown {
+  const disc = union.discriminator as { propertyName?: unknown; mapping?: unknown } | undefined;
+  const prop = disc?.propertyName;
+  if (typeof prop !== "string" || !value || typeof value !== "object" || Array.isArray(value))
+    return value;
+  const ref = (branch as Record<string, unknown> | null)?.$ref;
+  if (typeof ref !== "string") return value;
+
+  const out = value as Record<string, unknown>;
+  // Only fill a slot the branch did not decide for itself.
+  const existing = out[prop];
+  if (typeof existing === "string" && existing !== "string" && existing !== "") return value;
+
+  const mapping = disc?.mapping;
+  if (mapping && typeof mapping === "object") {
+    for (const [key, target] of Object.entries(mapping as Record<string, unknown>)) {
+      if (target === ref) {
+        out[prop] = key;
+        return out;
+      }
+    }
+  }
+  // No mapping: OpenAPI's default is the schema name, the last segment of the ref.
+  const name = ref.slice(ref.lastIndexOf("/") + 1);
+  if (name) out[prop] = name;
+  return out;
+}
+
 function generateFromSchema(schema: unknown, spec: OpenApiSpec, visited: Set<string>): unknown {
   if (!schema || typeof schema !== "object") return null;
   const s = schema as Record<string, unknown>;
@@ -162,7 +239,7 @@ function generateFromSchema(schema: unknown, spec: OpenApiSpec, visited: Set<str
     nodeBudget--;
     const next = new Set(visited);
     next.add(refName);
-    return generateFromSchema(resolved, spec, next);
+    return withOwnDiscriminator(generateFromSchema(resolved, spec, next), resolved, refName);
   }
 
   if ("example" in s && s.example !== undefined) return s.example;
@@ -247,10 +324,10 @@ function generateFromSchema(schema: unknown, spec: OpenApiSpec, visited: Set<str
   }
 
   if (Array.isArray(s.oneOf) && s.oneOf.length > 0) {
-    return generateFromSchema(s.oneOf[0], spec, visited);
+    return withDiscriminator(generateFromSchema(s.oneOf[0], spec, visited), s.oneOf[0], s);
   }
   if (Array.isArray(s.anyOf) && s.anyOf.length > 0) {
-    return generateFromSchema(s.anyOf[0], spec, visited);
+    return withDiscriminator(generateFromSchema(s.anyOf[0], spec, visited), s.anyOf[0], s);
   }
 
   // OpenAPI 3.1 allows `type: ["string","null"]` — the form that replaced 3.0's `nullable: true`.

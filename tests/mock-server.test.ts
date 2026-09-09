@@ -1684,3 +1684,114 @@ describe("a node's own properties narrow what it inherits through allOf", () => 
     expect(out.ruleType).toBeDefined();
   });
 });
+
+describe("a discriminated union names the branch it picked", () => {
+  // 28 of 61 sampled anyOf/oneOf residues carry a `discriminator`. crust picks the first branch and
+  // leaves the discriminator property at its schema default — "string" — so the body it produced
+  // matches NO branch of the union it came from, by crust's own validator. The value that selects
+  // the chosen branch is not a guess: the mapping states it.
+  const body = (
+    schema: Record<string, unknown>,
+    spec: Record<string, unknown>,
+  ): Record<string, unknown> => synthesizeBody({ schema }, spec) as Record<string, unknown>;
+
+  const SPEC = {
+    components: {
+      schemas: {
+        Cat: {
+          type: "object",
+          properties: { petType: { type: "string" }, meow: { type: "string" } },
+          required: ["petType"],
+        },
+        Dog: {
+          type: "object",
+          properties: { petType: { type: "string" }, bark: { type: "string" } },
+          required: ["petType"],
+        },
+      },
+    },
+  };
+
+  test("an explicit mapping supplies the discriminator value", () => {
+    const out = body(
+      {
+        oneOf: [{ $ref: "#/components/schemas/Cat" }, { $ref: "#/components/schemas/Dog" }],
+        discriminator: {
+          propertyName: "petType",
+          mapping: { cat: "#/components/schemas/Cat", dog: "#/components/schemas/Dog" },
+        },
+      },
+      SPEC,
+    );
+    expect(out.petType).toBe("cat");
+  });
+
+  test("with no mapping the schema name is the value, which is the spec's own default rule", () => {
+    const out = body(
+      {
+        oneOf: [{ $ref: "#/components/schemas/Cat" }, { $ref: "#/components/schemas/Dog" }],
+        discriminator: { propertyName: "petType" },
+      },
+      SPEC,
+    );
+    expect(out.petType).toBe("Cat");
+  });
+
+  // Control: a branch that pins the discriminator itself is already correct and must not be
+  // overwritten — the spec said what that value is, and it outranks anything inferred.
+  test("a branch that pins the discriminator keeps its own value", () => {
+    const spec = {
+      components: {
+        schemas: {
+          Fixed: { type: "object", properties: { kind: { type: "string", const: "already-set" } } },
+        },
+      },
+    };
+    const out = body(
+      {
+        oneOf: [{ $ref: "#/components/schemas/Fixed" }],
+        discriminator: { propertyName: "kind", mapping: { other: "#/components/schemas/Fixed" } },
+      },
+      spec,
+    );
+    expect(out.kind).toBe("already-set");
+  });
+});
+
+describe("a discriminator declared the inheritance way", () => {
+  // What real specs actually do. The specification's own example puts `oneOf` + discriminator on a
+  // BASE; apple.com/sirikit-cloud-media — and most of the corpus — does the reverse: the derived
+  // schema carries `allOf: [{$ref: Base}]` together with the discriminator whose mapping names the
+  // keys that select it. Several keys may select the same schema; any of them is correct, and the
+  // plain "string" default is not.
+  test("the property takes a mapping key that selects this schema", () => {
+    const spec = {
+      components: {
+        schemas: {
+          Base: {
+            type: "object",
+            properties: { method: { type: "string" } },
+            required: ["method"],
+          },
+          Derived: {
+            type: "object",
+            allOf: [{ $ref: "#/components/schemas/Base" }],
+            properties: { detail: { type: "string" } },
+            discriminator: {
+              propertyName: "method",
+              mapping: {
+                "Thing.handle": "#/components/schemas/Derived",
+                "Thing.confirm": "#/components/schemas/Derived",
+              },
+            },
+          },
+        },
+      },
+    };
+    const out = synthesizeBody(
+      { schema: { $ref: "#/components/schemas/Derived" } },
+      spec,
+    ) as Record<string, unknown>;
+    expect(["Thing.handle", "Thing.confirm"]).toContain(out.method as string);
+  });
+});
