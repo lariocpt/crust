@@ -1084,6 +1084,7 @@ Derived cases:
 - **400 boundary violations**, for ALL body properties — required *and*
   optional — in fixed per-field order: too short (`minLength`), too long
   (`maxLength`; skipped above 4096 to keep checked-in files reviewable),
+- Every `$ref` is inlined once and **shared**, and inlining stops after 200,000 nodes. azure's `network-applicationGateway` is a DAG of a few schemas referenced from many places: copying at each occurrence turned a few-MB spec into a 2.03 GB structure — 17s where it survived and OUT OF MEMORY on five of nine versions, so `gen-fixtures` there did not run slowly, it did not run. Past the budget a `$ref` inlines as `{}`, exactly as a cyclic one does, and gen-fixtures says so on stderr: fewer generated cases, none of them wrong.
   below minimum / above maximum (`maximum: Number.MAX_SAFE_INTEGER` is
   treated as an "unbounded" sentinel and skipped), and pattern violation
   (deduped when the required-field wrong-type case already sends an
