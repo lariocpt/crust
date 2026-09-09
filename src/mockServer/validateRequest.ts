@@ -724,6 +724,14 @@ export function validateResponse(
   const responses = route.operation.responses ?? {};
   const keys = Object.keys(responses);
 
+  // An operation may document NO responses at all — 3.1 made `responses` optional, and specs in
+  // the wild omit it (7 of the 17 usable react-corpus specs do, on a /openapi.json operation).
+  // There is nothing to conform to, so reporting "status N is not documented" against an empty key
+  // list is the walker INVENTING a violation, which the governing rule at the top of this file
+  // forbids. It also made crust contradict itself: pickResponse defaults such an operation to 200,
+  // so under --proxy crust's own mock served a status crust's own validator then rejected.
+  if (keys.length === 0) return out;
+
   // (a) status documented — exact key, then NXX range key, then default.
   const exact = String(input.status);
   const range = `${Math.floor(input.status / 100)}XX`;
