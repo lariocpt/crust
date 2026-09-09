@@ -922,3 +922,82 @@ describe("Express-style :param paths", () => {
     expect(matchRoute(routes, "GET", "/v1/proper/42").matched).toBeDefined();
   });
 });
+
+// pickMedia already falls back to the first documented content type when there is no
+// application/json — but the response was built with a hardcoded `content-type: application/json`
+// regardless, so a spec documenting text/html got a JSON content-type over an HTML-ish body.
+// crust's own --proxy validator rejects that ("content-type 'application/json' is not documented
+// for status 200"), which makes it a crust bug by construction. self-conformance never saw it:
+// it validates the BODY against the schema and never looks at the header.
+describe("response content-type follows the spec", () => {
+  const specOf = (mediaType: string) =>
+    ({
+      openapi: "3.1.0",
+      info: { title: "ct", version: "1" },
+      paths: {
+        "/thing": {
+          get: {
+            responses: {
+              "200": {
+                description: "ok",
+                content: { [mediaType]: { schema: { type: "string" }, example: "hi" } },
+              },
+            },
+          },
+        },
+      },
+    }) as unknown as OpenApiSpec;
+
+  test("a text/html response is served as text/html", async () => {
+    const server = await startServer({
+      port: 0,
+      hostname: "127.0.0.1",
+      spec: specOf("text/html"),
+      log: () => {},
+    });
+    try {
+      const res = await fetch(`http://127.0.0.1:${server.port}/thing`);
+      expect(res.headers.get("content-type")).toContain("text/html");
+    } finally {
+      await server.stop();
+    }
+  });
+
+  test("application/javascript is served as itself", async () => {
+    const spec = specOf("application/javascript");
+    const server = await startServer({ port: 0, hostname: "127.0.0.1", spec, log: () => {} });
+    try {
+      const res = await fetch(`http://127.0.0.1:${server.port}/thing`);
+      expect(res.headers.get("content-type")).toContain("application/javascript");
+    } finally {
+      await server.stop();
+    }
+  });
+
+  test("json stays json, and an undocumented content stays json (controls)", async () => {
+    const server = await startServer({
+      port: 0,
+      hostname: "127.0.0.1",
+      spec: specOf("application/json"),
+      log: () => {},
+    });
+    try {
+      const res = await fetch(`http://127.0.0.1:${server.port}/thing`);
+      expect(res.headers.get("content-type")).toContain("application/json");
+    } finally {
+      await server.stop();
+    }
+    const bare = {
+      openapi: "3.1.0",
+      info: { title: "b", version: "1" },
+      paths: { "/x": { get: { responses: { "200": { description: "ok" } } } } },
+    } as unknown as OpenApiSpec;
+    const s2 = await startServer({ port: 0, hostname: "127.0.0.1", spec: bare, log: () => {} });
+    try {
+      const res = await fetch(`http://127.0.0.1:${s2.port}/x`);
+      expect(res.headers.get("content-type")).toContain("application/json");
+    } finally {
+      await s2.stop();
+    }
+  });
+});

@@ -501,7 +501,9 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
               if (picked.status === 204 || body === undefined) {
                 response = new Response(null, { status: picked.status });
               } else {
-                response = jsonResponse(picked.status, body);
+                // Serve the content type the SPEC documents. Sending application/json for a
+                // text/html operation is a response crust's own --proxy validator rejects.
+                response = specResponse(picked.status, body, picked.mediaType);
               }
             }
           }
@@ -605,6 +607,22 @@ async function applySeed(
     }
   }
   return inserted;
+}
+
+/**
+ * A mock response in the content type the spec documents for that operation.
+ *
+ * JSON is serialised as JSON; anything else is written as text, because a mock that claims
+ * text/html and sends a JSON document is lying twice. A string body is emitted verbatim (a spec
+ * documenting text/html almost always carries a string example); anything else is stringified.
+ */
+function specResponse(status: number, body: unknown, mediaType: string | null): Response {
+  const type = mediaType ?? "application/json";
+  if (type === "application/json" || type.endsWith("+json")) {
+    return new Response(JSON.stringify(body), { status, headers: { "content-type": type } });
+  }
+  const text = typeof body === "string" ? body : JSON.stringify(body);
+  return new Response(text ?? "", { status, headers: { "content-type": type } });
 }
 
 function jsonResponse(status: number, body: unknown): Response {
