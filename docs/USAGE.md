@@ -1084,6 +1084,8 @@ Derived cases:
 - **400 boundary violations**, for ALL body properties — required *and*
   optional — in fixed per-field order: too short (`minLength`), too long
   (`maxLength`; skipped above 4096 to keep checked-in files reviewable),
+- A **wrong-type case is only generated when the value is actually rejected**. A field whose schema constrains nothing — `{properties: {…}}` with no `type`, a description-only node — has no wrong value, and such a case would assert `-> 400` for a request a correct API answers 200: a test that fails against a correct implementation. 6,101 were derivable from the APIs-guru corpus. crust owns the validator, so it asks it rather than guessing.
+- A missing `type` is **inferred from the keywords present**, shared with the mock — so `{minLength: 3}` with no type now yields the boundary case it silently skipped before.
 - Every `$ref` is inlined once and **shared**, and inlining stops after 200,000 nodes. azure's `network-applicationGateway` is a DAG of a few schemas referenced from many places: copying at each occurrence turned a few-MB spec into a 2.03 GB structure — 17s where it survived and OUT OF MEMORY on five of nine versions, so `gen-fixtures` there did not run slowly, it did not run. Past the budget a `$ref` inlines as `{}`, exactly as a cyclic one does, and gen-fixtures says so on stderr: fewer generated cases, none of them wrong.
   below minimum / above maximum (`maximum: Number.MAX_SAFE_INTEGER` is
   treated as an "unbounded" sentinel and skipped), and pattern violation
