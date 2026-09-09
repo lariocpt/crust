@@ -2428,3 +2428,43 @@ describe("the pattern sampler reaches minLength", () => {
     expect(sampleFromPattern("^[a-z]{3}$")).toBe("aaa");
   });
 });
+
+// A `|` that is NOT at the top level used to recurse forever.
+//
+// buildFromPattern asked `src.includes("|")` and then recursed on every splitTopLevel branch.
+// splitTopLevel is right to refuse to split inside `(...)` or `[...]`, so a nested `|` came back as
+// ONE branch identical to the input, and the recursion never shrank: RangeError, killing the whole
+// synthesis. The `guard > 500` counter could not save it — that guard is inside the character walk,
+// not on the recursion.
+//
+// It was invisible for two reasons at once. Every alternation pattern in this file was TOP-level
+// (`A|B`, `alpha|gamma`), which splits into two real branches and terminates. And the dogfood sweep
+// ran one spec per subprocess, so a crash looked exactly like a spec that failed to load — 198 of
+// the 4,138 APIs-guru specs (4.8%) were being discarded as "load errors" while crust was the thing
+// that died. The `residue 0` those sweeps reported was over 3,940 specs, not 4,138.
+describe("a nested alternation does not recurse forever", () => {
+  // The real shape, from amazonaws.com/account and 197 other specs: the `|` is a literal member of
+  // a character class. The class walk handles this correctly once the recursion stops eating it.
+  test("a pipe inside a character class builds a matching value", () => {
+    const p = "^[\\s]*[\\w+=.#|!&-]+@[\\w.-]+\\.[\\w]+[\\s]*$";
+    const v = sampleFromPattern(p);
+    expect(matchesPattern(p, v)).toBe(true);
+  });
+
+  test("a bare class alternation is built, not crashed", () => {
+    expect(matchesPattern("[a|b]", sampleFromPattern("[a|b]"))).toBe(true);
+  });
+
+  // A group alternation cannot be built by the character walk, so the honest answer is the
+  // announced fallback. The requirement here is that it RETURNS one rather than throwing.
+  test("a pipe inside a group returns a value instead of throwing", () => {
+    expect(typeof sampleFromPattern("^(a|b)$")).toBe("string");
+  });
+
+  // Control: top-level alternation still takes the branch path it always did.
+  test("top-level alternation is unaffected", () => {
+    expect(matchesPattern("^(alpha)$|^(gamma)$", sampleFromPattern("^(alpha)$|^(gamma)$"))).toBe(
+      true,
+    );
+  });
+});
