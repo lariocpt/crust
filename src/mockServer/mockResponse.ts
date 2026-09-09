@@ -148,6 +148,21 @@ function generateFromSchema(schema: unknown, spec: OpenApiSpec, visited: Set<str
         scalar = value;
       }
     }
+    // The node's OWN keywords still apply. `allOf` is an intersection, not a replacement: a schema
+    // carrying both `allOf` and its own `properties` must satisfy both, and taking the allOf path
+    // and returning here dropped the siblings entirely. appcenter.ms writes
+    // `allOf: [{allOf: [inner], properties: outer}]` and crust mocked 2 of 12 fields — the largest
+    // single group in the full 4,138-spec sweep. Generated with `allOf` removed so this cannot
+    // recurse, and merged UNDER the branches, which are the more specific statement.
+    if (s.properties !== undefined) {
+      const { allOf: _ignored, ...own } = s;
+      const ownValue = generateFromSchema(own, spec, visited);
+      if (ownValue && typeof ownValue === "object" && !Array.isArray(ownValue)) {
+        if (Object.keys(ownValue).length > 0) {
+          return { ...ownValue, ...merged };
+        }
+      }
+    }
     if (sawObject) return merged;
     if (scalar !== undefined) return scalar;
     // Every branch was documentation-only or unbuildable. `{}` is right for an object and wrong for
