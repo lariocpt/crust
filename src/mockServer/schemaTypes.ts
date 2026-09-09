@@ -45,31 +45,48 @@ export function normaliseType(raw: unknown, nullable?: unknown): string[] {
  */
 export const PATTERN_FALLBACK = "gen-value-x";
 
-export function sampleFromPattern(pattern: string): string {
+export function matchesPattern(pattern: string, value: string): boolean {
+  // The "u" flag first, because it is what a modern validator applies; a pattern that is only legal
+  // without it still gets its chance. A pattern that compiles under neither cannot be checked at
+  // all, and an unverifiable claim is not one crust makes.
+  try {
+    return new RegExp(pattern, "u").test(value);
+  } catch {
+    /* not unicode-legal — try the plain form */
+  }
+  try {
+    return new RegExp(pattern).test(value);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * `minLen` asks for a value at least that long. It is a REQUEST, never a promise: the length is
+ * bought by expanding a quantifier that was already open-ended (`+`, `*`, `{n,}`, `{n,m}`), so a
+ * fixed-width pattern simply comes back at its own width. Padding it to fit would break the very
+ * match this function verifies — which is precisely the bug this parameter exists to remove.
+ */
+export function sampleFromPattern(pattern: string, minLen = 0): string {
   const candidate = buildFromPattern(pattern);
   if (candidate === null) return PATTERN_FALLBACK;
+  if (minLen > candidate.length && matchesPattern(pattern, candidate)) {
+    const grown = buildFromPattern(pattern, minLen - candidate.length);
+    if (grown !== null && grown.length > candidate.length && matchesPattern(pattern, grown))
+      return grown;
+  }
   // The whole design rests on this line.
-  try {
-    if (new RegExp(pattern, "u").test(candidate)) return candidate;
-  } catch {
-    /* fall through to the non-unicode attempt */
-  }
-  try {
-    if (new RegExp(pattern).test(candidate)) return candidate;
-  } catch {
-    /* uncompilable — cannot verify, so do not claim */
-  }
-  return PATTERN_FALLBACK;
+  return matchesPattern(pattern, candidate) ? candidate : PATTERN_FALLBACK;
 }
 
 /** Structural walk over the pattern. Returns null the moment it meets something it cannot build. */
-function buildFromPattern(pattern: string): string | null {
+function buildFromPattern(pattern: string, extra = 0): string | null {
   let src = pattern.trim();
   if (!src) return null;
   // alternation at the top level: take the first branch that yields something
   if (src.includes("|")) {
     for (const branch of splitTopLevel(src, "|")) {
-      const v = buildFromPattern(branch);
+      const v = buildFromPattern(branch, extra);
       if (v !== null) return v;
     }
     return null;
@@ -113,8 +130,10 @@ function buildFromPattern(pattern: string): string | null {
       i += 1;
     }
 
-    // quantifier attached to that atom
+    // quantifier attached to that atom. `room` is how far this one may be stretched to spend the
+    // caller's `extra` budget — 0 for a fixed width, so a `{3}` is never widened into a mismatch.
     let count = 1;
+    let room = 0;
     if (src[i] === "{") {
       const close = src.indexOf("}", i);
       if (close < 0) return null;
@@ -122,16 +141,26 @@ function buildFromPattern(pattern: string): string | null {
       const m = /^(\d+)(,(\d*))?$/.exec(body);
       if (!m) return null;
       count = Number(m[1]);
+      if (m[2] !== undefined)
+        room = m[3] ? Math.max(0, Number(m[3]) - count) : Number.MAX_SAFE_INTEGER;
       i = close + 1;
     } else if (src[i] === "+") {
       count = 1;
+      room = Number.MAX_SAFE_INTEGER;
       i += 1;
     } else if (src[i] === "*") {
       count = 0;
+      room = Number.MAX_SAFE_INTEGER;
       i += 1;
     } else if (src[i] === "?") {
       count = 0;
+      room = 1;
       i += 1;
+    }
+    if (extra > 0 && room > 0 && atom.length === 1) {
+      const take = Math.min(extra, room);
+      count += take;
+      extra -= take;
     }
     if (count > 256) return null; // refuse to build something unreviewable
     out += atom.repeat(count);

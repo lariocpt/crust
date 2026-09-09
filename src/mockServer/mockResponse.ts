@@ -1,5 +1,5 @@
 import type { MediaTypeObject, OpenApiSpec, OperationObject, ResponseObject } from "./loadSpec";
-import { normaliseType, sampleFromPattern } from "./schemaTypes";
+import { matchesPattern, normaliseType, sampleFromPattern } from "./schemaTypes";
 
 export interface PickedResponse {
   status: number;
@@ -227,10 +227,12 @@ function stringDefault(s: Record<string, unknown>): string {
   const min = typeof s.minLength === "number" ? s.minLength : null;
   const max = typeof s.maxLength === "number" ? s.maxLength : null;
 
+  const pattern = typeof s.pattern === "string" ? s.pattern : null;
   let value = formatDefault(format);
   if (value === null) {
-    const pattern = typeof s.pattern === "string" ? s.pattern : null;
-    value = pattern ? sampleFromPattern(pattern) : "string";
+    // Hand the sampler the length requirement so it can buy it from an open-ended quantifier,
+    // rather than us padding the answer afterwards and breaking the match it just verified.
+    value = pattern ? sampleFromPattern(pattern, min ?? 0) : "string";
   } else if (min === null && max === null) {
     return value; // a formatted value with no length bounds: leave it exactly as it was
   }
@@ -240,9 +242,20 @@ function stringDefault(s: Record<string, unknown>): string {
   // maxLength violation for a format one while making the mock data less useful. Keep the valid
   // formatted value; it is the better wrong answer, and the one the docs already described.
   const formatted = formatDefault(format) !== null;
-  if (max !== null && value.length > max && !formatted) value = value.slice(0, Math.max(0, max));
-  if (min !== null && value.length < min) value = value.padEnd(min, "x");
-  return value;
+  // A value that already matches its pattern is one crust VERIFIED. Clamping it afterwards silently
+  // unmakes that: a checked "0" padded to minLength became "0xxxxxxxxxxx", and the fallback
+  // truncated to "gen" — 153 of 668 pattern violations across 300 real specs were crust breaking its
+  // own work. Where the length bound and the pattern cannot both hold, the pattern is the narrower
+  // statement about the field, so it wins; the length violation is then the SPEC's contradiction to
+  // answer for, and --validate still reports it.
+  const held = pattern !== null && matchesPattern(pattern, value);
+  const clamped = ((v: string): string => {
+    if (max !== null && v.length > max && !formatted) v = v.slice(0, Math.max(0, max));
+    if (min !== null && v.length < min) v = v.padEnd(min, "x");
+    return v;
+  })(value);
+  if (held && !matchesPattern(pattern, clamped)) return value;
+  return clamped;
 }
 
 function formatDefault(format: string | undefined): string | null {

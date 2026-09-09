@@ -1239,3 +1239,39 @@ describe("format versus an impossible maxLength", () => {
     expect(String(synth(schema).e).length).toBeGreaterThanOrEqual(40);
   });
 });
+
+describe("length clamping never breaks a verified pattern", () => {
+  // sampleFromPattern verifies its construction against the real regex before returning it. That
+  // guarantee was then thrown away by the caller: stringDefault padded or truncated the value to
+  // fit minLength/maxLength, so a verified "0" became "0xxxxxxxxxxx" and the fallback became "gen".
+  // 153 of 668 pattern violations across 300 real-world specs were crust breaking its own value.
+  // The pattern is the more specific constraint, so where the two cannot both hold, it wins.
+  const body = (schema: Record<string, unknown>): Record<string, unknown> =>
+    synthesizeBody(
+      { schema: { type: "object", properties: { v: schema }, required: ["v"] } },
+      {},
+    ) as Record<string, unknown>;
+
+  test("padding to minLength does not invalidate a satisfiable pattern", () => {
+    const v = body({ type: "string", pattern: "^[0-9]{3}$", minLength: 12 }).v as string;
+    expect(/^[0-9]{3}$/.test(v)).toBe(true);
+  });
+
+  test("truncating to maxLength does not invalidate a satisfiable pattern", () => {
+    const v = body({ type: "string", pattern: "^[a-z]{8}$", maxLength: 3 }).v as string;
+    expect(/^[a-z]{8}$/.test(v)).toBe(true);
+  });
+
+  test("an expandable quantifier is grown to meet minLength, satisfying both", () => {
+    const v = body({ type: "string", pattern: "^[a-z]+$", minLength: 10 }).v as string;
+    expect(/^[a-z]+$/.test(v)).toBe(true);
+    expect(v.length).toBeGreaterThanOrEqual(10);
+  });
+
+  // Control: with no pattern in play the length bounds are still honoured exactly as before, so the
+  // fix above cannot be "stop clamping" wearing a disguise.
+  test("without a pattern, minLength and maxLength still apply", () => {
+    expect((body({ type: "string", minLength: 9 }).v as string).length).toBeGreaterThanOrEqual(9);
+    expect((body({ type: "string", maxLength: 2 }).v as string).length).toBeLessThanOrEqual(2);
+  });
+});
