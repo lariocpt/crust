@@ -152,6 +152,71 @@ interface ScopeConfig {
 // that single-field perturbations are applied to).
 // ---------------------------------------------------------------------------
 
+/**
+ * A node and its `allOf` branches as one schema.
+ *
+ * `allOf` is an INTERSECTION, so every branch's constraint holds at once and the merge must reflect
+ * that: `properties` and `required` are unioned, not overwritten, and where two bounds disagree the
+ * STRICTER one governs — `minLength: 3` beside a branch's `minLength: 40` means 40, because a value
+ * of 3 characters does not satisfy both. Overwriting instead lost whichever branch came first, which
+ * is how merging naively broke object composition that already worked.
+ */
+function intersectAllOf(s: Schema): Schema {
+  const out: Schema = { ...s };
+  out.allOf = undefined;
+  out.properties = { ...(s.properties ?? {}) };
+  out.required = [...(s.required ?? [])];
+  const stricter = (
+    key: "minLength" | "minimum" | "minItems" | "maxLength" | "maximum" | "maxItems",
+    branch: Schema,
+    pick: (a: number, b: number) => number,
+  ): void => {
+    const bv = branch[key];
+    if (typeof bv !== "number") return;
+    const ov = out[key];
+    out[key] = typeof ov === "number" ? pick(ov, bv) : bv;
+  };
+  for (const raw of s.allOf ?? []) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
+    const branch = Array.isArray(raw.allOf) ? intersectAllOf(raw) : raw;
+    Object.assign(out.properties, branch.properties ?? {});
+    if (Array.isArray(branch.required)) out.required.push(...branch.required);
+    for (const key of ["type", "format", "pattern", "enum", "items"] as const) {
+      if (out[key] === undefined && branch[key] !== undefined)
+        (out as Record<string, unknown>)[key] = branch[key];
+    }
+    stricter("minLength", branch, Math.max);
+    stricter("minimum", branch, Math.max);
+    stricter("minItems", branch, Math.max);
+    stricter("maxLength", branch, Math.min);
+    stricter("maximum", branch, Math.min);
+    stricter("maxItems", branch, Math.min);
+  }
+  if (Object.keys(out.properties).length === 0) out.properties = undefined;
+  if (out.required.length === 0) out.required = undefined;
+  return out;
+}
+
+/** Whether merging the refinements changed any constraint this function actually reads. */
+function sameConstraints(a: Schema, b: Schema): boolean {
+  const keys = [
+    "type",
+    "format",
+    "pattern",
+    "minLength",
+    "maxLength",
+    "minimum",
+    "maximum",
+    "minItems",
+    "maxItems",
+    "enum",
+    "items",
+    "properties",
+    "required",
+  ] as const;
+  return keys.every((k) => JSON.stringify(a[k]) === JSON.stringify(b[k]));
+}
+
 /** An object's `required` list and `properties`, merged across its `allOf` chain. */
 function composedObject(
   s: Schema | undefined,
@@ -193,6 +258,19 @@ export function validValue(s: Schema | undefined, key = ""): unknown {
   // Only fall into combinators when the node has no type of its own —
   // zod emits e.g. { type: "string", allOf: [pattern, pattern] } where the
   // branches are refinements, not alternatives.
+  // A node may carry its TYPE and leave the constraints to `allOf` refinements — the shape this
+  // function's own comment describes and then never read, because a node with a type of its own
+  // skips the combinator path entirely. Merge the branches' keywords under the node's own, which
+  // stay authoritative: they are the more specific statement about this use.
+  if (Array.isArray(s.allOf) && s.allOf.length > 0) {
+    const combined = intersectAllOf(s);
+    // Only when the merge actually says something new, so the combinator paths below still see
+    // their allOf untouched in the cases they handle.
+    if (primaryType(combined) !== undefined && !sameConstraints(combined, s)) {
+      return validValue(combined, key);
+    }
+  }
+
   const t = primaryType(s);
   if (!t) {
     // An `allOf` that composes into an OBJECT is one, whether or not the node says `type`. Taking

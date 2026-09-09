@@ -1454,3 +1454,38 @@ describe("validValue reads enums and allOf the way the mock does", () => {
     expect(validValue({ type: "integer", enum: ["a", "b"] } as never)).toBe("a");
   });
 });
+
+describe("scalar constraints are read through allOf too", () => {
+  // The object case learned to compose through `allOf`; the scalar cases did not. Real specs write
+  // `{allOf: [{type: "string", minLength: 600, maxLength: 2400, pattern: "..."}, {description: "..."}]}`
+  // — the constraints in a branch, a prose note beside it — and validValue read `minLength` off the
+  // NODE, found none, and produced a value far too short for the field it was standing in for.
+  const ok = (schema: Record<string, unknown>, key = "") =>
+    validateSchema(validValue(schema as never, key), schema, {} as never, "");
+
+  // The node carries the TYPE and the branches carry refinements — the shape validValue's own
+  // comment describes ("zod emits { type: 'string', allOf: [pattern, pattern] }") and then ignores,
+  // because a node with a type of its own never enters the combinator path at all.
+  test("length bounds in a refinement branch are honoured", () => {
+    expect(ok({ type: "string", allOf: [{ minLength: 24 }] })).toEqual([]);
+    expect(
+      ok({ type: "string", allOf: [{ minLength: 5, maxLength: 8 }, { description: "x" }] }),
+    ).toEqual([]);
+  });
+
+  test("numeric bounds in a refinement branch are honoured", () => {
+    expect(ok({ type: "integer", allOf: [{ minimum: 50 }] })).toEqual([]);
+  });
+
+  test("a format in a refinement branch is honoured", () => {
+    expect(ok({ type: "string", allOf: [{ format: "uri" }] })).toEqual([]);
+  });
+
+  // Control: the node's own constraints still win where both state one — it is the more specific
+  // statement about this use.
+  test("the node's own constraint is not overridden by a branch", () => {
+    expect(
+      validValue({ type: "string", minLength: 3, allOf: [{ minLength: 40 }] } as never),
+    ).toHaveLength(40);
+  });
+});
