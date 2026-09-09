@@ -66,7 +66,12 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
 import { loadSpec, type OpenApiSpec } from "../mockServer/loadSpec";
 import { resolveRef } from "../mockServer/mockResponse";
-import { inferType, normaliseType, sampleFromPattern } from "../mockServer/schemaTypes";
+import {
+  inferType,
+  matchesPattern,
+  normaliseType,
+  sampleFromPattern,
+} from "../mockServer/schemaTypes";
 import { validateSchema } from "../mockServer/validateRequest";
 
 type Schema = {
@@ -80,6 +85,8 @@ type Schema = {
   pattern?: string;
   minLength?: number;
   maxLength?: number;
+  minItems?: number;
+  maxItems?: number;
   minimum?: number;
   maximum?: number;
   additionalProperties?: boolean | Schema;
@@ -165,20 +172,46 @@ export function validValue(s: Schema | undefined, key = ""): unknown {
         return "00000000-0000-4000-8000-00000000c0de";
       if (s.format === "date") return "2026-08-12";
       if (s.format === "date-time") return "2026-08-12T10:00:00.000Z";
-      if (s.pattern) return sampleFromPattern(s.pattern);
       const min = s.minLength ?? 1;
-      return "gen-value-x".padEnd(min, "x");
+      const max = typeof s.maxLength === "number" ? s.maxLength : null;
+      if (s.pattern) {
+        // Ask the sampler for the length, rather than padding afterwards and unmaking the match it
+        // verified — the same rule the mock follows.
+        const sampled = sampleFromPattern(s.pattern, min);
+        if (max === null || sampled.length <= max || matchesPattern(s.pattern, sampled))
+          return sampled;
+        return sampled.slice(0, max);
+      }
+      // The default is ELEVEN characters, so any smaller maxLength was violated by it. Trim first,
+      // then pad, so a `{minLength: 2, maxLength: 5}` field lands inside both.
+      let value = "gen-value-x";
+      if (max !== null && value.length > max) value = value.slice(0, Math.max(0, max));
+      if (value.length < min) value = value.padEnd(min, "x");
+      return value;
     }
     case "integer":
     case "number": {
-      const min = s.minimum;
-      if (typeof min === "number") return Math.max(min, 1);
-      return 1;
+      const min = typeof s.minimum === "number" ? s.minimum : null;
+      const max = typeof s.maximum === "number" ? s.maximum : null;
+      // 1 stays the friendly default, but a `{maximum: 0}` field was violated by it.
+      let n = min !== null ? Math.max(min, 1) : 1;
+      if (max !== null && n > max) n = max;
+      if (min !== null && n < min) n = min;
+      return n;
     }
     case "boolean":
       return true;
-    case "array":
-      return [validValue(s.items, key), validValue(s.items, key)];
+    case "array": {
+      // Two elements is the useful default — enough to exercise a list — but `maxItems: 1` and
+      // `minItems: 3` are as binding here as a length bound on a string.
+      const min = typeof s.minItems === "number" ? s.minItems : null;
+      const max = typeof s.maxItems === "number" ? s.maxItems : null;
+      let count = 2;
+      if (min !== null && min > count) count = min;
+      if (max !== null && max < count) count = max;
+      if (count > 100) count = 100;
+      return Array.from({ length: Math.max(0, count) }, () => validValue(s.items, key));
+    }
     case "object": {
       const out: Record<string, unknown> = {};
       for (const k of s.required ?? []) out[k] = validValue(s.properties?.[k], k);
