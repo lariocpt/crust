@@ -227,11 +227,25 @@ export function validateSchema(
       }
     }
     if (typeof s.pattern === "string") {
+      // `u` FIRST, then plain. JSON Schema patterns are ECMA-262 regexes, and Unicode property
+      // escapes (\p{L}, \P{C}) only mean what they say under `u` — without it they degrade to the
+      // literal characters p, {, L, }, so crust reported "does not match pattern" against values
+      // that DO match. That is the walker inventing a violation, which the rule at the top of this
+      // file forbids; 623 occurrences across 300 real-world specs, AWS being the heaviest user.
+      //
+      // The plain fallback is load-bearing, not defensive: `u` mode BANS identity escapes that
+      // plain mode allows, and specs use them constantly (\/ and \: in almost every ARN pattern).
+      // Compiling only with `u` would make those uncompilable — which passes — and so would HIDE
+      // real violations instead of inventing them. Both failure directions matter.
       let re: RegExp | null = null;
       try {
-        re = new RegExp(s.pattern);
+        re = new RegExp(s.pattern, "u");
       } catch {
-        // uncompilable pattern — pass
+        try {
+          re = new RegExp(s.pattern);
+        } catch {
+          // uncompilable either way — pass
+        }
       }
       if (re && !re.test(value)) {
         out.push({

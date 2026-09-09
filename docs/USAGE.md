@@ -1347,7 +1347,7 @@ serialization styles pass unchecked. The schema
 walker supports `type` (incl. the 3.1 `["string","null"]` array form),
 `required`, `properties`/`items`, `enum`, `nullable`, `anyOf`/`oneOf` (pass if
 any branch passes), `allOf`, `format` (`uuid`, `email`, `date`, `date-time`,
-`uri`), `pattern`, `minLength`/`maxLength`, `minimum`/`maximum` (incl. both
+`uri`), `pattern` (compiled with the `u` flag so Unicode property escapes such as `\p{L}` mean what they say, falling back to plain compilation for the identity escapes `u` mode bans, e.g. `\/` in ARN patterns), `minLength`/`maxLength`, `minimum`/`maximum` (incl. both
 `exclusiveMinimum`/`exclusiveMaximum` forms), and `minItems`/`maxItems`.
 
 An operation that documents **no `responses` object at all** (3.1 makes it optional) has nothing to conform to, so no status is reported as undocumented for it — reporting one would be inventing a violation.
