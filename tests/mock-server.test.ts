@@ -1392,3 +1392,58 @@ describe("a required property the schema never describes", () => {
     expect(Object.hasOwn(out, "date_create")).toBe(false);
   });
 });
+
+describe("a cycle terminator satisfies the schema it stands in for", () => {
+  // Terminating a $ref cycle with the empty shape fixed the TYPE violation and left a `required`
+  // one: {} is an object, but not one that carries the properties its schema demands. 4,663 such
+  // violations across all 4,138 APIs-guru specs, the largest single group. The recursive property
+  // is almost always OPTIONAL (a slot may contain a sub-slot), so generating the required
+  // properties and stopping there satisfies the schema and still terminates.
+  const body = (
+    schema: Record<string, unknown>,
+    spec: Record<string, unknown>,
+  ): Record<string, unknown> => synthesizeBody({ schema }, spec) as Record<string, unknown>;
+
+  const SPEC = {
+    components: {
+      schemas: {
+        Slot: {
+          type: "object",
+          required: ["name"],
+          properties: {
+            name: { type: "string" },
+            subSlot: { $ref: "#/components/schemas/Slot" },
+          },
+        },
+      },
+    },
+  };
+
+  test("the terminating level still carries its required properties", () => {
+    const out = body({ $ref: "#/components/schemas/Slot" }, SPEC);
+    const sub = out.subSlot as Record<string, unknown>;
+    expect(sub).toBeDefined();
+    expect(sub.name).toBeDefined();
+  });
+
+  test("and it still terminates — the nesting is finite", () => {
+    const out = body({ $ref: "#/components/schemas/Slot" }, SPEC);
+    expect(JSON.stringify(out).length).toBeLessThan(2000);
+  });
+
+  test("a REQUIRED recursive property still bottoms out rather than looping", () => {
+    const spec = {
+      components: {
+        schemas: {
+          N: {
+            type: "object",
+            required: ["kid"],
+            properties: { kid: { $ref: "#/components/schemas/N" } },
+          },
+        },
+      },
+    };
+    const out = body({ $ref: "#/components/schemas/N" }, spec);
+    expect(JSON.stringify(out).length).toBeLessThan(2000);
+  });
+});

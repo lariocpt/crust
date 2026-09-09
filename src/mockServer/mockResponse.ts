@@ -93,7 +93,18 @@ function generateFromSchema(schema: unknown, spec: OpenApiSpec, visited: Set<str
       // the body, which crust's own validator then rejects — a self-inflicted violation on any spec
       // with a recursive model (AWS amplifyuibuilder, athena). The empty shape of the declared type
       // terminates the recursion just as firmly and is a body the validator accepts.
-      return emptyOfDeclaredType(resolved);
+      //
+      // But `{}` is an object that carries none of the properties its schema DEMANDS, which merely
+      // traded the `type` violation for a `required` one — 4,663 of them across all 4,138 APIs-guru
+      // specs. So the terminating level generates its REQUIRED properties and stops there. The
+      // recursive property is nearly always optional (a slot may contain a sub-slot), so omitting
+      // optional properties is what makes this both complete and finite. `depth` is what guarantees
+      // the finiteness when the recursive property is itself required: one shallow level, then the
+      // empty shape.
+      // The marker is what makes "one shallow level" true rather than aspirational: a REQUIRED
+      // property that closes the loop lands here again, sees it, and stops with the empty shape.
+      if (visited.has(`${refName}#shallow`)) return emptyOfDeclaredType(resolved);
+      return shallowForCycle(resolved, spec, visited, refName);
     }
     if (!resolved) return null;
     const next = new Set(visited);
@@ -249,6 +260,42 @@ function pickType(raw: unknown): string | undefined {
  * length bounds clamp whatever came out. A pattern crust cannot sample falls back to the padded
  * default rather than to something that merely looks plausible.
  */
+/**
+ * The value a `$ref` cycle terminates with: an object carrying the properties its schema requires,
+ * and nothing else. Optional properties are dropped — that is what stops the recursion, since the
+ * property that closes the loop is almost always optional. A REQUIRED property that closes the loop
+ * gets the empty shape, so the nesting is finite either way.
+ */
+function shallowForCycle(
+  resolved: unknown,
+  spec: OpenApiSpec,
+  visited: Set<string>,
+  refName: string,
+): unknown {
+  const empty = emptyOfDeclaredType(resolved);
+  if (!resolved || typeof resolved !== "object") return empty;
+  const s = resolved as Record<string, unknown>;
+  const props = s.properties as Record<string, unknown> | undefined;
+  const required = Array.isArray(s.required) ? s.required : [];
+  if (!props || required.length === 0) return empty;
+
+  const marked = new Set(visited);
+  marked.add(`${refName}#shallow`);
+  const out: Record<string, unknown> = {};
+  for (const name of required) {
+    if (typeof name !== "string") continue;
+    const sub = props[name];
+    if (sub === undefined) {
+      out[name] = null; // required but never described — the same rule as the object case
+      continue;
+    }
+    // `visited` still holds refName, so a required property that closes the loop lands back in the
+    // cycle branch; the marker makes it terminate there with the empty shape instead of recursing.
+    out[name] = generateFromSchema(sub, spec, marked);
+  }
+  return out;
+}
+
 /**
  * The empty value of whatever type a schema declares: `{}` for an object, `[]` for an array, and
  * `null` when nothing is declared and no honest guess exists. Used wherever crust gives up on
