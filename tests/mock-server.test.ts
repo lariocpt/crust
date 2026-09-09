@@ -1168,3 +1168,74 @@ describe("pattern sampling", () => {
     }
   });
 });
+
+// Array bounds were ignored: `array` always synthesised exactly one element, so minItems > 1 and
+// maxItems 0 both produced a body crust's own validator rejects. Same constraint-blindness family
+// as the numeric and string bounds.
+describe("array bounds in synthesised bodies", () => {
+  const wrap = {
+    openapi: "3.1.0",
+    info: { title: "a", version: "1" },
+    paths: {},
+  } as unknown as OpenApiSpec;
+  const synth = (schema: unknown) =>
+    synthesizeBody({ schema } as never, wrap) as Record<string, unknown>;
+
+  test("minItems is met", () => {
+    const schema = {
+      type: "object",
+      properties: { xs: { type: "array", minItems: 3, items: { type: "string" } } },
+    };
+    const body = synth(schema);
+    expect((body.xs as unknown[]).length).toBeGreaterThanOrEqual(3);
+    expect(validateSchema(body, schema, wrap, "")).toEqual([]);
+  });
+
+  test("maxItems is not exceeded, including zero", () => {
+    const schema = {
+      type: "object",
+      properties: { xs: { type: "array", maxItems: 0, items: { type: "string" } } },
+    };
+    const body = synth(schema);
+    expect(body.xs).toEqual([]);
+    expect(validateSchema(body, schema, wrap, "")).toEqual([]);
+  });
+
+  test("an unconstrained array is still a single element (control)", () => {
+    const schema = {
+      type: "object",
+      properties: { xs: { type: "array", items: { type: "string" } } },
+    };
+    expect(synth(schema).xs).toEqual(["string"]);
+  });
+});
+
+// A formatted value that cannot fit maxLength is a CONTRADICTORY schema — a uuid is 36 characters
+// and cannot be 8. Truncating it produced "00000000", which is not a uuid and fails `format`
+// instead: one violation traded for another, and the mock's data made less sense. Keeping the
+// valid uuid is the better wrong answer, and it is what the docs already claimed happened.
+describe("format versus an impossible maxLength", () => {
+  const wrap = {
+    openapi: "3.1.0",
+    info: { title: "f", version: "1" },
+    paths: {},
+  } as unknown as OpenApiSpec;
+  const synth = (schema: unknown) =>
+    synthesizeBody({ schema } as never, wrap) as Record<string, unknown>;
+
+  test("a formatted value is kept whole rather than truncated into nonsense", () => {
+    const schema = {
+      type: "object",
+      properties: { id: { type: "string", format: "uuid", maxLength: 8 } },
+    };
+    expect(synth(schema).id).toBe("00000000-0000-0000-0000-000000000000");
+  });
+
+  test("a formatted value IS padded up to minLength (control: padding stays valid-ish)", () => {
+    const schema = {
+      type: "object",
+      properties: { e: { type: "string", format: "email", minLength: 40 } },
+    };
+    expect(String(synth(schema).e).length).toBeGreaterThanOrEqual(40);
+  });
+});
