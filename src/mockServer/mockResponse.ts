@@ -103,7 +103,7 @@ function generateFromSchema(schema: unknown, spec: OpenApiSpec, visited: Set<str
       // empty shape.
       // The marker is what makes "one shallow level" true rather than aspirational: a REQUIRED
       // property that closes the loop lands here again, sees it, and stops with the empty shape.
-      if (visited.has(`${refName}#shallow`)) return emptyOfDeclaredType(resolved);
+      if (visited.has(`${refName}#shallow`)) return emptyOfDeclaredType(resolved, spec);
       return shallowForCycle(resolved, spec, visited, refName);
     }
     if (!resolved) return null;
@@ -287,12 +287,14 @@ function shallowForCycle(
   visited: Set<string>,
   refName: string,
 ): unknown {
-  const empty = emptyOfDeclaredType(resolved);
+  const empty = emptyOfDeclaredType(resolved, spec);
   if (!resolved || typeof resolved !== "object") return empty;
-  const s = resolved as Record<string, unknown>;
-  const props = s.properties as Record<string, unknown> | undefined;
-  const required = Array.isArray(s.required) ? s.required : [];
-  if (!props || required.length === 0) return empty;
+  // Read through allOf: bitbucket composes every recursive type that way, so the node itself
+  // carries neither the properties nor the required list that describe it.
+  const shape = composedShape(resolved, spec);
+  const props = shape.properties;
+  const required = shape.required;
+  if (Object.keys(props).length === 0 || required.length === 0) return empty;
 
   const marked = new Set(visited);
   marked.add(`${refName}#shallow`);
@@ -312,13 +314,55 @@ function shallowForCycle(
 }
 
 /**
+ * A node's shape, read through `allOf`. Both the cycle terminator and `emptyOfDeclaredType` need to
+ * answer "what type is this, and what does it require?", and real specs answer that inside an allOf
+ * branch rather than on the node — bitbucket composes every recursive type that way. Reading the
+ * node alone found nothing and the cycle terminated with `null`: 349 of 356 sampled `type` residues
+ * across the full corpus. Shallow by design: it merges branch shape, not values.
+ */
+function composedShape(
+  schema: unknown,
+  spec: OpenApiSpec,
+  depth = 0,
+): { types: string[]; properties: Record<string, unknown>; required: string[]; bag: boolean } {
+  const out = {
+    types: [] as string[],
+    properties: {} as Record<string, unknown>,
+    required: [] as string[],
+    bag: false,
+  };
+  if (!schema || typeof schema !== "object" || depth > 10) return out;
+  let s = schema as Record<string, unknown>;
+  if (typeof s.$ref === "string") {
+    const resolved = resolveRef(s.$ref, spec);
+    if (!resolved || depth >= 10) return out;
+    s = resolved as Record<string, unknown>;
+  }
+  out.types.push(...normaliseType(s));
+  if (s.properties && typeof s.properties === "object") Object.assign(out.properties, s.properties);
+  if (Array.isArray(s.required))
+    out.required.push(...s.required.filter((r): r is string => typeof r === "string"));
+  if (s.additionalProperties !== undefined && s.additionalProperties !== false) out.bag = true;
+  if (Array.isArray(s.allOf)) {
+    for (const branch of s.allOf) {
+      const sub = composedShape(branch, spec, depth + 1);
+      out.types.push(...sub.types);
+      Object.assign(out.properties, sub.properties);
+      out.required.push(...sub.required);
+      out.bag ||= sub.bag;
+    }
+  }
+  return out;
+}
+
+/**
  * The empty value of whatever type a schema declares: `{}` for an object, `[]` for an array, and
  * `null` when nothing is declared and no honest guess exists. Used wherever crust gives up on
  * building a value — a `$ref` cycle, an `allOf` with nothing in it — because giving up is not a
  * licence to emit the wrong type. `null` where `type: object` is declared is a violation crust
  * inflicts on itself.
  */
-function emptyOfDeclaredType(schema: unknown): unknown {
+function emptyOfDeclaredType(schema: unknown, spec?: OpenApiSpec): unknown {
   if (!schema || typeof schema !== "object") return null;
   const s = schema as Record<string, unknown>;
   const types = normaliseType(s);
@@ -328,6 +372,13 @@ function emptyOfDeclaredType(schema: unknown): unknown {
   // legible from the keywords, and guessing from them beats emitting `null` into a typed slot.
   if (s.properties !== undefined || s.additionalProperties !== undefined) return {};
   if (s.items !== undefined) return [];
+  // Last resort: the shape may live in an allOf branch rather than on the node.
+  if (spec) {
+    const shape = composedShape(s, spec);
+    if (shape.types.includes("object") || Object.keys(shape.properties).length > 0 || shape.bag)
+      return {};
+    if (shape.types.includes("array")) return [];
+  }
   return null;
 }
 

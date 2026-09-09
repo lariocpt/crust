@@ -1505,3 +1505,53 @@ describe("allOf does not swallow its node's own keywords", () => {
     expect(out.status).toBe("live");
   });
 });
+
+describe("a cycle through an allOf-composed schema", () => {
+  // 349 of 356 sampled `type` residues were "expected object, got null", and they all sit on a
+  // recursive type whose shape lives in an allOf branch — bitbucket's `comment.parent` and
+  // `commit.parents` are the canonical case. Reading `type`/`properties` off the node itself finds
+  // nothing there, so the cycle terminated with null: the wrong type, in a slot the schema declares.
+  const body = (
+    schema: Record<string, unknown>,
+    spec: Record<string, unknown>,
+  ): Record<string, unknown> => synthesizeBody({ schema }, spec) as Record<string, unknown>;
+
+  const SPEC = {
+    components: {
+      schemas: {
+        Comment: {
+          allOf: [
+            { type: "object", properties: { id: { type: "integer" } }, required: ["id"] },
+            { type: "object", properties: { parent: { $ref: "#/components/schemas/Comment" } } },
+          ],
+        },
+      },
+    },
+  };
+
+  test("the cycle terminates as an object, not as null", () => {
+    const out = body({ $ref: "#/components/schemas/Comment" }, SPEC);
+    expect(out.parent).not.toBeNull();
+    expect(typeof out.parent).toBe("object");
+  });
+
+  test("and it still carries what the composed schema requires", () => {
+    const out = body({ $ref: "#/components/schemas/Comment" }, SPEC);
+    expect((out.parent as Record<string, unknown>).id).toBeDefined();
+  });
+
+  test("additionalProperties alone is enough to know it is an object", () => {
+    const spec = {
+      components: {
+        schemas: {
+          Bag: {
+            additionalProperties: true,
+            properties: { inner: { $ref: "#/components/schemas/Bag" } },
+          },
+        },
+      },
+    };
+    const out = body({ $ref: "#/components/schemas/Bag" }, spec);
+    expect(out.inner).not.toBeNull();
+  });
+});
