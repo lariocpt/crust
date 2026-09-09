@@ -11,6 +11,7 @@ import {
   countWebhookOperations,
   matchRoute,
 } from "../src/mockServer/router";
+import { matchesPattern, sampleFromPattern } from "../src/mockServer/schemaTypes";
 import { startServer } from "../src/mockServer/server";
 import { validateSchema } from "../src/mockServer/validateRequest";
 
@@ -2384,5 +2385,46 @@ describe("a union violation names the branch it is describing", () => {
       SPEC,
     );
     expect(errs[0]?.message).toContain("value not in enum");
+  });
+});
+
+describe("the pattern sampler reaches minLength", () => {
+  // Three real shapes from the corpus, one symptom: the sampled value was shorter than minLength and
+  // stayed that way. Each defeated the growth logic differently.
+  //
+  //   [A-z0-9]            minLength 24  — no quantifier, so nothing to widen. But `pattern` is an
+  //                                       UNANCHORED partial match, so repetition still matches.
+  //   [\w :+=./\n-]*      minLength 600 — the `*` has room, but a `count > 256` guard rejected the
+  //                                       build outright and returned the fallback.
+  //   ^$|[\x00-\x7F]+     minLength 1   — alternation picked the empty branch, and growing retried
+  //                                       the same branch instead of trying the others.
+  const fits = (pattern: string, min: number): boolean => {
+    const v = sampleFromPattern(pattern, min);
+    return v.length >= min && matchesPattern(pattern, v);
+  };
+
+  test("a pattern with no quantifier is repeated to length", () => {
+    expect(fits("[A-z0-9]", 24)).toBe(true);
+  });
+
+  test("a length beyond the build cap is still reached", () => {
+    expect(fits("[\\w :+=./\\n-]*", 600)).toBe(true);
+  });
+
+  test("an alternation tries branches that can actually grow", () => {
+    expect(fits("^$|[\\x00-\\x7F]+", 1)).toBe(true);
+  });
+
+  // Control: a genuinely unsatisfiable length leaves the verified sample alone rather than breaking
+  // it — `^[a-z]{3}$` is anchored at three characters and no value is both.
+  test("an anchored fixed width is not stretched into a mismatch", () => {
+    const v = sampleFromPattern("^[a-z]{3}$", 10);
+    expect(matchesPattern("^[a-z]{3}$", v)).toBe(true);
+    expect(v).toHaveLength(3);
+  });
+
+  // Control: no minLength asked for, no change.
+  test("without a length request the sample is unchanged", () => {
+    expect(sampleFromPattern("^[a-z]{3}$")).toBe("aaa");
   });
 });
