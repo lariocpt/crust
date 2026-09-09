@@ -7,6 +7,7 @@ import { pickResponse, synthesizeBody } from "../src/mockServer/mockResponse";
 import {
   buildRoutes,
   countColonParamPaths,
+  countRegexLiteralPatterns,
   countWebhookOperations,
   matchRoute,
 } from "../src/mockServer/router";
@@ -1973,5 +1974,67 @@ describe("an optional property crust cannot represent is omitted", () => {
       unknown
     >;
     expect(out.b).toBeDefined();
+  });
+});
+
+describe("format and pattern on the same string", () => {
+  // peertube declares `{format: "uri", pattern: "magnet:\\?xt=urn:..."}`. crust took the format
+  // default — "https://example.com" — and never looked at the pattern, so it emitted a value the
+  // field's own regex rejects. sinao.app's `nic` and `code_naf` fail the same way, and its unions
+  // then fail on top of them.
+  //
+  // The pattern is the narrower statement: a format names a family of values, a pattern names which
+  // of them. So the format default is used only when it actually satisfies the pattern.
+  const body = (schema: Record<string, unknown>): Record<string, unknown> =>
+    synthesizeBody(
+      { schema: { type: "object", properties: { v: schema }, required: ["v"] } },
+      {},
+    ) as Record<string, unknown>;
+
+  test("a pattern the format default cannot satisfy is sampled instead", () => {
+    const v = body({ type: "string", format: "uri", pattern: "^magnet:[a-z0-9]{6}$" }).v as string;
+    expect(/^magnet:[a-z0-9]{6}$/.test(v)).toBe(true);
+  });
+
+  // Control: where the format default DOES satisfy the pattern, it is kept — it is the more useful
+  // value, and there is no conflict to resolve.
+  test("a format default that satisfies the pattern is kept", () => {
+    const v = body({ type: "string", format: "uri", pattern: "^https://" }).v as string;
+    expect(v).toBe("https://example.com");
+  });
+
+  // Control: format alone is untouched.
+  test("format alone still wins", () => {
+    expect(body({ type: "string", format: "uuid" }).v).toMatch(/^[0-9a-f-]{36}$/);
+  });
+});
+
+describe("patterns written as JavaScript regex literals", () => {
+  // sinao.app writes both of its patterns as `/^[0-9]{5}$/i` — delimiters and flags included — where
+  // JSON Schema wants a bare regex. The leading slash is then a literal character, so no value can
+  // satisfy the pattern: every response carrying one is unsatisfiable, silently, because the failure
+  // looks like ordinary validation noise. crust does not rewrite them (guessing at what a spec meant
+  // is how a mock starts lying) — it names them, as it does Express-style `:param` paths.
+  test("they are counted so the boot line can report them", () => {
+    const spec = {
+      components: {
+        schemas: {
+          A: {
+            type: "object",
+            properties: {
+              nic: { type: "string", pattern: "/^[0-9]{5}$/i" },
+              naf: { type: "string", pattern: "/^[0-9]{4}[a-z]$/" },
+              fine: { type: "string", pattern: "^[0-9]{5}$" },
+            },
+          },
+        },
+      },
+    };
+    expect(countRegexLiteralPatterns(spec)).toBe(2);
+  });
+
+  test("a bare pattern that merely contains slashes is not one", () => {
+    const spec = { components: { schemas: { A: { pattern: "^/api/v[0-9]+/things$" } } } };
+    expect(countRegexLiteralPatterns(spec)).toBe(0);
   });
 });

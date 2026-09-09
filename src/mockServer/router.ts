@@ -141,3 +141,31 @@ export function countColonParamPaths(spec: unknown): number {
   }
   return n;
 }
+
+/**
+ * Patterns written as JavaScript regex LITERALS — `/^[0-9]{5}$/i`, delimiters and flags included —
+ * where JSON Schema wants a bare regex. The leading slash is then a literal character, so NOTHING
+ * can satisfy the pattern: every value fails, including any the API really returns.
+ *
+ * crust does not rewrite them, because guessing at what a spec meant is how a mock starts lying.
+ * It says so instead: the same reason the Express-style `:param` warning exists. sinao.app writes
+ * both of its patterns this way and every response carrying one is unsatisfiable.
+ */
+export function countRegexLiteralPatterns(spec: unknown): number {
+  const seen = new Set<string>();
+  const walk = (node: unknown, depth: number): void => {
+    if (!node || typeof node !== "object" || depth > 30) return;
+    if (Array.isArray(node)) {
+      for (const item of node) walk(item, depth + 1);
+      return;
+    }
+    const obj = node as Record<string, unknown>;
+    const pattern = obj.pattern;
+    // A bare regex may legitimately start with an escaped slash, so require a CLOSING delimiter
+    // followed only by regex flag letters — the shape a JS literal has and a bare pattern does not.
+    if (typeof pattern === "string" && /^\/.*\/[gimsuyv]*$/.test(pattern)) seen.add(pattern);
+    for (const value of Object.values(obj)) walk(value, depth + 1);
+  };
+  walk(spec, 0);
+  return seen.size;
+}

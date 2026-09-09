@@ -1183,6 +1183,8 @@ missing `scopeParam`), `2` bad args.
 
 Boots a `Bun.serve` instance that mocks every operation in an OpenAPI 3.x spec — useful for frontend dev before the backend exists, demoing a pipeline, or seeding fixture tests against an upstream you don't want to spin up.
 
+The boot line also names **patterns written as JavaScript regex literals** — `/^[0-9]{5}$/i`, delimiters and flags included, where JSON Schema expects a bare regex. The leading slash is then matched literally, so NO value can satisfy the pattern and every response carrying one is unsatisfiable — silently, because the failures look like ordinary validation noise. crust does not rewrite them: guessing at what a spec meant is how a mock starts lying. It names them, as it does Express-style `:param` paths.
+
 OpenAPI 3.1 made `paths` optional, so a document describing only `webhooks` (or only reusable `components`) loads and mocks **0 routes** — the boot line names the webhook count, because webhooks are callbacks the API *sends* you, not endpoints to serve. A document with no `paths`, no `webhooks` and no `components` is still a load error.
 
 ```bash

@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { FlagError, type FlagSpec, parseFlags } from "../args";
 import { loadSpec } from "./loadSpec";
-import { countColonParamPaths, countWebhookOperations } from "./router";
+import { countColonParamPaths, countRegexLiteralPatterns, countWebhookOperations } from "./router";
 import { startServer } from "./server";
 import { normalizeStateUrl, stateDialect } from "./state";
 
@@ -191,6 +191,16 @@ export async function runCli(args: string[]): Promise<number> {
     process.stderr.write(
       `mock-server: ${colon} path(s) use Express-style ':param' — OpenAPI templates parameters as ` +
         `'{param}', so these are matched LITERALLY and will not match a real value\n`,
+    );
+  }
+  // A pattern written as a JS regex literal can never match anything, so every response carrying one
+  // is unsatisfiable — and silently so, since the failure looks like ordinary validation noise.
+  const literalPatterns = countRegexLiteralPatterns(loaded.spec);
+  if (literalPatterns > 0) {
+    process.stderr.write(
+      `mock-server: ${literalPatterns} pattern(s) are written as JavaScript regex LITERALS ` +
+        `(e.g. '/^[0-9]+$/i') — JSON Schema expects a bare regex, so the delimiters are matched ` +
+        `literally and NO value can satisfy them\n`,
     );
   }
   const modes = `${stateful ? " (stateful)" : ""}${validate && proxy === undefined ? " (validate)" : ""}${strict ? " (strict)" : ""}${
