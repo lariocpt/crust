@@ -2269,3 +2269,44 @@ describe("an allOf node's own required names are present", () => {
     expect(out.amount).toBe("string");
   });
 });
+
+describe("a missing type is inferred from the keywords present", () => {
+  // sinao writes `tags: {type: "array", items: {format: "string"}}` — `format` where they meant
+  // `type`. crust found no type on the item, fell through to null, and produced `[null]` against an
+  // array of strings.
+  //
+  // `type` is optional in JSON Schema and the keywords say what the value is: `format`, `pattern`
+  // and the length bounds are string-only; the numeric bounds are number-only. Reading them is not
+  // a guess about what the author meant — it is what the schema already states.
+  const body = (schema: Record<string, unknown>): Record<string, unknown> =>
+    synthesizeBody(
+      { schema: { type: "object", properties: { v: schema }, required: ["v"] } },
+      {},
+    ) as Record<string, unknown>;
+
+  test("format alone implies a string", () => {
+    expect(typeof body({ format: "string" }).v).toBe("string");
+    expect(body({ format: "uuid" }).v).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  test("pattern and the length bounds imply a string", () => {
+    expect(typeof body({ pattern: "^[a-z]{3}$" }).v).toBe("string");
+    expect(typeof body({ minLength: 2 }).v).toBe("string");
+  });
+
+  test("the numeric bounds imply a number", () => {
+    expect(typeof body({ minimum: 5 }).v).toBe("number");
+    expect(body({ minimum: 5 }).v).toBeGreaterThanOrEqual(5);
+  });
+
+  test("an enum implies the type of the member it picks", () => {
+    expect(body({ enum: ["a", "b"] }).v).toBe("a");
+  });
+
+  // Control: a schema saying nothing at all is still null — inference reads what IS there, and adds
+  // nothing where there is nothing.
+  test("a schema with no keywords at all is still null", () => {
+    expect(body({}).v).toBeNull();
+    expect(body({ description: "just prose" }).v).toBeNull();
+  });
+});
