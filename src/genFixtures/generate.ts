@@ -236,6 +236,23 @@ function composedObject(
   if (s.properties) Object.assign(out.properties, s.properties);
   if (Array.isArray(s.required))
     out.required.push(...s.required.filter((r) => typeof r === "string"));
+  // A node may declare `type: "object"` and leave its properties to a UNION branch. The explicit
+  // type sends generation straight to the object case, which composes through `allOf` only, so the
+  // branches were never read and the body came back `{}` — whatsapp writes every media field this
+  // way (`audio`, `image`, `video`, `document`), mailscript writes it on array items. The same node
+  // WITHOUT a type worked, which is what kept it hidden.
+  //
+  // The FIRST branch is taken, the convention the combinator path and the mock both already use: a
+  // union offers alternatives, not an intersection, so merging them all would invent a shape no
+  // branch describes.
+  if (out.required.length === 0 && Object.keys(out.properties).length === 0) {
+    const branches = Array.isArray(s.oneOf) ? s.oneOf : Array.isArray(s.anyOf) ? s.anyOf : null;
+    if (branches && branches.length > 0) {
+      const sub = composedObject(branches[0], depth + 1);
+      Object.assign(out.properties, sub.properties);
+      out.required.push(...sub.required);
+    }
+  }
   return out;
 }
 
