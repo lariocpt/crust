@@ -1350,7 +1350,7 @@ walker supports `type` (incl. the 3.1 `["string","null"]` array form),
 `required`, `properties`/`items`, `enum`, `nullable`, `anyOf`/`oneOf` (pass if
 any branch passes), `allOf`, `format` (`uuid`, `email`, `date`, `date-time`,
 `uri`), `pattern` (compiled with the `u` flag so Unicode property escapes such as `\p{L}` mean what they say, falling back to plain compilation for the identity escapes `u` mode bans, e.g. `\/` in ARN patterns), `minLength`/`maxLength`, `minimum`/`maximum` (incl. both
-`exclusiveMinimum`/`exclusiveMaximum` forms), and `minItems`/`maxItems`.
+`exclusiveMinimum`/`exclusiveMaximum` forms), and `minItems`/`maxItems`. A union violation NAMES the branch it is describing — `closest (branch #1 Quote) failed: …` — because "closest" means the branch with the fewest errors, which is often not the one the body was built from; without the name the failure reads as being about a variant nobody chose.
 
 An operation that documents **no `responses` object at all** (3.1 makes it optional) has nothing to conform to, so no status is reported as undocumented for it — reporting one would be inventing a violation.
 

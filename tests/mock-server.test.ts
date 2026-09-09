@@ -2310,3 +2310,79 @@ describe("a missing type is inferred from the keywords present", () => {
     expect(body({ description: "just prose" }).v).toBeNull();
   });
 });
+
+describe("a union violation names the branch it is describing", () => {
+  // The message reported "closest branch failed: ..." without saying WHICH branch, and "closest"
+  // means fewest errors — not the branch crust generated from. On sinao.app that produced
+  // `/document/status: value not in enum` for a status that IS in the generated branch's enum, and
+  // the row read as a crust bug for an hour. A reader cannot judge a union failure without knowing
+  // which alternative is being described.
+  const validate = (
+    value: unknown,
+    schema: Record<string, unknown>,
+    spec: Record<string, unknown> = {},
+  ) => validateSchema(value, schema, spec, "");
+
+  const SPEC = {
+    components: {
+      schemas: {
+        Invoice: {
+          type: "object",
+          properties: { status: { type: "string", enum: ["draft", "paid"] } },
+        },
+        Quote: { type: "object", properties: { status: { type: "string", enum: ["open"] } } },
+      },
+    },
+  };
+
+  test("a $ref branch is named by its schema name", () => {
+    const errs = validate(
+      { status: "nonsense" },
+      {
+        oneOf: [{ $ref: "#/components/schemas/Invoice" }, { $ref: "#/components/schemas/Quote" }],
+      },
+      SPEC,
+    );
+    expect(errs).toHaveLength(1);
+    expect(errs[0]?.message).toContain("Invoice");
+  });
+
+  test("an inline branch is named by its title, or its position", () => {
+    const titled = validate(
+      { a: 1 },
+      {
+        oneOf: [{ type: "object", title: "Widget", properties: { a: { type: "string" } } }],
+      },
+    );
+    expect(titled[0]?.message).toContain("Widget");
+
+    const bare = validate(
+      { a: 1 },
+      {
+        oneOf: [{ type: "object", properties: { a: { type: "string" } } }],
+      },
+    );
+    expect(bare[0]?.message).toMatch(/branch #0/);
+  });
+
+  // Control: a passing union is still silent, and the underlying failure detail is unchanged.
+  test("a matching value still passes, and the detail still says what failed", () => {
+    expect(
+      validate(
+        { status: "open" },
+        {
+          oneOf: [{ $ref: "#/components/schemas/Invoice" }, { $ref: "#/components/schemas/Quote" }],
+        },
+        SPEC,
+      ),
+    ).toHaveLength(0);
+    const errs = validate(
+      { status: "nonsense" },
+      {
+        oneOf: [{ $ref: "#/components/schemas/Invoice" }],
+      },
+      SPEC,
+    );
+    expect(errs[0]?.message).toContain("value not in enum");
+  });
+});
