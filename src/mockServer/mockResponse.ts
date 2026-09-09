@@ -363,9 +363,13 @@ function generateFromSchema(schema: unknown, spec: OpenApiSpec, visited: Set<str
       for (const [name, parts] of Object.entries(contested ?? {})) {
         out[name] = generateFromSchema(Object.assign({}, ...parts), spec, visited);
       }
+      repairPlaceholders(out, s, spec, visited);
       if (Object.keys(out).length > 0) return out;
     }
-    if (sawObject) return merged;
+    if (sawObject) {
+      repairPlaceholders(merged, s, spec, visited);
+      return merged;
+    }
     if (scalar !== undefined) return scalar;
     // Every branch was documentation-only or unbuildable. `{}` is right for an object and wrong for
     // anything else, so let the node's own `type` have the last word before defaulting to it.
@@ -413,7 +417,17 @@ function generateFromSchema(schema: unknown, spec: OpenApiSpec, visited: Set<str
     case "object":
     case undefined: {
       const props = s.properties as Record<string, unknown> | undefined;
-      if (!props || typeof props !== "object") return type === "object" ? {} : null;
+      if (!props || typeof props !== "object") {
+        if (type !== "object") return null;
+        // `required` without `properties` is legal and real specs write it — a branch of an allOf
+        // that adds only a requirement. The names still have to be PRESENT, and nothing constrains
+        // them, so null is the least assuming value. Returning a bare {} dropped them entirely.
+        const bare: Record<string, unknown> = {};
+        if (Array.isArray(s.required) && s.additionalProperties !== false) {
+          for (const name of s.required) if (typeof name === "string") bare[name] = null;
+        }
+        return bare;
+      }
       const out: Record<string, unknown> = {};
       const requiredHere = new Set(
         Array.isArray(s.required)
@@ -610,6 +624,38 @@ function shallowForCycle(
  * keyword any fragment declares: the base contributes `type`, the derived schema contributes
  * `enum`, and Object.assign keeps both because the base never mentions `enum` to overwrite it.
  */
+/**
+ * Undo a placeholder that outranked a real description.
+ *
+ * A branch may REQUIRE a name without describing it, and the object case fills such a name with null
+ * — correctly, since presence is forced and nothing constrains it. But that null means "nothing
+ * describes this", and merging let it overwrite a sibling branch that DID describe the property:
+ * turbinelabs declares `zone_key: {type: string}` in one branch of an allOf and merely requires it
+ * in another, so the mock returned null against a schema saying string.
+ *
+ * A placeholder cannot outrank a description. Any null with a fragment behind it is regenerated from
+ * that fragment; a name nothing describes keeps its null, because that is still the honest answer.
+ */
+function repairPlaceholders(
+  out: Record<string, unknown>,
+  s: Record<string, unknown>,
+  spec: OpenApiSpec,
+  visited: Set<string>,
+): void {
+  let fragments: Record<string, Record<string, unknown>[]> | null = null;
+  for (const [name, value] of Object.entries(out)) {
+    if (value !== null) continue;
+    fragments ??= mergePropertySchemas(s, spec);
+    const parts = fragments[name];
+    if (!parts || parts.length === 0) continue;
+    out[name] = generateFromSchema(
+      parts.length === 1 ? parts[0] : Object.assign({}, ...parts),
+      spec,
+      visited,
+    );
+  }
+}
+
 /** The properties an allOf chain declares MORE THAN ONCE — the only ones whose effective schema
  *  differs from the single fragment that produced their value. */
 function contestedProperties(
