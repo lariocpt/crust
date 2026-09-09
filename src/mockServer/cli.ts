@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import { FlagError, type FlagSpec, parseFlags } from "../args";
 import { loadSpec } from "./loadSpec";
+import { countColonParamPaths, countRegexLiteralPatterns, countWebhookOperations } from "./router";
 import { startServer } from "./server";
 import { normalizeStateUrl, stateDialect } from "./state";
 
@@ -172,7 +173,36 @@ export async function runCli(args: string[]): Promise<number> {
     process.stderr.write(`mock-server: ${(err as Error).message}\n`);
     return 1;
   }
-  process.stdout.write(`mock-server: ${server.routes.length} route(s) from ${loaded.origin}\n`);
+  // A 3.1 webhooks-only document legitimately mocks nothing. Say so, or "0 route(s)" reads as a
+  // spec crust failed to understand — the two are indistinguishable from the outside otherwise.
+  const hooks = countWebhookOperations(loaded.spec);
+  const hookNote =
+    server.routes.length === 0 && hooks > 0
+      ? ` (${hooks} webhook operation(s) not mocked — webhooks are callbacks you receive, not endpoints)`
+      : "";
+  process.stdout.write(
+    `mock-server: ${server.routes.length} route(s) from ${loaded.origin}${hookNote}\n`,
+  );
+  // A path templated the Express way (`/things/:id`) is matched LITERALLY — see
+  // countColonParamPaths. The route count above would otherwise look healthy while those routes
+  // are unreachable by any real client: the quiet kind of wrong this tool exists not to be.
+  const colon = countColonParamPaths(loaded.spec);
+  if (colon > 0) {
+    process.stderr.write(
+      `mock-server: ${colon} path(s) use Express-style ':param' — OpenAPI templates parameters as ` +
+        `'{param}', so these are matched LITERALLY and will not match a real value\n`,
+    );
+  }
+  // A pattern written as a JS regex literal can never match anything, so every response carrying one
+  // is unsatisfiable — and silently so, since the failure looks like ordinary validation noise.
+  const literalPatterns = countRegexLiteralPatterns(loaded.spec);
+  if (literalPatterns > 0) {
+    process.stderr.write(
+      `mock-server: ${literalPatterns} pattern(s) are written as JavaScript regex LITERALS ` +
+        `(e.g. '/^[0-9]+$/i') — JSON Schema expects a bare regex, so the delimiters are matched ` +
+        `literally and NO value can satisfy them\n`,
+    );
+  }
   const modes = `${stateful ? " (stateful)" : ""}${validate && proxy === undefined ? " (validate)" : ""}${strict ? " (strict)" : ""}${
     proxy !== undefined ? ` (proxy -> ${proxy})` : ""
   }${state !== undefined ? ` (state: ${stateDialect(state)})` : ""}${

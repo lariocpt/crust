@@ -110,3 +110,13 @@ crust line in `docs/USAGE.md` and `README.md`, `tests/skills.test.ts` does the
 same for the embedded skills, and the website's Jenkins `Grammar` stage runs its
 examples through `crust --check` using the binary it already mounts. The website
 is a separate repo and cannot import the lexer — `--check` is what bridges it.
+
+**The website is the half that gets forgotten.** Enforcement is asymmetric: this repo's suite
+fails if `docs/USAGE.md` drifts, but nothing here can fail because `crust-website` drifted — its
+Grammar stage only runs in ITS pipeline, on ITS commits. So a change can ship green with the site
+still describing the old behaviour, and did: PRs #6–#8 (OpenAPI 3.1 unions, `$ref`'d responses,
+numeric bounds) all updated USAGE.md and left the site behind until 2026-09-09. Treat a
+behaviour change as unshipped until the `crust-website` PR is open too, and verify it the way its
+pipeline does:
+
+    cd ../crust-website && bun run build && bun scripts/lint-examples.mjs ../crust/bin/crust

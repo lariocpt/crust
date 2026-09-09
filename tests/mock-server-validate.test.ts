@@ -4,8 +4,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { OpenApiSpec } from "../src/mockServer/loadSpec";
 import { joinUpstreamUrl } from "../src/mockServer/proxy";
+import { buildRoutes } from "../src/mockServer/router";
 import { startServer } from "../src/mockServer/server";
-import { type Violation, validateSchema } from "../src/mockServer/validateRequest";
+import {
+  type Violation,
+  validateResponse,
+  validateSchema,
+} from "../src/mockServer/validateRequest";
 
 const SCHEMA_SPEC: OpenApiSpec = {
   openapi: "3.1.0",
@@ -1084,5 +1089,87 @@ describe("--strict mock mode e2e", () => {
       await strictServer.stop();
       await looseServer.stop();
     }
+  });
+});
+
+// OpenAPI 3.1 made `responses` optional on an operation. When one documents NONE, there is
+// nothing to conform to — but the status check reported `undocumented-status` against an empty
+// key list, which is the validator inventing a violation, the one thing its governing rule says
+// it must never do ("a schema the walker can't judge validates successfully").
+//
+// It also made crust disagree with ITSELF: pickResponse defaults such an operation to 200, so
+// under --proxy crust's mock served a 200 that crust's validator then rejected — one spec, two
+// crust processes, no user code. 7 of the 17 usable specs in the react corpus hit it, via a
+// `/openapi.json` operation written with no responses object.
+describe("an operation documenting no responses at all", () => {
+  const spec = {
+    openapi: "3.1.0",
+    info: { title: "nr", version: "1" },
+    paths: {
+      "/undocumented": { get: {} },
+      "/documented": { get: { responses: { "200": { description: "ok" } } } },
+    },
+  } as unknown as OpenApiSpec;
+
+  test("no status is invented as a violation", () => {
+    const routes = buildRoutes(spec);
+    const route = routes.find((r) => r.template === "/undocumented")!;
+    const v = validateResponse(
+      { status: 200, contentType: "application/json", hasBody: true, body: {} },
+      route,
+      spec,
+    );
+    expect(v.filter((x) => x.rule === "undocumented-status")).toEqual([]);
+  });
+
+  test("an operation that DOES document statuses still rejects an undocumented one (control)", () => {
+    const routes = buildRoutes(spec);
+    const route = routes.find((r) => r.template === "/documented")!;
+    const v = validateResponse(
+      { status: 503, contentType: "application/json", hasBody: true, body: {} },
+      route,
+      spec,
+    );
+    expect(v.some((x) => x.rule === "undocumented-status")).toBe(true);
+  });
+});
+
+// JSON Schema's `pattern` is an ECMA-262 regex, and Unicode property escapes (\p{L}, \P{C}) only
+// mean what they say when the regex is compiled with the `u` flag. Without it they degrade to the
+// literal characters p, {, L, } — so crust reported "does not match pattern" for values that DO
+// match, which is the walker inventing a violation. 623 occurrences across 300 real-world specs;
+// AWS uses \p{L} classes throughout.
+//
+// The fallback is not optional: `u` mode BANS identity escapes that plain mode allows, and specs
+// use them constantly (\/ and \: appear in most ARN patterns). Compiling only with `u` would turn
+// those into uncompilable — which passes, so it would hide real violations instead of inventing
+// them. Try `u`, fall back to plain, and only then give up.
+describe("pattern compilation", () => {
+  const spec = {
+    openapi: "3.1.0",
+    info: { title: "p", version: "1" },
+    paths: {},
+  } as unknown as OpenApiSpec;
+  const check = (pattern: string, value: string) =>
+    validateSchema(value, { type: "string", pattern }, spec, "").map((v) => v.rule);
+
+  test("a unicode property class matches what it should", () => {
+    expect(check("^([\\p{L}\\p{Z}\\p{N}_.:/=+\\-@]*)$", "gen-value-x")).toEqual([]);
+    expect(check("^\\P{C}*$", "gen-value-x")).toEqual([]);
+  });
+
+  test("a unicode class still REJECTS a genuine mismatch (control)", () => {
+    // \p{N} is a number; a letter must not satisfy a digits-only class
+    expect(check("^\\p{N}+$", "abc")).toEqual(["pattern"]);
+  });
+
+  test("an identity-escape pattern that only compiles WITHOUT u still works (control)", () => {
+    // \/ and \: are invalid identity escapes under u; plain mode accepts them
+    expect(check("^arn[\\/\\:\\-\\_\\.a-zA-Z0-9]+$", "arn:aws:iam")).toEqual([]);
+    expect(check("^arn[\\/\\:\\-\\_\\.a-zA-Z0-9]+$", "nope!")).toEqual(["pattern"]);
+  });
+
+  test("an uncompilable pattern still passes (governing rule)", () => {
+    expect(check("([unclosed", "anything")).toEqual([]);
   });
 });

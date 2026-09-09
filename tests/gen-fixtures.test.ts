@@ -3,9 +3,17 @@ import { existsSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { envNameFor, generateFixtures, idPathFor } from "../src/genFixtures/generate";
+import {
+  derefSchemas,
+  envNameFor,
+  generateFixtures,
+  idPathFor,
+  validValue,
+  wrongTypeFor,
+} from "../src/genFixtures/generate";
 import type { OpenApiSpec } from "../src/mockServer/loadSpec";
 import { startServer } from "../src/mockServer/server";
+import { validateSchema } from "../src/mockServer/validateRequest";
 import { runPipes } from "../src/testPipes/runner";
 
 let dir: string;
@@ -1120,5 +1128,519 @@ describe("response-schema emission", () => {
     for (const c of perCase) {
       if (c.includes("schema:")) expect(c).toContain("status: 400");
     }
+  });
+});
+
+// OpenAPI 3.1 `type: ["string","null"]` reached the boundary matrix as a non-string, so
+// `fs.type === "string"` was false and minLength/maxLength cases were never emitted. The
+// generator did not fail — it produced nothing for those fields and reported success, which is
+// the false pass design rule 1 forbids. wrongTypeFor had the same blind spot via its switch.
+describe("openapi 3.1 union types in generated fixtures", () => {
+  test("wrongTypeFor picks a genuinely wrong type for a 3.1 union", () => {
+    // a union of string|null must be violated by a NUMBER, not by null (null is legal here)
+    expect(typeof wrongTypeFor({ type: ["string", "null"] } as never)).toBe("number");
+    // numeric union must be violated by a string
+    expect(typeof wrongTypeFor({ type: ["integer", "null"] } as never)).toBe("string");
+    // 3.0 forms unchanged
+    expect(typeof wrongTypeFor({ type: "string" } as never)).toBe("number");
+    expect(typeof wrongTypeFor({ type: "integer" } as never)).toBe("string");
+  });
+
+  test("length boundary cases are still generated for a 3.1 nullable string", async () => {
+    const spec31 = {
+      openapi: "3.1.0",
+      info: { title: "b", version: "1" },
+      paths: {
+        "/things": {
+          post: {
+            tags: ["things"],
+            requestBody: {
+              required: true,
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    required: ["name"],
+                    properties: { name: { type: ["string", "null"], minLength: 3, maxLength: 8 } },
+                  },
+                },
+              },
+            },
+            responses: { "201": { description: "created" }, "400": { description: "bad" } },
+          },
+        },
+      },
+    };
+    const dir = await mkdtemp(join(tmpdir(), "crust-gen31-"));
+    try {
+      await writeFile(join(dir, "spec.json"), JSON.stringify(spec31));
+      await writeFile(join(dir, "setup.ts"), SETUP);
+      const result = await generateFixtures({
+        swagger: join(dir, "spec.json"),
+        out: join(dir, "out"),
+        setup: join(dir, "setup.ts"),
+        flows: false,
+        log: () => {},
+      });
+      const text = await Bun.file(result.files[0]!).text();
+      // before the fix these were absent: the boundary matrix skipped the field entirely
+      expect(text).toContain("too short");
+      expect(text).toContain("too long");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("derefSchemas does not materialise an exponential tree", () => {
+  // azure's network-applicationGateway is a DAG: a few schemas, each referenced from many places.
+  // Inlining a FRESH deep copy at every occurrence turned a few-MB spec into a 2.03 GB structure —
+  // 8 seconds on the versions that survived, and OUT OF MEMORY on five of the nine. `gen-fixtures`
+  // against those specs does not run slowly; it does not run.
+  //
+  // The resolved form of a ref is the same wherever it appears, so it is resolved once and shared.
+  test("a DAG of shared refs stays linear", () => {
+    const schemas: Record<string, unknown> = {
+      Leaf: { type: "object", properties: { a: { type: "string" }, b: { type: "string" } } },
+    };
+    // Each level references the one below eight times. At depth 8 the copying walk is 8^8 nodes.
+    for (let i = 1; i <= 8; i++) {
+      const props: Record<string, unknown> = {};
+      for (let k = 0; k < 8; k++)
+        props[`k${k}`] = { $ref: `#/components/schemas/${i === 1 ? "Leaf" : `L${i - 1}`}` };
+      schemas[`L${i}`] = { type: "object", properties: props };
+    }
+    const spec = { components: { schemas } } as never;
+    const started = performance.now();
+    const out = derefSchemas({ $ref: "#/components/schemas/L8" }, spec) as Record<string, unknown>;
+    expect(performance.now() - started).toBeLessThan(2000);
+    // Still correct: the leaf is reachable through the whole depth.
+    let node: Record<string, unknown> = out;
+    for (let i = 0; i < 8; i++)
+      node = (node.properties as Record<string, Record<string, unknown>>).k0;
+    expect((node.properties as Record<string, unknown>).a).toEqual({ type: "string" });
+  });
+
+  // Control: a cyclic ref is still cut to {}, which is the documented behaviour — a cyclic request
+  // body cannot be instantiated as a finite valid example.
+  test("a cyclic ref is still cut", () => {
+    const spec = {
+      components: {
+        schemas: {
+          N: { type: "object", properties: { self: { $ref: "#/components/schemas/N" } } },
+        },
+      },
+    } as never;
+    const out = derefSchemas({ $ref: "#/components/schemas/N" }, spec) as Record<string, unknown>;
+    expect((out.properties as Record<string, unknown>).self).toEqual({});
+  });
+
+  // Control: $ref siblings still merge over the resolved target.
+  test("siblings still override the resolved target", () => {
+    const spec = {
+      components: { schemas: { S: { type: "string", description: "base" } } },
+    } as never;
+    const out = derefSchemas(
+      { $ref: "#/components/schemas/S", description: "mine" },
+      spec,
+    ) as Record<string, unknown>;
+    expect(out.type).toBe("string");
+    expect(out.description).toBe("mine");
+  });
+});
+
+describe("the generator infers a missing type", () => {
+  // `{properties: {...}}` with no `type` is extremely common, and `properties` alone does not
+  // constrain a non-object — so `wrongTypeFor` returning 12345 there produced a body the validator
+  // ACCEPTS, and the generated case asserts `-> 400` for a request that should return 200. That is a
+  // false test, which is worse than a bad mock body: it fails against a correct implementation.
+  // 6,101 of them across 164,473 request-body field schemas.
+  test("an object without `type` gets a genuinely wrong value", () => {
+    expect(wrongTypeFor({ properties: { a: { type: "string" } } } as never)).toBe("not-an-object");
+  });
+
+  test("an array without `type` gets a genuinely wrong value", () => {
+    expect(wrongTypeFor({ items: { type: "string" } } as never)).toBe("not-an-array");
+  });
+
+  test("string-only keywords without `type` imply a string", () => {
+    expect(wrongTypeFor({ minLength: 3 } as never)).toBe(12345);
+    // A pattern makes it a coercion-resistant string, per the existing rule.
+    expect(wrongTypeFor({ pattern: "^a+$" } as never)).toBe("!!not-a-valid-value!!");
+  });
+
+  // Control: a declared type still wins, and a schema stating nothing keeps the old default.
+  test("a declared type wins, and a bare schema is unchanged", () => {
+    expect(wrongTypeFor({ type: "string" } as never)).toBe(12345);
+    expect(wrongTypeFor({ type: "object", properties: {} } as never)).toBe("not-an-object");
+    expect(wrongTypeFor({} as never)).toBe(12345);
+  });
+});
+
+describe("no wrong-type case is generated that cannot fail", () => {
+  // The wrong-type case was emitted unconditionally for every required field. Where the field's
+  // schema constrains nothing — `{properties: {...}}` with no `type`, or a description-only node —
+  // NO value is wrong, so the generated case asserts `-> 400` for a request a correct API answers
+  // 200. That is a false test: it fails against a correct implementation, and 6,101 of them were
+  // derivable from the corpus.
+  //
+  // crust owns the validator, so the case is only emitted when the wrong value is actually rejected.
+  let dir: string;
+  beforeAll(async () => {
+    dir = await mkdtemp(join(tmpdir(), "crust-gen-wrong-"));
+  });
+  afterAll(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  test("a field whose schema constrains nothing gets no wrong-type case", async () => {
+    const spec = {
+      openapi: "3.0.0",
+      paths: {
+        "/things": {
+          post: {
+            requestBody: {
+              required: true,
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    required: ["loose", "tight"],
+                    properties: {
+                      // No `type`: `properties` alone does not constrain a non-object.
+                      loose: { properties: { a: { type: "string" } } },
+                      tight: { type: "string" },
+                    },
+                  },
+                },
+              },
+            },
+            responses: { "200": { description: "ok" }, "400": { description: "bad" } },
+          },
+        },
+      },
+    };
+    const specPath = join(dir, "spec.json");
+    await writeFile(specPath, JSON.stringify(spec));
+    const setupPath = join(dir, "setup.ts");
+    await writeFile(
+      setupPath,
+      "export const scopeParam = null;\nexport async function shared() { return {}; }\n" +
+        "export function headersFor() { return { 'content-type': 'application/json' }; }\n" +
+        "export function resolvePath(_c, t) { return 'http://127.0.0.1:1' + t; }\n",
+    );
+    const out = join(dir, "out");
+    const result = await generateFixtures({
+      swagger: specPath,
+      out,
+      setup: setupPath,
+      log: () => {},
+    });
+    // Read whatever it wrote rather than guessing the filename.
+    const written = (
+      await Promise.all(
+        result.files.map((f) =>
+          Bun.file(f)
+            .text()
+            .catch(() => ""),
+        ),
+      )
+    ).join("\n");
+    expect(written).toContain("wrong type for 'tight'");
+    expect(written).not.toContain("wrong type for 'loose'");
+  });
+});
+
+describe("validValue respects the schema's own bounds", () => {
+  // `validValue` builds the VALID base body that every 400-case perturbs. Where it produces an
+  // invalid value the case perturbs an already-broken body, so the expected 400 can arrive for the
+  // wrong reason — a false pass, which is the one thing crust's design forbids. 4,004 request-body
+  // fields across 4,138 specs, the bulk of them length and item bounds the mock has honoured for
+  // some time and the generator never did.
+  const ok = (schema: Record<string, unknown>) =>
+    validateSchema(validValue(schema as never), schema, {} as never, "");
+
+  test("maxLength is honoured — the default is 11 characters", () => {
+    expect(ok({ type: "string", maxLength: 4 })).toEqual([]);
+    expect(ok({ type: "string", minLength: 2, maxLength: 5 })).toEqual([]);
+  });
+
+  test("maxItems is honoured — two elements are emitted by default", () => {
+    expect(ok({ type: "array", maxItems: 1, items: { type: "string" } })).toEqual([]);
+    expect(ok({ type: "array", minItems: 3, items: { type: "string" } })).toEqual([]);
+  });
+
+  test("maximum is honoured — the default is 1", () => {
+    expect(ok({ type: "integer", maximum: 0 })).toEqual([]);
+    expect(ok({ type: "integer", minimum: 5, maximum: 9 })).toEqual([]);
+  });
+
+  // Control: the byte-stable format values are unchanged, since checked-in matrices are CI-diffed
+  // against a regeneration and churning them is a cost with no finding behind it.
+  test("the fixed format values are unchanged", () => {
+    expect(validValue({ type: "string", format: "email" } as never)).toBe("gen@crust.fixture");
+    expect(validValue({ type: "string", format: "uuid" } as never)).toBe(
+      "00000000-0000-4000-8000-00000000c0de",
+    );
+    expect(validValue({ type: "string", format: "date" } as never)).toBe("2026-08-12");
+    expect(validValue({ type: "string" } as never)).toBe("gen-value-x");
+  });
+});
+
+describe("validValue covers uri, and an explicit pattern outranks a key guess", () => {
+  // 972 of 1,090 format failures across the corpus were `format: "uri"`, which validValue simply did
+  // not handle — it fell to "gen-value-x", which is not a URI. The mock has covered uri for some
+  // time; the generator never did.
+  //
+  // And the key heuristics (`*_id` -> a uuid, `*email*` -> an address) were applied BEFORE the
+  // field's own pattern, so a field named `job_id` carrying a pattern that is not a uuid got the
+  // uuid anyway: 47 rows where a guess from the NAME beat what the schema actually says.
+  const ok = (schema: Record<string, unknown>, key = "") =>
+    validateSchema(validValue(schema as never, key), schema, {} as never, "");
+
+  test("uri is honoured", () => {
+    expect(ok({ type: "string", format: "uri" })).toEqual([]);
+    expect(ok({ type: "string", format: "url" })).toEqual([]);
+  });
+
+  test("an explicit pattern beats the key heuristic", () => {
+    expect(ok({ type: "string", pattern: "^job-[0-9]{3}$" }, "job_id")).toEqual([]);
+    expect(ok({ type: "string", pattern: "^[a-z]{4}$" }, "user_email")).toEqual([]);
+  });
+
+  // Control: the byte-stable constants still apply where nothing contradicts them, because
+  // checked-in matrices are CI-diffed against a regeneration.
+  test("the fixed constants are unchanged where no pattern disagrees", () => {
+    expect(validValue({ type: "string" } as never, "job_id")).toBe(
+      "00000000-0000-4000-8000-00000000c0de",
+    );
+    expect(validValue({ type: "string", format: "email" } as never)).toBe("gen@crust.fixture");
+    expect(validValue({ type: "string", format: "date" } as never)).toBe("2026-08-12");
+  });
+});
+
+describe("validValue reads enums and allOf the way the mock does", () => {
+  // Two shapes the mock learned to handle and the generator never did — the same divergence that
+  // produced four of the six defects on this axis.
+  //
+  // `{type: "string", enum: [true, false]}` is a spec contradicting itself, and validValue returned
+  // enum[0] before ever looking at the type. And an object composed with `allOf` had its `required`
+  // and `properties` read off the NODE only, so the base body came back `{}` — missing every field
+  // the composition demands.
+  const ok = (schema: Record<string, unknown>, key = "") =>
+    validateSchema(validValue(schema as never, key), schema, {} as never, "");
+
+  test("the enum member picked satisfies the declared type", () => {
+    expect(ok({ type: "string", enum: [true, false, "yes"] })).toEqual([]);
+    expect(ok({ type: "integer", enum: ["none", 3] })).toEqual([]);
+  });
+
+  test("required and properties are read through allOf", () => {
+    const schema = {
+      allOf: [
+        { type: "object", required: ["gid"], properties: { gid: { type: "string" } } },
+        { type: "object", required: ["name"], properties: { name: { type: "string" } } },
+      ],
+    };
+    expect(ok(schema)).toEqual([]);
+    const built = validValue(schema as never) as Record<string, unknown>;
+    expect(built.gid).toBeDefined();
+    expect(built.name).toBeDefined();
+  });
+
+  // Control: where no enum member fits, the first still stands — the schema is unsatisfiable and
+  // inventing a value outside the enum would be worse than reporting the contradiction.
+  test("an unsatisfiable enum keeps its first member", () => {
+    expect(validValue({ type: "integer", enum: ["a", "b"] } as never)).toBe("a");
+  });
+});
+
+describe("scalar constraints are read through allOf too", () => {
+  // The object case learned to compose through `allOf`; the scalar cases did not. Real specs write
+  // `{allOf: [{type: "string", minLength: 600, maxLength: 2400, pattern: "..."}, {description: "..."}]}`
+  // — the constraints in a branch, a prose note beside it — and validValue read `minLength` off the
+  // NODE, found none, and produced a value far too short for the field it was standing in for.
+  const ok = (schema: Record<string, unknown>, key = "") =>
+    validateSchema(validValue(schema as never, key), schema, {} as never, "");
+
+  // The node carries the TYPE and the branches carry refinements — the shape validValue's own
+  // comment describes ("zod emits { type: 'string', allOf: [pattern, pattern] }") and then ignores,
+  // because a node with a type of its own never enters the combinator path at all.
+  test("length bounds in a refinement branch are honoured", () => {
+    expect(ok({ type: "string", allOf: [{ minLength: 24 }] })).toEqual([]);
+    expect(
+      ok({ type: "string", allOf: [{ minLength: 5, maxLength: 8 }, { description: "x" }] }),
+    ).toEqual([]);
+  });
+
+  test("numeric bounds in a refinement branch are honoured", () => {
+    expect(ok({ type: "integer", allOf: [{ minimum: 50 }] })).toEqual([]);
+  });
+
+  test("a format in a refinement branch is honoured", () => {
+    expect(ok({ type: "string", allOf: [{ format: "uri" }] })).toEqual([]);
+  });
+
+  // Control: the node's own constraints still win where both state one — it is the more specific
+  // statement about this use.
+  test("the node's own constraint is not overridden by a branch", () => {
+    expect(
+      validValue({ type: "string", minLength: 3, allOf: [{ minLength: 40 }] } as never),
+    ).toHaveLength(40);
+  });
+});
+
+describe("a field-name guess never breaks a declared bound", () => {
+  // All 32 remaining maxLength failures were one shape: a field called `client_id`, `external_id`,
+  // `alphanumeric_sender_id` — matching the `*_id` heuristic — whose schema says
+  // `{type: "string", maxLength: 20}` and never mentions uuid. The heuristic returned the fixed
+  // 36-character uuid and blew the bound.
+  //
+  // PR #44 already stopped a name guess overriding an explicit `pattern`. A length bound is the same
+  // kind of statement: the schema said what fits, and a guess from the NAME does not get to ignore it.
+  const ok = (schema: Record<string, unknown>, key = "") =>
+    validateSchema(validValue(schema as never, key), schema, {} as never, "");
+
+  test("the uuid guess yields to a maxLength that cannot hold it", () => {
+    expect(ok({ type: "string", maxLength: 20 }, "client_id")).toEqual([]);
+    expect(ok({ type: "string", maxLength: 34 }, "external_id")).toEqual([]);
+  });
+
+  test("the email guess yields too", () => {
+    expect(ok({ type: "string", maxLength: 5 }, "user_email")).toEqual([]);
+  });
+
+  // Control: an EXPLICIT format still wins, because then the schema itself asked for the uuid and a
+  // maxLength that cannot hold one is the spec contradicting itself — crust keeps the valid value
+  // and lets --validate report the contradiction, exactly as the mock does.
+  test("an explicit format: uuid is kept even against a small maxLength", () => {
+    expect(validValue({ type: "string", format: "uuid", maxLength: 8 } as never, "x")).toBe(
+      "00000000-0000-4000-8000-00000000c0de",
+    );
+  });
+
+  // Control: with room, the guess still applies — this must not become "never guess".
+  test("the guess still applies where it fits", () => {
+    expect(validValue({ type: "string", maxLength: 40 } as never, "client_id")).toBe(
+      "00000000-0000-4000-8000-00000000c0de",
+    );
+    expect(validValue({ type: "string" } as never, "client_id")).toBe(
+      "00000000-0000-4000-8000-00000000c0de",
+    );
+  });
+});
+
+describe("the last three divergences from the mock", () => {
+  // Each of these the mock handles and the generator did not — the same split that produced most of
+  // the defects on this axis.
+  const ok = (schema: Record<string, unknown>, key = "") =>
+    validateSchema(validValue(schema as never, key), schema, {} as never, "");
+
+  // `exclusiveMaximum: true` is 3.0's BOOLEAN modifier on `maximum`; 3.1 writes a number. Clamping
+  // to `maximum` itself yields exactly the excluded value.
+  test("exclusive bounds are honoured in both spellings", () => {
+    expect(
+      ok({
+        type: "number",
+        minimum: 0,
+        maximum: 1,
+        exclusiveMinimum: true,
+        exclusiveMaximum: true,
+      }),
+    ).toEqual([]);
+    expect(ok({ type: "integer", exclusiveMaximum: 5 })).toEqual([]);
+    expect(ok({ type: "integer", exclusiveMinimum: 5 })).toEqual([]);
+  });
+
+  // `format: email` beside a pattern whose TLD is 2-5 letters: "gen@crust.fixture" has seven.
+  test("a pattern the format constant cannot satisfy is sampled instead", () => {
+    expect(
+      ok({
+        type: "string",
+        format: "email",
+        pattern: "^([a-zA-Z0-9_.-]+)@([a-zA-Z0-9_.-]+)\\.([a-zA-Z]{2,5})$",
+      }),
+    ).toEqual([]);
+  });
+
+  // A field called `first_email_date` declaring `format: date-time` got the email constant, because
+  // the NAME heuristic ran regardless of what the schema said.
+  test("an explicit format is not overridden by the field name", () => {
+    expect(ok({ type: "string", format: "date-time" }, "first_email_date")).toEqual([]);
+    expect(ok({ type: "string", format: "uuid" }, "customer_email")).toEqual([]);
+  });
+
+  // Control: the name heuristics still work where the schema states nothing.
+  test("the name heuristics still apply to an unconstrained string", () => {
+    expect(validValue({ type: "string" } as never, "customer_email")).toBe("gen@crust.fixture");
+    expect(validValue({ type: "string" } as never, "order_id")).toBe(
+      "00000000-0000-4000-8000-00000000c0de",
+    );
+  });
+});
+
+describe("an object whose properties live in a union branch", () => {
+  // The last nine invalid base values in the corpus, one cause. A node declaring `type: "object"`
+  // AND a `oneOf`/`anyOf` whose branches carry the properties produced `{}`: the explicit type sends
+  // it straight to the object case, which composes through `allOf` only, so the branches were never
+  // read. whatsapp writes every media field this way (`audio`, `image`, `video`, `document`), and
+  // mailscript writes it on array items.
+  //
+  // The same node WITHOUT `type` worked, which is what made it invisible — the combinator path
+  // handles it, and only the typed spelling falls through.
+  const ok = (schema: Record<string, unknown>) =>
+    validateSchema(validValue(schema as never), schema, {} as never, "");
+
+  const AUDIO = {
+    type: "object",
+    description: "The media object containing audio",
+    oneOf: [
+      {
+        title: "AudioById",
+        type: "object",
+        properties: { id: { type: "string" } },
+        required: ["id"],
+      },
+      {
+        title: "AudioByLink",
+        type: "object",
+        properties: { link: { type: "string" } },
+        required: ["link"],
+      },
+    ],
+  };
+
+  test("a typed object with a oneOf gets the branch's properties", () => {
+    expect(ok(AUDIO)).toEqual([]);
+    expect((validValue(AUDIO as never) as Record<string, unknown>).id).toBeDefined();
+  });
+
+  test("the same holds inside array items", () => {
+    const items = {
+      type: "array",
+      items: {
+        type: "object",
+        oneOf: [
+          {
+            properties: { key: { type: "string" }, value: { type: "string" } },
+            required: ["key", "value"],
+          },
+        ],
+      },
+    };
+    expect(ok(items)).toEqual([]);
+  });
+
+  // Control: a node with its OWN properties keeps them, and the untyped spelling is unchanged.
+  test("the node's own properties still win, and the untyped form is unchanged", () => {
+    const both = {
+      type: "object",
+      required: ["own"],
+      properties: { own: { type: "string" } },
+      oneOf: [{ properties: { other: { type: "string" } }, required: ["other"] }],
+    };
+    expect((validValue(both as never) as Record<string, unknown>).own).toBeDefined();
+    const { type: _drop, ...untyped } = AUDIO;
+    expect((validValue(untyped as never) as Record<string, unknown>).id).toBeDefined();
   });
 });

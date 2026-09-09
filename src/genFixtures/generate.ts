@@ -66,9 +66,18 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
 import { loadSpec, type OpenApiSpec } from "../mockServer/loadSpec";
 import { resolveRef } from "../mockServer/mockResponse";
+import {
+  formatDefault,
+  inferType,
+  matchesPattern,
+  normaliseType,
+  sampleFromPattern,
+} from "../mockServer/schemaTypes";
+import { validateSchema } from "../mockServer/validateRequest";
 
 type Schema = {
-  type?: string;
+  /** 3.0 writes a string; 3.1 may write a union array (`["string","null"]`). Read via primaryType. */
+  type?: string | string[];
   properties?: Record<string, Schema>;
   required?: string[];
   items?: Schema;
@@ -77,8 +86,12 @@ type Schema = {
   pattern?: string;
   minLength?: number;
   maxLength?: number;
+  minItems?: number;
+  maxItems?: number;
   minimum?: number;
   maximum?: number;
+  exclusiveMinimum?: boolean | number;
+  exclusiveMaximum?: boolean | number;
   additionalProperties?: boolean | Schema;
   anyOf?: Schema[];
   allOf?: Schema[];
@@ -141,43 +154,254 @@ interface ScopeConfig {
 // that single-field perturbations are applied to).
 // ---------------------------------------------------------------------------
 
+/**
+ * A node and its `allOf` branches as one schema.
+ *
+ * `allOf` is an INTERSECTION, so every branch's constraint holds at once and the merge must reflect
+ * that: `properties` and `required` are unioned, not overwritten, and where two bounds disagree the
+ * STRICTER one governs — `minLength: 3` beside a branch's `minLength: 40` means 40, because a value
+ * of 3 characters does not satisfy both. Overwriting instead lost whichever branch came first, which
+ * is how merging naively broke object composition that already worked.
+ */
+function intersectAllOf(s: Schema): Schema {
+  const out: Schema = { ...s };
+  out.allOf = undefined;
+  out.properties = { ...(s.properties ?? {}) };
+  out.required = [...(s.required ?? [])];
+  const stricter = (
+    key: "minLength" | "minimum" | "minItems" | "maxLength" | "maximum" | "maxItems",
+    branch: Schema,
+    pick: (a: number, b: number) => number,
+  ): void => {
+    const bv = branch[key];
+    if (typeof bv !== "number") return;
+    const ov = out[key];
+    out[key] = typeof ov === "number" ? pick(ov, bv) : bv;
+  };
+  for (const raw of s.allOf ?? []) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
+    const branch = Array.isArray(raw.allOf) ? intersectAllOf(raw) : raw;
+    Object.assign(out.properties, branch.properties ?? {});
+    if (Array.isArray(branch.required)) out.required.push(...branch.required);
+    for (const key of ["type", "format", "pattern", "enum", "items"] as const) {
+      if (out[key] === undefined && branch[key] !== undefined)
+        (out as Record<string, unknown>)[key] = branch[key];
+    }
+    stricter("minLength", branch, Math.max);
+    stricter("minimum", branch, Math.max);
+    stricter("minItems", branch, Math.max);
+    stricter("maxLength", branch, Math.min);
+    stricter("maximum", branch, Math.min);
+    stricter("maxItems", branch, Math.min);
+  }
+  if (Object.keys(out.properties).length === 0) out.properties = undefined;
+  if (out.required.length === 0) out.required = undefined;
+  return out;
+}
+
+/** Whether merging the refinements changed any constraint this function actually reads. */
+function sameConstraints(a: Schema, b: Schema): boolean {
+  const keys = [
+    "type",
+    "format",
+    "pattern",
+    "minLength",
+    "maxLength",
+    "minimum",
+    "maximum",
+    "minItems",
+    "maxItems",
+    "enum",
+    "items",
+    "properties",
+    "required",
+  ] as const;
+  return keys.every((k) => JSON.stringify(a[k]) === JSON.stringify(b[k]));
+}
+
+/** An object's `required` list and `properties`, merged across its `allOf` chain. */
+function composedObject(
+  s: Schema | undefined,
+  depth = 0,
+): { required: string[]; properties: Record<string, Schema> } {
+  const out = { required: [] as string[], properties: {} as Record<string, Schema> };
+  if (!s || typeof s !== "object" || depth > 10) return out;
+  if (Array.isArray(s.allOf)) {
+    for (const branch of s.allOf) {
+      const sub = composedObject(branch, depth + 1);
+      out.required.push(...sub.required);
+      Object.assign(out.properties, sub.properties);
+    }
+  }
+  if (s.properties) Object.assign(out.properties, s.properties);
+  if (Array.isArray(s.required))
+    out.required.push(...s.required.filter((r) => typeof r === "string"));
+  // A node may declare `type: "object"` and leave its properties to a UNION branch. The explicit
+  // type sends generation straight to the object case, which composes through `allOf` only, so the
+  // branches were never read and the body came back `{}` — whatsapp writes every media field this
+  // way (`audio`, `image`, `video`, `document`), mailscript writes it on array items. The same node
+  // WITHOUT a type worked, which is what kept it hidden.
+  //
+  // The FIRST branch is taken, the convention the combinator path and the mock both already use: a
+  // union offers alternatives, not an intersection, so merging them all would invent a shape no
+  // branch describes.
+  if (out.required.length === 0 && Object.keys(out.properties).length === 0) {
+    const branches = Array.isArray(s.oneOf) ? s.oneOf : Array.isArray(s.anyOf) ? s.anyOf : null;
+    if (branches && branches.length > 0) {
+      const sub = composedObject(branches[0], depth + 1);
+      Object.assign(out.properties, sub.properties);
+      out.required.push(...sub.required);
+    }
+  }
+  return out;
+}
+
 export function validValue(s: Schema | undefined, key = ""): unknown {
   if (!s) return "x";
-  if (s.enum?.length) return s.enum[0];
+  // The member must satisfy the schema's OWN declared type. Real specs write
+  // `{type: "string", enum: [true, false]}`, and returning enum[0] blindly emitted a boolean into a
+  // string field — the same fault the mock had until it learned to read the rest of the enum. Where
+  // no member fits, the first stands: the schema is unsatisfiable and inventing a value outside the
+  // enum would be worse than reporting the contradiction it already has.
+  if (s.enum?.length) {
+    const declared = normaliseType(s.type);
+    if (declared.length === 0) return s.enum[0];
+    const fits = (v: unknown): boolean => {
+      const actual = v === null ? "null" : Array.isArray(v) ? "array" : (typeof v as string);
+      if (declared.includes(actual)) return true;
+      return actual === "number" && (declared.includes("integer") || declared.includes("number"));
+    };
+    const match = s.enum.find(fits);
+    return match !== undefined ? match : s.enum[0];
+  }
   // Only fall into combinators when the node has no type of its own —
   // zod emits e.g. { type: "string", allOf: [pattern, pattern] } where the
   // branches are refinements, not alternatives.
-  if (!s.type) {
+  // A node may carry its TYPE and leave the constraints to `allOf` refinements — the shape this
+  // function's own comment describes and then never read, because a node with a type of its own
+  // skips the combinator path entirely. Merge the branches' keywords under the node's own, which
+  // stay authoritative: they are the more specific statement about this use.
+  if (Array.isArray(s.allOf) && s.allOf.length > 0) {
+    const combined = intersectAllOf(s);
+    // Only when the merge actually says something new, so the combinator paths below still see
+    // their allOf untouched in the cases they handle.
+    if (primaryType(combined) !== undefined && !sameConstraints(combined, s)) {
+      return validValue(combined, key);
+    }
+  }
+
+  const t = primaryType(s);
+  if (!t) {
+    // An `allOf` that composes into an OBJECT is one, whether or not the node says `type`. Taking
+    // just the first branch dropped every field the other branches contribute — Asana composes its
+    // resources three levels deep this way, and the base body came back `{}`.
+    if (s.allOf?.length) {
+      const composed = composedObject(s);
+      if (composed.required.length > 0 || Object.keys(composed.properties).length > 0) {
+        const out: Record<string, unknown> = {};
+        for (const k of composed.required) out[k] = validValue(composed.properties[k], k);
+        return out;
+      }
+    }
     if (s.anyOf?.length) return validValue(s.anyOf[0], key);
     if (s.oneOf?.length) return validValue(s.oneOf[0], key);
     if (s.allOf?.length) return validValue(s.allOf[0], key);
   }
-  switch (s.type) {
+  switch (t) {
     case "string": {
-      if (s.format === "email" || /email/i.test(key)) return "gen@crust.fixture";
+      // The key heuristics guess from a NAME; a `pattern` is what the schema actually says, so it
+      // wins. A field called `job_id` carrying `^job-[0-9]{3}$` was getting the uuid regardless —
+      // 47 rows where a guess beat a statement.
+      // A guess from the field NAME yields to anything the schema actually states — a `pattern`
+      // (PR #44) and equally a length bound. `client_id: {type: "string", maxLength: 20}` never
+      // mentions uuid, and the 36-character one does not fit: 32 rows where a name beat a number.
+      // An EXPLICIT `format` is different — then the schema asked for the value itself, and a
+      // maxLength too small for it is the spec contradicting itself, which crust leaves visible.
+      const fits = (v: string): boolean =>
+        (typeof s.maxLength !== "number" || v.length <= s.maxLength) &&
+        (typeof s.minLength !== "number" || v.length >= s.minLength);
+      // A guess from the NAME applies only where the schema states nothing of its own — not beside a
+      // `pattern` (PR #44), not beside a length bound (PR #47), and not beside a `format`. A field
+      // called `first_email_date` declaring `format: date-time` was getting the email constant.
+      const named = !s.pattern && !s.format;
+      if (s.format === "email" && !s.pattern) return "gen@crust.fixture";
+      if (named && /email/i.test(key) && fits("gen@crust.fixture")) return "gen@crust.fixture";
       // Fixed, not random: emitted files must be byte-stable so a checked-in
       // matrix can be CI-diffed against a regeneration.
-      if (s.format === "uuid" || /(^|_)id$/.test(key))
+      if (s.format === "uuid" && !s.pattern) return "00000000-0000-4000-8000-00000000c0de";
+      if (named && /(^|_)id$/.test(key) && fits("00000000-0000-4000-8000-00000000c0de"))
         return "00000000-0000-4000-8000-00000000c0de";
-      if (s.format === "date") return "2026-08-12";
-      if (s.format === "date-time") return "2026-08-12T10:00:00.000Z";
-      if (s.pattern) return sampleFromPattern(s.pattern);
+      if (s.format === "date" && !s.pattern) return "2026-08-12";
+      if (s.format === "date-time" && !s.pattern) return "2026-08-12T10:00:00.000Z";
+      // Anything else the mock knows how to satisfy — `uri`/`url` above all, which is 972 of the
+      // 1,090 format failures across the corpus. The four constants above keep their own values so
+      // existing generated matrices do not churn; this only covers formats that had NO value at all.
+      if (s.format && !s.pattern) {
+        const known = formatDefault(s.format);
+        if (known !== null) return known;
+      }
+      // Both declared: the PATTERN is the narrower statement, and the mock already resolves it that
+      // way. `format: email` beside a pattern whose TLD is 2-5 letters rejects "gen@crust.fixture",
+      // which has seven — the constant is a fine email and the wrong one for this field.
+      if (s.format && s.pattern) {
+        const known = formatDefault(s.format);
+        if (known !== null && matchesPattern(s.pattern, known)) return known;
+      }
       const min = s.minLength ?? 1;
-      return "gen-value-x".padEnd(min, "x");
+      const max = typeof s.maxLength === "number" ? s.maxLength : null;
+      if (s.pattern) {
+        // Ask the sampler for the length, rather than padding afterwards and unmaking the match it
+        // verified — the same rule the mock follows.
+        const sampled = sampleFromPattern(s.pattern, min);
+        if (max === null || sampled.length <= max || matchesPattern(s.pattern, sampled))
+          return sampled;
+        return sampled.slice(0, max);
+      }
+      // The default is ELEVEN characters, so any smaller maxLength was violated by it. Trim first,
+      // then pad, so a `{minLength: 2, maxLength: 5}` field lands inside both.
+      let value = "gen-value-x";
+      if (max !== null && value.length > max) value = value.slice(0, Math.max(0, max));
+      if (value.length < min) value = value.padEnd(min, "x");
+      return value;
     }
     case "integer":
     case "number": {
-      const min = s.minimum;
-      if (typeof min === "number") return Math.max(min, 1);
-      return 1;
+      // Both spellings: 3.0 writes `exclusiveMinimum: true` as a MODIFIER on `minimum`, 3.1 writes a
+      // number of its own. Clamping to `maximum` when it is exclusive yields exactly the value the
+      // schema excludes — `{maximum: 1, exclusiveMaximum: true}` was answered with 1.
+      const step = primaryType(s) === "integer" ? 1 : Number.EPSILON * 8;
+      let min = typeof s.minimum === "number" ? s.minimum : null;
+      let max = typeof s.maximum === "number" ? s.maximum : null;
+      if (s.exclusiveMinimum === true && min !== null) min += step;
+      else if (typeof s.exclusiveMinimum === "number") min = s.exclusiveMinimum + step;
+      if (s.exclusiveMaximum === true && max !== null) max -= step;
+      else if (typeof s.exclusiveMaximum === "number") max = s.exclusiveMaximum - step;
+      // 1 stays the friendly default, but a `{maximum: 0}` field was violated by it.
+      let n = min !== null ? Math.max(min, 1) : 1;
+      if (max !== null && n > max) n = max;
+      if (min !== null && n < min) n = min;
+      return n;
     }
     case "boolean":
       return true;
-    case "array":
-      return [validValue(s.items, key), validValue(s.items, key)];
+    case "array": {
+      // Two elements is the useful default — enough to exercise a list — but `maxItems: 1` and
+      // `minItems: 3` are as binding here as a length bound on a string.
+      const min = typeof s.minItems === "number" ? s.minItems : null;
+      const max = typeof s.maxItems === "number" ? s.maxItems : null;
+      let count = 2;
+      if (min !== null && min > count) count = min;
+      if (max !== null && max < count) count = max;
+      if (count > 100) count = 100;
+      return Array.from({ length: Math.max(0, count) }, () => validValue(s.items, key));
+    }
     case "object": {
+      // THROUGH allOf. Real specs compose an object from branches and put `required` on the node,
+      // or on a branch, or both — reading the node alone returned `{}` for the whole body, missing
+      // every field the composition demands. The mock reads composed shapes for the same reason.
       const out: Record<string, unknown> = {};
-      for (const k of s.required ?? []) out[k] = validValue(s.properties?.[k], k);
+      const { required: req, properties: props } = composedObject(s);
+      for (const k of req) out[k] = validValue(props[k], k);
       return out;
     }
     default:
@@ -196,22 +420,32 @@ function baseBody(schema: Schema): Record<string, unknown> {
 // Minimal sampler for simple digit/dash regexes (^\d{6}$, ^\d{4,16}$,
 // ^\d{4}-\d{2}-\d{2}$). Anything fancier falls back to a generic string —
 // a failing case will point at the gap.
-export function sampleFromPattern(pattern: string): string {
-  let out = pattern.replace(/^\^/, "").replace(/\$$/, "");
-  out = out.replace(/\\d\{(\d+),\d+\}/g, (_m, n) => "1".repeat(Number(n)));
-  out = out.replace(/\\d\{(\d+)\}/g, (_m, n) => "1".repeat(Number(n)));
-  out = out.replace(/\\d/g, "1");
-  // If regex syntax survives, we couldn't sample it — return something sane.
-  return /[\\[\](){}|?*+]/.test(out) ? "gen-value-x" : out;
+
+/**
+ * The type to reason about for a schema node: the first non-"null" member of 3.1's array form,
+ * or the plain 3.0 string. Shared reading via normaliseType so the generator, the mock and the
+ * validator cannot drift apart on what a schema means.
+ */
+function primaryType(s: Schema | undefined): string | undefined {
+  const types = normaliseType((s as { type?: unknown } | undefined)?.type);
+  // `type` is optional in JSON Schema, and `{properties: {...}}` with none is extremely common.
+  // Without inference, wrongTypeFor fell to its 12345 default there — a value the validator ACCEPTS,
+  // since `properties` alone does not constrain a non-object — and the generated case asserted a 400
+  // for a request that should return 200. Shared with the mock: one implementation, not two.
+  if (types.length === 0) return inferType((s ?? {}) as Record<string, unknown>);
+  return types.find((x) => x !== "null") ?? "null";
 }
 
 export function wrongTypeFor(s: Schema | undefined): unknown {
+  // 3.1 may write `type: ["string","null"]`; judge on the non-null member so a nullable field
+  // still gets a genuinely wrong value (null would be LEGAL there and would assert nothing).
+  const t = primaryType(s);
   // Coercing fields (dates, digit patterns) happily swallow numbers, so the
   // wrong-typed value for constrained strings must be an unparseable STRING.
-  if (s?.type === "string" && (s.format === "date" || s.format === "date-time" || s.pattern)) {
+  if (t === "string" && (s?.format === "date" || s?.format === "date-time" || s?.pattern)) {
     return "!!not-a-valid-value!!";
   }
-  switch (s?.type) {
+  switch (t) {
     case "string":
       return 12345;
     case "integer":
@@ -337,15 +571,25 @@ function deriveCases(path: string, method: string, op: Operation, scope: ScopeCo
         expectStatus: 400,
         expectValidationField: field,
       });
-      cases.push({
-        name: `${method.toUpperCase()} ${path} wrong type for '${field}' -> 400`,
-        auth: validAuth,
-        method,
-        path,
-        body: { ...base, [field]: wrongTypeFor(props[field]) },
-        expectStatus: 400,
-        expectValidationField: field,
-      });
+      // Only when the value is ACTUALLY rejected. A field whose schema constrains nothing —
+      // `{properties: {...}}` with no `type`, a description-only node — has no wrong value, and the
+      // case would assert `-> 400` for a request a correct API answers 200. That is a false test: it
+      // fails against a correct implementation, and 6,101 were derivable from the corpus. crust owns
+      // the validator, so it is asked rather than guessed at.
+      const wrongValue = wrongTypeFor(props[field]);
+      // The spec is already fully inlined by derefSchemas at entry, so there is nothing left for the
+      // validator to resolve and an empty document is the honest argument.
+      if (validateSchema(wrongValue, props[field], {} as OpenApiSpec, "").length > 0) {
+        cases.push({
+          name: `${method.toUpperCase()} ${path} wrong type for '${field}' -> 400`,
+          auth: validAuth,
+          method,
+          path,
+          body: { ...base, [field]: wrongValue },
+          expectStatus: 400,
+          expectValidationField: field,
+        });
+      }
     }
     for (const [field, rawFs] of Object.entries(props)) {
       // effectiveSchema here is purely additive: it only unwraps nullable
@@ -380,8 +624,9 @@ function deriveCases(path: string, method: string, op: Operation, scope: ScopeCo
           expectStatus: 400,
           expectValidationField: field,
         });
-      const isString = fs.type === "string";
-      const isNumeric = fs.type === "integer" || fs.type === "number";
+      const ft = primaryType(fs);
+      const isString = ft === "string";
+      const isNumeric = ft === "integer" || ft === "number";
       if (isString && typeof fs.minLength === "number" && fs.minLength >= 1) {
         push("too short", "x".repeat(fs.minLength - 1));
       }
@@ -750,21 +995,84 @@ ${urlLines}
 // cyclic ref is cut to {} — a cyclic request body can't be instantiated as a
 // finite valid example anyway, and missing coverage beats wrong output.
 // OpenAPI 3.1 $ref siblings are merged over the resolved target.
-export function derefSchemas(node: unknown, spec: OpenApiSpec, stack: string[] = []): unknown {
-  if (Array.isArray(node)) return node.map((n) => derefSchemas(n, spec, stack));
+interface DerefContext {
+  /** Resolved form of each ref, reused wherever that ref appears. */
+  cache: Map<string, unknown>;
+  /** How many times a cycle has been cut, used to decide what may be cached. */
+  cuts: number;
+  /** Nodes left to build before inlining stops. */
+  budget: number;
+  /** Whether the budget has already been reported. */
+  warned: boolean;
+}
+
+/**
+ * How many nodes the inlined spec may contain.
+ *
+ * Sharing resolved refs takes azure's network-applicationGateway from 17.4s and 2.2 GB to 12.5s and
+ * 1.2 GB, and that is still unusable: the cache serves 85% of 4.7 MILLION lookups for one file, and
+ * the 15% it must refuse — resolutions that cut a cycle, and so depend on the path that reached them
+ * — each rebuild a deep tree. No amount of sharing fixes a walk that large.
+ *
+ * So it is bounded. Past the budget a `$ref` inlines as `{}`, exactly as a cyclic one does, and
+ * gen-fixtures says so. This module already accepts that trade for cycles — "missing coverage beats
+ * wrong output" — and a spec that cannot be inlined in 200,000 nodes is the same situation: fewer
+ * generated cases, none of them wrong.
+ */
+const DEREF_NODE_BUDGET = 200_000;
+
+export function derefSchemas(
+  node: unknown,
+  spec: OpenApiSpec,
+  stack: string[] = [],
+  ctx: DerefContext = { cache: new Map(), cuts: 0, budget: DEREF_NODE_BUDGET, warned: false },
+): unknown {
+  if (Array.isArray(node)) return node.map((n) => derefSchemas(n, spec, stack, ctx));
   if (!node || typeof node !== "object") return node;
   const obj = node as Record<string, unknown>;
   const ref = obj.$ref;
   if (typeof ref === "string") {
-    if (stack.includes(ref)) return {};
+    if (stack.includes(ref)) {
+      ctx.cuts++;
+      return {};
+    }
     const target = resolveRef(ref, spec);
     if (!target || typeof target !== "object") return {};
-    const { $ref: _drop, ...siblings } = obj;
-    const resolved = derefSchemas(target, spec, [...stack, ref]) as Record<string, unknown>;
-    return { ...resolved, ...(derefSchemas(siblings, spec, stack) as Record<string, unknown>) };
+    if (ctx.budget <= 0) {
+      if (!ctx.warned) {
+        ctx.warned = true;
+        process.stderr.write(
+          `gen-fixtures: spec too large to inline fully; \`$ref\`s past ${DEREF_NODE_BUDGET} nodes ` +
+            "are cut, so fewer cases are generated — none of them wrong\n",
+        );
+      }
+      return {};
+    }
+    ctx.budget--;
+
+    // Resolve each ref ONCE and share the result. Inlining a fresh deep copy at every occurrence
+    // makes the output grow with the number of PATHS through the schema graph rather than its size:
+    // azure's network-applicationGateway is a DAG of a few schemas referenced from many places, and
+    // a few-MB spec became a 2.03 GB structure — 8 seconds on the versions that survived, and out of
+    // memory on five of the nine. `gen-fixtures` there did not run slowly, it did not run.
+    //
+    // A resolution that CUT a cycle is not shareable: what it produced depends on which refs were
+    // already open on the path that reached it. `cuts` is how that is detected.
+    let resolved = ctx.cache.get(ref) as Record<string, unknown> | undefined;
+    if (resolved === undefined) {
+      const before = ctx.cuts;
+      resolved = derefSchemas(target, spec, [...stack, ref], ctx) as Record<string, unknown>;
+      if (ctx.cuts === before) ctx.cache.set(ref, resolved);
+    }
+
+    const { $ref: _drop, ...rawSiblings } = obj;
+    const siblings = derefSchemas(rawSiblings, spec, stack, ctx) as Record<string, unknown>;
+    // Shared when there is nothing to overlay; a shallow copy when there is. Consumers below read
+    // these nodes structurally and never mutate them, which is what makes sharing safe.
+    return Object.keys(siblings).length === 0 ? resolved : { ...resolved, ...siblings };
   }
   const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(obj)) out[k] = derefSchemas(v, spec, stack);
+  for (const [k, v] of Object.entries(obj)) out[k] = derefSchemas(v, spec, stack, ctx);
   return out;
 }
 

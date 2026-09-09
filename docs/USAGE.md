@@ -1084,11 +1084,24 @@ Derived cases:
 - **400 boundary violations**, for ALL body properties — required *and*
   optional — in fixed per-field order: too short (`minLength`), too long
   (`maxLength`; skipped above 4096 to keep checked-in files reviewable),
+- `allOf` is merged as an **intersection**: `properties` and `required` are unioned across the branches, and where two bounds disagree the stricter one governs (`minLength: 3` beside a branch's `minLength: 40` means 40, since a 3-character value satisfies neither both). This reaches the shape where a node carries the `type` and leaves refinements to its branches.
+- The `enum` member picked satisfies the schema's own declared `type` — real specs write `{type: "string", enum: [true, false]}` — and `required`/`properties` are read **through `allOf`**, so an object composed from branches gets every field the composition demands rather than an empty body.
+- An object whose properties live in a **union branch** is built from that branch. A node declaring `type: "object"` alongside a `oneOf`/`anyOf` used to produce `{}`: the explicit type sent it straight to the object case, which composes through `allOf` only. The same node WITHOUT a type worked, which is what kept it hidden. The first branch is taken, since a union offers alternatives rather than an intersection.
+- `exclusiveMinimum`/`exclusiveMaximum` are honoured in **both spellings** — 3.0's boolean modifier on `minimum`/`maximum`, and 3.1's number — so a `{maximum: 1, exclusiveMaximum: true}` field is never answered with `1`, the one value it excludes. Where a `format` and a `pattern` are both declared, the format constant is used only if it satisfies the pattern: `format: email` beside a pattern whose TLD is 2-5 letters rejects `gen@crust.fixture`, which has seven. And the field-name heuristics yield to an explicit `format` as well as to a `pattern` and a length bound — a field called `first_email_date` declaring `format: date-time` was getting the email constant.
+- Formats the generator has no constant of its own for — `uri`/`url` above all — fall through to the same defaults the mock uses. Its four fixed constants (email, uuid, date, date-time) keep their values so existing matrices do not churn. And the field-name heuristics yield to anything the schema actually states — an explicit `pattern`, and equally a length bound: `client_id: {type: "string", maxLength: 20}` never mentions uuid, and the 36-character one does not fit. An explicit `format` is different: there the schema asked for the value itself, and a `maxLength` too small for it is the spec contradicting itself, which crust leaves visible. An explicit `pattern` also **outranks the field-name heuristics**: a field called `job_id` carrying `^job-[0-9]{3}$` gets a value matching the pattern, not the stable uuid, because a guess from a name must not beat what the schema says.
+- The **valid base body honours the schema's own bounds** — `maxLength`, `minLength`, `minItems`/`maxItems`, `minimum`/`maximum`. Every 400-case perturbs that body, so where it was already invalid the expected 400 could arrive for the wrong reason: a false pass, which is the one thing crust must never produce. The fixed format values (`gen@crust.fixture`, the stable uuid) are deliberately unchanged, since checked-in matrices are CI-diffed against a regeneration.
+- A **wrong-type case is only generated when the value is actually rejected**. A field whose schema constrains nothing — `{properties: {…}}` with no `type`, a description-only node — has no wrong value, and such a case would assert `-> 400` for a request a correct API answers 200: a test that fails against a correct implementation. 6,101 were derivable from the APIs-guru corpus. crust owns the validator, so it asks it rather than guessing.
+- A missing `type` is **inferred from the keywords present**, shared with the mock — so `{minLength: 3}` with no type now yields the boundary case it silently skipped before.
+- Every `$ref` is inlined once and **shared**, and inlining stops after 200,000 nodes. azure's `network-applicationGateway` is a DAG of a few schemas referenced from many places: copying at each occurrence turned a few-MB spec into a 2.03 GB structure — 17s where it survived and OUT OF MEMORY on five of nine versions, so `gen-fixtures` there did not run slowly, it did not run. Past the budget a `$ref` inlines as `{}`, exactly as a cyclic one does, and gen-fixtures says so on stderr: fewer generated cases, none of them wrong.
   below minimum / above maximum (`maximum: Number.MAX_SAFE_INTEGER` is
   treated as an "unbounded" sentinel and skipped), and pattern violation
   (deduped when the required-field wrong-type case already sends an
   unparseable string). Nullable zod-style `anyOf: [X, {type: "null"}]`
-  wrappers are unwrapped, so nullable fields get their boundary cases too.
+  wrappers are unwrapped, and OpenAPI 3.1's `type: ["string","null"]` union
+  form is read the same way, so nullable fields get their boundary cases too
+  under either spelling — and the wrong-type case for such a field is a value
+  of a genuinely wrong type, never `null` (which the union permits and so
+  would assert nothing).
   One op-level **unexpected extra property** case is added when the body
   schema has `additionalProperties: false`; it asserts only status +
   `code === "validation"` (unknown-key naming in `fieldErrors` varies by
@@ -1179,6 +1192,10 @@ missing `scopeParam`), `2` bad args.
 
 Boots a `Bun.serve` instance that mocks every operation in an OpenAPI 3.x spec — useful for frontend dev before the backend exists, demoing a pipeline, or seeding fixture tests against an upstream you don't want to spin up.
 
+The boot line also names **patterns written as JavaScript regex literals** — `/^[0-9]{5}$/i`, delimiters and flags included, where JSON Schema expects a bare regex. The leading slash is then matched literally, so NO value can satisfy the pattern and every response carrying one is unsatisfiable — silently, because the failures look like ordinary validation noise. crust does not rewrite them: guessing at what a spec meant is how a mock starts lying. It names them, as it does Express-style `:param` paths.
+
+OpenAPI 3.1 made `paths` optional, so a document describing only `webhooks` (or only reusable `components`) loads and mocks **0 routes** — the boot line names the webhook count, because webhooks are callbacks the API *sends* you, not endpoints to serve. A document with no `paths`, no `webhooks` and no `components` is still a load error.
+
 ```bash
 mock-server --swagger ./openapi.yaml --port 4000
 mock-server --swagger https://petstore3.swagger.io/api/v3/openapi.json --port 4747
@@ -1190,11 +1207,37 @@ Flags: `--swagger <url-or-path>` (required; URL or local `.json`/`.yaml`/`.yml`;
 
 Response bodies are picked example-first, schema-fallback:
 
-1. `content.<media>.example` wins outright.
+1. `content.<media>.example` wins outright. A response written as `{ $ref: "#/components/responses/Foo" }` is resolved first — before this, such an operation mocked a `null` body.
 2. Otherwise the first entry in `content.<media>.examples`.
-3. Otherwise the schema is walked: `string` → `"string"` (or a format-aware default for `email`, `date-time`, `uuid`, `uri`), `integer`/`number` → `0`, `boolean` → `false`, `array` → `[item]`, `object` → every property generated, `enum` → first value, `allOf` merged, `oneOf`/`anyOf` → first branch. Local `$ref`s into `components.schemas.*` are resolved (cyclic refs return `null`).
+3. Otherwise the schema is walked.
 
-Status code selection within a matched operation: `200` → `201` → first `2xx` → `default` → first defined. `application/json` content is preferred; otherwise the first content type. Routes with literal segments take precedence over `{param}` siblings, so `GET /pets/mine` wins over `GET /pets/{id}`.
+   **Type.** Where a node omits `type` it is inferred from the keywords present: `format`, `pattern` and the length bounds are string-only; the numeric bounds are number-only; `properties`/`items` say object and array; an `enum` says the type of the member picked. `type` is optional in JSON Schema and the other keywords are not decoration — sinao writes `items: {format: "string"}`, and crust used to emit `[null]` for it. A node stating none of them still has no type. The 3.1 union form `type: ["string","null"]` synthesises the first **non-`null`** member, so a nullable field still gets representative data.
+
+   **`string`** → a value satisfying the schema's own constraints. A format-aware default for `email`, `date-time`, `uuid`, `uri`; otherwise a value constructed from `pattern` — character classes, `\d \w \s .`, the quantifiers `{n} {n,m} + * ?`, `\uXXXX` escapes inside a class (`[\u0031-\u0039]` **is** `[1-9]`, and AWS writes it that way), literals and alternation — and **verified against the real regex before it is used**, so a construction crust cannot manage degrades to a neutral value rather than a confidently wrong one. Where both a `format` and a `pattern` are declared, the pattern wins if the format default cannot satisfy it: a format names a family of values, a pattern names which of them.
+
+   Lengths are then clamped to `minLength`/`maxLength` — but **never in a way that unmakes the match just verified**. Length is bought by widening an open-ended quantifier (`+`, `*`, `{n,}`); where a fixed-width pattern and the bound cannot both hold, the pattern wins as the narrower statement. A format-derived value is likewise never truncated, so `{format: uuid, maxLength: 8}` keeps the valid uuid instead of emitting `"00000000"`. Plain `"string"` appears only when nothing constrains the field.
+
+   **`integer`/`number`** → `0`, or the nearest value the schema's own `minimum`/`maximum` allows (both `exclusiveMinimum`/`exclusiveMaximum` spellings honoured), so a `{"minimum": 1}` field is never mocked as `0`. **`boolean`** → `false`.
+
+   **`array`** → `[item]`, repeated or emptied to satisfy `minItems`/`maxItems`, capped at 100 since a mock body nobody can read helps nobody.
+
+   **`object`** → every property generated, with three refinements. An **optional** property crust cannot represent — one re-entering a cycle already expanded as far as it goes — is *omitted* rather than emitted as an empty object missing its own required fields, because absent always validates and present-and-invalid does not; a *required* property in that position still appears, presence being forced. Any name in `required` that `properties` never describes is emitted as `null`, including where a schema has `required` and no `properties` at all and where the `required` list sits on an `allOf` node while the properties live in its branches — nothing constrains such a name, and omitting it produced a body crust's own validator rejects. That placeholder never outranks a branch that *does* describe the property: turbinelabs declares `zone_key: {type: string}` in one `allOf` branch and merely requires it in another. Under `additionalProperties: false` the schema forbids the key it demands, which is unsatisfiable, so crust leaves the contradiction visible.
+
+   **`enum`** → the first value satisfying the schema's own declared `type`. probely writes `{type: "string", enum: [null, "trial", …]}` where the null is documented prose, and taking it emits a value crust's own validator rejects; where no member fits, the first stands and the contradiction stays visible. **`const`** → that value. Schema-level **`examples`** → first entry.
+
+   **`allOf`** is an intersection, not a replacement: branches are merged **together with the node's own `properties`**, and a schema carrying both must satisfy both. Where a property is declared in more than one place its *keywords* are merged rather than one side winning — a base contributing `type: string` and a derived schema contributing `enum` yields a value satisfying both, since neither mentions what the other declares. When the branches are not objects, the first branch producing a value wins, because `allOf` often means "this, refined" around a scalar (`allOf: [{$ref: ".../Status"}]` around an enum is the common idiom); objects win a mixed `allOf`, but a branch producing an *empty* object contributes nothing and does not outrank a sibling with real content — AWS writes every field as `allOf: [{$ref: Real}, {description: "…"}]`, and where `Real` was a list the documentation-only `{}` used to win.
+
+   **`oneOf`/`anyOf`** → the first branch, merged with the node's own `properties` where it has them (the branch wins a conflict, being the narrower statement about which variant this is); some specs use a union purely to say "one of these *required* sets" and declare the properties on the node, and taking the branch alone yielded `null` for the whole object. Where a `discriminator` is present the chosen branch is **named**: the property takes the mapping key that selects it, or the schema's own name when there is no mapping. Both spellings are handled — the base carrying `oneOf` plus a discriminator, and the commoner inheritance form where the derived schema carries `allOf: [{$ref: Base}]` together with the discriminator whose mapping names it. A branch that pins the property itself (`const`, a single-value `enum`) keeps its own value.
+
+   **`$ref`** — local refs into `components.schemas.*` are resolved, and **narrowing keywords written beside a `$ref` apply**: `enum`, `format`, `pattern`, the bounds, `example`, `default`, since 3.1 permits them and they are how a spec restricts one use of a shared type. *Structural* siblings (`type`, `properties`, `items`) are deliberately ignored — sibling keywords were illegal beside `$ref` before 3.1, so Swagger-2 conversions are full of leftovers the tools of that era ignored, and acting on them makes correct bodies wrong.
+
+   A **cyclic** `$ref` terminates with the properties its schema *requires* and nothing else; optional properties are dropped, which is what makes it finite, since the property closing the loop is nearly always optional. A required property that closes the loop gets the empty shape of the type it declares, and a required *array* of the type being terminated becomes `[]` — which satisfies `required` and is finite, where one element would be a terminating level carrying none of its own required properties (`minItems` still wins where the spec asks for elements). Both the required list and that type are read **through `allOf`**, because real specs compose recursive types out of branches rather than declaring them on the node; reading the node alone found nothing and terminated with `null`, putting the wrong type in a body crust's own validator then rejected.
+
+   A body expands at most **20,000 schema nodes**. Past that, a `$ref` to anything that can expand further terminates exactly as a cycle does, and mock-server says so on stderr; a `$ref` to a **scalar** is still followed, because it cannot recurse, costs one step, and is where the useful value lives. Some real graphs are *mutually* recursive — presalytics.io/ooxml has `Slide.Slides.Details` referencing `Shared.*.Details` referencing back — and with per-path cycle detection the cost of a complete body grows with the number of **paths** rather than nodes: 52 million expansions for 134 responses, 53 seconds for that one file, which from outside is a hang with no explanation.
+
+Status code selection within a matched operation: `200` → `201` → first `2xx` → `default` → first defined. `application/json` content is preferred; otherwise the first content type — and the response is **served with that content type**, not always `application/json`. A non-JSON type (`text/html`, `application/javascript`) is written as text rather than serialised as JSON: a mock that claims `text/html` and sends a JSON document is lying twice, and `--proxy` rejects its own mock for it. Routes with literal segments take precedence over `{param}` siblings, so `GET /pets/mine` wins over `GET /pets/{id}`.
+
+A path templated the Express way — `/things/:id` rather than OpenAPI's `/things/{id}` — is matched **literally**, because rewriting someone's spec is a worse failure than the one it fixes. mock-server names the count on stderr at boot, since the route total would otherwise look healthy while those routes are unreachable by any real client.
 
 Unmatched paths return `404`; matched paths with the wrong method return `405`. Per request, one line goes to stderr:
 
@@ -1339,8 +1382,10 @@ serialization styles pass unchecked. The schema
 walker supports `type` (incl. the 3.1 `["string","null"]` array form),
 `required`, `properties`/`items`, `enum`, `nullable`, `anyOf`/`oneOf` (pass if
 any branch passes), `allOf`, `format` (`uuid`, `email`, `date`, `date-time`,
-`uri`), `pattern`, `minLength`/`maxLength`, `minimum`/`maximum` (incl. both
-`exclusiveMinimum`/`exclusiveMaximum` forms), and `minItems`/`maxItems`.
+`uri`), `pattern` (compiled with the `u` flag so Unicode property escapes such as `\p{L}` mean what they say, falling back to plain compilation for the identity escapes `u` mode bans, e.g. `\/` in ARN patterns), `minLength`/`maxLength`, `minimum`/`maximum` (incl. both
+`exclusiveMinimum`/`exclusiveMaximum` forms), and `minItems`/`maxItems`. A union violation NAMES the branch it is describing — `closest (branch #1 Quote) failed: …` — because "closest" means the branch with the fewest errors, which is often not the one the body was built from; without the name the failure reads as being about a variant nobody chose.
+
+An operation that documents **no `responses` object at all** (3.1 makes it optional) has nothing to conform to, so no status is reported as undocumented for it — reporting one would be inventing a violation.
 
 The governing rule: **a schema the walker can't judge validates
 successfully** — unknown formats, uncompilable patterns, unresolvable or
