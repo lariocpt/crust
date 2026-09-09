@@ -152,14 +152,60 @@ interface ScopeConfig {
 // that single-field perturbations are applied to).
 // ---------------------------------------------------------------------------
 
+/** An object's `required` list and `properties`, merged across its `allOf` chain. */
+function composedObject(
+  s: Schema | undefined,
+  depth = 0,
+): { required: string[]; properties: Record<string, Schema> } {
+  const out = { required: [] as string[], properties: {} as Record<string, Schema> };
+  if (!s || typeof s !== "object" || depth > 10) return out;
+  if (Array.isArray(s.allOf)) {
+    for (const branch of s.allOf) {
+      const sub = composedObject(branch, depth + 1);
+      out.required.push(...sub.required);
+      Object.assign(out.properties, sub.properties);
+    }
+  }
+  if (s.properties) Object.assign(out.properties, s.properties);
+  if (Array.isArray(s.required))
+    out.required.push(...s.required.filter((r) => typeof r === "string"));
+  return out;
+}
+
 export function validValue(s: Schema | undefined, key = ""): unknown {
   if (!s) return "x";
-  if (s.enum?.length) return s.enum[0];
+  // The member must satisfy the schema's OWN declared type. Real specs write
+  // `{type: "string", enum: [true, false]}`, and returning enum[0] blindly emitted a boolean into a
+  // string field — the same fault the mock had until it learned to read the rest of the enum. Where
+  // no member fits, the first stands: the schema is unsatisfiable and inventing a value outside the
+  // enum would be worse than reporting the contradiction it already has.
+  if (s.enum?.length) {
+    const declared = normaliseType(s.type);
+    if (declared.length === 0) return s.enum[0];
+    const fits = (v: unknown): boolean => {
+      const actual = v === null ? "null" : Array.isArray(v) ? "array" : (typeof v as string);
+      if (declared.includes(actual)) return true;
+      return actual === "number" && (declared.includes("integer") || declared.includes("number"));
+    };
+    const match = s.enum.find(fits);
+    return match !== undefined ? match : s.enum[0];
+  }
   // Only fall into combinators when the node has no type of its own —
   // zod emits e.g. { type: "string", allOf: [pattern, pattern] } where the
   // branches are refinements, not alternatives.
   const t = primaryType(s);
   if (!t) {
+    // An `allOf` that composes into an OBJECT is one, whether or not the node says `type`. Taking
+    // just the first branch dropped every field the other branches contribute — Asana composes its
+    // resources three levels deep this way, and the base body came back `{}`.
+    if (s.allOf?.length) {
+      const composed = composedObject(s);
+      if (composed.required.length > 0 || Object.keys(composed.properties).length > 0) {
+        const out: Record<string, unknown> = {};
+        for (const k of composed.required) out[k] = validValue(composed.properties[k], k);
+        return out;
+      }
+    }
     if (s.anyOf?.length) return validValue(s.anyOf[0], key);
     if (s.oneOf?.length) return validValue(s.oneOf[0], key);
     if (s.allOf?.length) return validValue(s.allOf[0], key);
@@ -225,8 +271,12 @@ export function validValue(s: Schema | undefined, key = ""): unknown {
       return Array.from({ length: Math.max(0, count) }, () => validValue(s.items, key));
     }
     case "object": {
+      // THROUGH allOf. Real specs compose an object from branches and put `required` on the node,
+      // or on a branch, or both — reading the node alone returned `{}` for the whole body, missing
+      // every field the composition demands. The mock reads composed shapes for the same reason.
       const out: Record<string, unknown> = {};
-      for (const k of s.required ?? []) out[k] = validValue(s.properties?.[k], k);
+      const { required: req, properties: props } = composedObject(s);
+      for (const k of req) out[k] = validValue(props[k], k);
       return out;
     }
     default:
