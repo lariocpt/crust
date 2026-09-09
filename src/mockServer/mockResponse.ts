@@ -703,6 +703,11 @@ function stringDefault(s: Record<string, unknown>): string {
 
   const pattern = typeof s.pattern === "string" ? s.pattern : null;
   let value = formatDefault(format);
+  // Both declared: the PATTERN is the narrower statement. A format names a family of values; a
+  // pattern names which of them. peertube writes `{format: "uri", pattern: "magnet:\\?xt=urn:..."}`
+  // and taking the format default emitted "https://example.com" — a value the field's own regex
+  // rejects. The format default is kept only where it actually satisfies the pattern.
+  if (value !== null && pattern !== null && !matchesPattern(pattern, value)) value = null;
   if (value === null) {
     // Hand the sampler the length requirement so it can buy it from an open-ended quantifier,
     // rather than us padding the answer afterwards and breaking the match it just verified.
@@ -715,7 +720,10 @@ function stringDefault(s: Record<string, unknown>): string {
   // characters and cannot be 8. Truncating produced "00000000" — not a uuid — which merely traded a
   // maxLength violation for a format one while making the mock data less useful. Keep the valid
   // formatted value; it is the better wrong answer, and the one the docs already described.
-  const formatted = formatDefault(format) !== null;
+  // "formatted" means the value in hand CAME from the format default — not merely that a format was
+  // declared. Where the pattern overrode it, the value is a pattern sample and truncating it is the
+  // thing the clamp guard below exists to prevent.
+  const formatted = formatDefault(format) !== null && value === formatDefault(format);
   // A value that already matches its pattern is one crust VERIFIED. Clamping it afterwards silently
   // unmakes that: a checked "0" padded to minLength became "0xxxxxxxxxxx", and the fallback
   // truncated to "gen" — 153 of 668 pattern violations across 300 real specs were crust breaking its
