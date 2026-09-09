@@ -155,6 +155,34 @@ function withOwnDiscriminator(value: unknown, resolved: unknown, refName: string
 }
 
 /**
+ * The first branch of a union, merged with whatever the NODE itself declares.
+ *
+ * The same mistake the allOf path had, in the other combinator. Keywords are independent: a node
+ * carrying `oneOf` and its own `properties` must satisfy both. Real specs lean on this — influxdata
+ * uses `oneOf` purely to say "one of these REQUIRED sets" and declares the actual properties on the
+ * node — so taking the branch alone found `{required: [...]}` with no type and no properties and
+ * produced `null` for the entire object.
+ *
+ * The branch wins on conflict: it is the narrower statement about which variant this is.
+ */
+function unionValue(
+  s: Record<string, unknown>,
+  branches: unknown[],
+  spec: OpenApiSpec,
+  visited: Set<string>,
+): unknown {
+  const branch = branches[0];
+  const fromBranch = withDiscriminator(generateFromSchema(branch, spec, visited), branch, s);
+  if (s.properties === undefined) return fromBranch;
+
+  const { oneOf: _o, anyOf: _a, ...own } = s;
+  const fromNode = generateFromSchema(own, spec, visited);
+  if (!fromNode || typeof fromNode !== "object" || Array.isArray(fromNode)) return fromBranch;
+  if (!fromBranch || typeof fromBranch !== "object" || Array.isArray(fromBranch)) return fromNode;
+  return { ...(fromNode as Record<string, unknown>), ...(fromBranch as Record<string, unknown>) };
+}
+
+/**
  * Names the union branch that was actually chosen.
  *
  * crust picks the first branch and used to leave the discriminator property at whatever its schema
@@ -324,10 +352,10 @@ function generateFromSchema(schema: unknown, spec: OpenApiSpec, visited: Set<str
   }
 
   if (Array.isArray(s.oneOf) && s.oneOf.length > 0) {
-    return withDiscriminator(generateFromSchema(s.oneOf[0], spec, visited), s.oneOf[0], s);
+    return unionValue(s, s.oneOf, spec, visited);
   }
   if (Array.isArray(s.anyOf) && s.anyOf.length > 0) {
-    return withDiscriminator(generateFromSchema(s.anyOf[0], spec, visited), s.anyOf[0], s);
+    return unionValue(s, s.anyOf, spec, visited);
   }
 
   // OpenAPI 3.1 allows `type: ["string","null"]` — the form that replaced 3.0's `nullable: true`.

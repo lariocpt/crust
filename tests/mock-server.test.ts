@@ -1857,3 +1857,42 @@ describe("a required array of a recursive type terminates as empty", () => {
     expect((out.kids as unknown[]).length).toBeGreaterThanOrEqual(1);
   });
 });
+
+describe("oneOf/anyOf does not swallow its node's own properties", () => {
+  // The same mistake as the allOf one, in the other combinator. JSON Schema keywords are
+  // independent: a node carrying `oneOf` AND its own `properties` must satisfy both. Real specs use
+  // `oneOf` purely to express "one of these REQUIRED sets", with the actual properties declared on
+  // the node — influxdata writes exactly that. crust took the branch, found `{required: [...]}` with
+  // no type and no properties, and produced `null` for the whole object.
+  const body = (schema: Record<string, unknown>, spec: Record<string, unknown> = {}): unknown =>
+    synthesizeBody({ schema }, spec);
+
+  test("a oneOf of required-sets keeps the node's properties", () => {
+    const out = body({
+      type: "object",
+      oneOf: [{ required: ["orgID"] }, { required: ["org"] }],
+      properties: { orgID: { type: "string" }, bucketID: { type: "string" } },
+    }) as Record<string, unknown>;
+    expect(out).not.toBeNull();
+    expect(out.orgID).toBeDefined();
+    expect(out.bucketID).toBeDefined();
+  });
+
+  test("the same holds for anyOf", () => {
+    const out = body({
+      type: "object",
+      anyOf: [{ required: ["a"] }],
+      properties: { a: { type: "string" } },
+    }) as Record<string, unknown>;
+    expect(out.a).toBeDefined();
+  });
+
+  // Control: a union whose branches carry the real content still uses them, and a union with no
+  // sibling properties is untouched.
+  test("a union whose branches carry the content is unchanged", () => {
+    const out = body({
+      oneOf: [{ type: "object", properties: { fromBranch: { type: "string" } } }],
+    }) as Record<string, unknown>;
+    expect(out.fromBranch).toBeDefined();
+  });
+});
