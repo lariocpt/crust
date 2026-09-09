@@ -160,8 +160,9 @@ export function validateSchema(
       // Pass when ANY branch passes (oneOf's exactly-one is deliberately not
       // enforced). On total failure, one violation carries the closest branch.
       let best: SchemaViolation[] | null = null;
+      let bestLabel = "";
       let passed = false;
-      for (const branch of branches) {
+      for (const [index, branch] of branches.entries()) {
         // Each anyOf/oneOf branch is a self-contained alternative shape —
         // strict enforcement applies inside; a strict-failing branch merely
         // fails branch selection.
@@ -170,13 +171,16 @@ export function validateSchema(
           passed = true;
           break;
         }
-        if (!best || errs.length < best.length) best = errs;
+        if (!best || errs.length < best.length) {
+          best = errs;
+          bestLabel = branchLabel(branch, index);
+        }
       }
       if (!passed && best) {
         out.push({
           pointer,
           rule: "anyOf",
-          message: `matches no ${combinator} branch; closest branch failed: ${best
+          message: `matches no ${combinator} branch; closest (${bestLabel}) failed: ${best
             .map((e) => `${e.pointer || "(root)"}: ${e.message}`)
             .join("; ")}`,
           expected: best,
@@ -823,6 +827,26 @@ export function validateResponse(
   }
 
   return out;
+}
+
+/**
+ * Which alternative of a union a failure is describing.
+ *
+ * "closest branch failed" named no branch, and "closest" means FEWEST ERRORS — not the branch the
+ * body was built from. On sinao.app that reported `/document/status: value not in enum` for a status
+ * that is in the generated branch's enum, and the row read as a crust bug until the branches were
+ * compared by hand. A union failure cannot be judged without knowing which alternative it is about.
+ */
+function branchLabel(branch: unknown, index: number): string {
+  if (branch && typeof branch === "object") {
+    const b = branch as Record<string, unknown>;
+    if (typeof b.$ref === "string") {
+      const name = b.$ref.slice(b.$ref.lastIndexOf("/") + 1);
+      if (name) return `branch #${index} ${name}`;
+    }
+    if (typeof b.title === "string" && b.title.trim() !== "") return `branch #${index} ${b.title}`;
+  }
+  return `branch #${index}`;
 }
 
 /** The one non-schema violation: a request that matches no documented route. */
