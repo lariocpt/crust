@@ -2038,3 +2038,44 @@ describe("patterns written as JavaScript regex literals", () => {
     expect(countRegexLiteralPatterns(spec)).toBe(0);
   });
 });
+
+describe("the node budget does not truncate scalars", () => {
+  // The budget exists to stop UNBOUNDED expansion. A `$ref` to a string, number or enum cannot
+  // recurse, costs one step, and is exactly where the useful value lives — an `enum`, a `format`,
+  // a `pattern`. Refusing those alongside the recursive ones made every enum-constrained field in a
+  // truncated body wrong: 974 `enum` violations across the 12 specs the budget makes finishable.
+  test("an enum reached past the budget still gets a legal value", () => {
+    // A graph wide enough to exhaust the budget, with an enum leaf hanging off it.
+    const schemas: Record<string, unknown> = {
+      Status: { type: "string", enum: ["live", "dead"] },
+      Leaf: {
+        type: "object",
+        properties: { status: { $ref: "#/components/schemas/Status" }, note: { type: "string" } },
+      },
+    };
+    for (let i = 1; i <= 60; i++) {
+      const kids: Record<string, unknown> = { status: { $ref: "#/components/schemas/Status" } };
+      for (let k = 0; k < 8; k++) {
+        kids[`k${k}`] = { $ref: `#/components/schemas/${i === 1 ? "Leaf" : `N${i - 1}`}` };
+      }
+      schemas[`N${i}`] = { type: "object", properties: kids };
+    }
+    const out = synthesizeBody(
+      { schema: { $ref: "#/components/schemas/N60" } },
+      {
+        components: { schemas },
+      },
+    ) as Record<string, unknown>;
+    // Whatever depth the budget stopped at, no `status` anywhere may be an illegal enum value.
+    const seen: string[] = [];
+    const walk = (node: unknown, depth: number): void => {
+      if (!node || typeof node !== "object" || depth > 80) return;
+      const o = node as Record<string, unknown>;
+      if (typeof o.status === "string") seen.push(o.status);
+      for (const v of Object.values(o)) walk(v, depth + 1);
+    };
+    walk(out, 0);
+    expect(seen.length).toBeGreaterThan(0);
+    for (const s of seen) expect(["live", "dead"]).toContain(s);
+  });
+});

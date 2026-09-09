@@ -270,7 +270,13 @@ function generateFromSchema(schema: unknown, spec: OpenApiSpec, visited: Set<str
     }
     if (!resolved) return null;
     // Out of budget: stop descending, exactly as at a cycle, so the body stays well-typed.
-    if (nodeBudget <= 0) {
+    //
+    // Except for a SCALAR: a `$ref` to a string, number, boolean or enum cannot recurse, costs one
+    // step, and is where the useful value lives. Refusing those too made every enum-constrained
+    // field in a truncated body wrong — 974 `enum` violations across the 12 specs the budget makes
+    // finishable at all, which is a poor trade for nothing saved. The budget exists to stop
+    // UNBOUNDED expansion, and a leaf is not that.
+    if (nodeBudget <= 0 && !isScalarSchema(resolved)) {
       if (!budgetWarned) {
         budgetWarned = true;
         process.stderr.write(
@@ -625,6 +631,26 @@ function mergePropertySchemas(
     }
   }
   return into;
+}
+
+/**
+ * A schema that cannot expand into anything: no properties, no items, no combinators, no `$ref`.
+ * Generating one costs a single step whatever the budget says, and it is where an `enum`, a
+ * `format` or a `pattern` actually lives.
+ */
+function isScalarSchema(schema: unknown): boolean {
+  if (!schema || typeof schema !== "object") return false;
+  const s = schema as Record<string, unknown>;
+  if (s.$ref !== undefined) return false;
+  if (s.properties !== undefined || s.items !== undefined) return false;
+  if (s.allOf !== undefined || s.oneOf !== undefined || s.anyOf !== undefined) return false;
+  if (s.additionalProperties !== undefined && s.additionalProperties !== false) return false;
+  const types = normaliseType(s.type, s.nullable);
+  if (types.length === 0) return Array.isArray(s.enum) || s.const !== undefined;
+  return types.every(
+    (ty) =>
+      ty === "string" || ty === "number" || ty === "integer" || ty === "boolean" || ty === "null",
+  );
 }
 
 /**
