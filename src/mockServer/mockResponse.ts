@@ -77,9 +77,50 @@ export function synthesizeBody(media: MediaTypeObject | null, spec: OpenApiSpec)
       if (ex && "value" in ex) return ex.value;
     }
   }
-  if (media.schema !== undefined) return generateFromSchema(media.schema, spec, new Set());
+  if (media.schema !== undefined) {
+    nodeBudget = NODE_BUDGET;
+    try {
+      return generateFromSchema(media.schema, spec, new Set());
+    } finally {
+      nodeBudget = 0;
+    }
+  }
   return null;
 }
+
+/**
+ * Generated values for `$ref`s already built during THIS body, and a count of how many times a
+ * cycle had to be terminated.
+ *
+ * presalytics.io/ooxml issued 176 MILLION generateFromSchema calls for 134 responses — 25 million
+ * for one of them, 53 seconds for the file — and nothing in it is recursive. Its schema graph is a
+ * DAG, and every distinct path to a shared node rebuilt that node's entire subtree, so the cost
+ * grew with the number of PATHS rather than the number of nodes. From outside, that is
+ * indistinguishable from a hang.
+ *
+ * A subtree is reusable unless a cycle closed inside it on a ref that was already open ABOVE it —
+ * only then does what it produced depend on the path that reached it. `terminatedRefs` names them
+ * rather than counting them, which is the difference between reusing 90k subtrees and 5.17M.
+ */
+let nodeBudget = 0;
+let budgetWarned = false;
+
+/**
+ * How many schema nodes one response body may expand before crust stops going deeper.
+ *
+ * Some real schema graphs are MUTUALLY recursive — presalytics.io/ooxml has
+ * `Slide.Slides.Details` referencing `Shared.*.Details` referencing back — and with per-path cycle
+ * detection the honest cost of a complete body grows with the number of PATHS, not nodes: 52
+ * million expansions for 134 responses, 53 seconds for the file. Reuse cannot fix it, because in a
+ * mutually recursive graph almost every subtree really does depend on the path that reached it
+ * (3.64M of 3.69M were genuinely path-dependent, not conservatively assumed to be).
+ *
+ * So the depth is bounded instead. Past the budget a `$ref` terminates exactly as a cycle does —
+ * carrying the properties its schema requires — so a truncated body is still a body that validates.
+ * 20,000 is far above any ordinary response: across 4,138 real-world specs only a handful reach it,
+ * and those are the ones that otherwise look like a hang.
+ */
+const NODE_BUDGET = 20_000;
 
 function generateFromSchema(schema: unknown, spec: OpenApiSpec, visited: Set<string>): unknown {
   if (!schema || typeof schema !== "object") return null;
@@ -107,6 +148,18 @@ function generateFromSchema(schema: unknown, spec: OpenApiSpec, visited: Set<str
       return shallowForCycle(resolved, spec, visited, refName);
     }
     if (!resolved) return null;
+    // Out of budget: stop descending, exactly as at a cycle, so the body stays well-typed.
+    if (nodeBudget <= 0) {
+      if (!budgetWarned) {
+        budgetWarned = true;
+        process.stderr.write(
+          `mock-server: schema graph too deeply recursive to expand fully; response bodies are ` +
+            `truncated at ${NODE_BUDGET} nodes and remain schema-valid\n`,
+        );
+      }
+      return shallowForCycle(resolved, spec, visited, refName);
+    }
+    nodeBudget--;
     const next = new Set(visited);
     next.add(refName);
     return generateFromSchema(resolved, spec, next);
