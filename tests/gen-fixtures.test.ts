@@ -1489,3 +1489,43 @@ describe("scalar constraints are read through allOf too", () => {
     ).toHaveLength(40);
   });
 });
+
+describe("a field-name guess never breaks a declared bound", () => {
+  // All 32 remaining maxLength failures were one shape: a field called `client_id`, `external_id`,
+  // `alphanumeric_sender_id` — matching the `*_id` heuristic — whose schema says
+  // `{type: "string", maxLength: 20}` and never mentions uuid. The heuristic returned the fixed
+  // 36-character uuid and blew the bound.
+  //
+  // PR #44 already stopped a name guess overriding an explicit `pattern`. A length bound is the same
+  // kind of statement: the schema said what fits, and a guess from the NAME does not get to ignore it.
+  const ok = (schema: Record<string, unknown>, key = "") =>
+    validateSchema(validValue(schema as never, key), schema, {} as never, "");
+
+  test("the uuid guess yields to a maxLength that cannot hold it", () => {
+    expect(ok({ type: "string", maxLength: 20 }, "client_id")).toEqual([]);
+    expect(ok({ type: "string", maxLength: 34 }, "external_id")).toEqual([]);
+  });
+
+  test("the email guess yields too", () => {
+    expect(ok({ type: "string", maxLength: 5 }, "user_email")).toEqual([]);
+  });
+
+  // Control: an EXPLICIT format still wins, because then the schema itself asked for the uuid and a
+  // maxLength that cannot hold one is the spec contradicting itself — crust keeps the valid value
+  // and lets --validate report the contradiction, exactly as the mock does.
+  test("an explicit format: uuid is kept even against a small maxLength", () => {
+    expect(validValue({ type: "string", format: "uuid", maxLength: 8 } as never, "x")).toBe(
+      "00000000-0000-4000-8000-00000000c0de",
+    );
+  });
+
+  // Control: with room, the guess still applies — this must not become "never guess".
+  test("the guess still applies where it fits", () => {
+    expect(validValue({ type: "string", maxLength: 40 } as never, "client_id")).toBe(
+      "00000000-0000-4000-8000-00000000c0de",
+    );
+    expect(validValue({ type: "string" } as never, "client_id")).toBe(
+      "00000000-0000-4000-8000-00000000c0de",
+    );
+  });
+});

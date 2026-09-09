@@ -71,16 +71,55 @@ export function sampleFromPattern(pattern: string, minLen = 0): string {
   const candidate = buildFromPattern(pattern);
   if (candidate === null) return PATTERN_FALLBACK;
   if (minLen > candidate.length && matchesPattern(pattern, candidate)) {
-    const grown = buildFromPattern(pattern, minLen - candidate.length);
-    if (grown !== null && grown.length > candidate.length && matchesPattern(pattern, grown))
-      return grown;
+    const grown = growToLength(pattern, candidate, minLen);
+    if (grown !== null) return grown;
   }
   // The whole design rests on this line.
   return matchesPattern(pattern, candidate) ? candidate : PATTERN_FALLBACK;
 }
 
+/**
+ * Stretch a verified sample up to `minLen`, or leave it alone.
+ *
+ * Three real shapes defeated quantifier-widening on its own. `[A-z0-9]` has NO quantifier, so there
+ * is nothing to widen — but `pattern` is an UNANCHORED partial match, so repeating the sample still
+ * satisfies it. `^$|[\x00-\x7F]+` puts the empty branch first, and rebuilding chose the same branch
+ * again. And `[\w :+=./\n-]*` asked for 600 characters, which the build cap refused outright.
+ *
+ * Every candidate is verified before it is returned, so a genuinely unsatisfiable length — `^[a-z]{3}$`
+ * asked for ten characters — finds nothing and the original stands. Stretching a value into a
+ * mismatch is the fault this sampler exists to avoid.
+ */
+function growToLength(pattern: string, candidate: string, minLen: number): string | null {
+  const tries: string[] = [];
+  const widened = buildFromPattern(pattern, minLen - candidate.length);
+  if (widened !== null) tries.push(widened);
+  // Each alternation branch in turn: the first may be the one that cannot grow.
+  for (const branch of splitTopLevel(pattern, "|")) {
+    const built = buildFromPattern(branch, minLen);
+    if (built !== null) tries.push(built);
+  }
+  // Repetition, which is what an unanchored pattern with no quantifier needs.
+  if (candidate.length > 0) tries.push(candidate.repeat(Math.ceil(minLen / candidate.length)));
+
+  for (const t of tries) if (t.length >= minLen && matchesPattern(pattern, t)) return t;
+  // Nothing reached it; the longest that still matches beats a shorter one.
+  let best: string | null = null;
+  for (const t of tries) {
+    if (
+      t.length > candidate.length &&
+      matchesPattern(pattern, t) &&
+      (best === null || t.length > best.length)
+    ) {
+      best = t;
+    }
+  }
+  return best;
+}
+
 /** Structural walk over the pattern. Returns null the moment it meets something it cannot build. */
 function buildFromPattern(pattern: string, extra = 0): string | null {
+  const extraBudget = extra;
   let src = pattern.trim();
   if (!src) return null;
   // alternation at the top level: take the first branch that yields something
@@ -162,7 +201,10 @@ function buildFromPattern(pattern: string, extra = 0): string | null {
       count += take;
       extra -= take;
     }
-    if (count > 256) return null; // refuse to build something unreviewable
+    // 256 is the "unreviewable" guard, but a length the SCHEMA asked for is reviewable by
+    // definition: cloudhsm declares `minLength: 600` and the cap rejected the build outright,
+    // handing back the neutral value for a field that could have been satisfied exactly.
+    if (count > Math.max(256, extraBudget)) return null;
     out += atom.repeat(count);
   }
   return out;
@@ -185,7 +227,11 @@ function pickFromClass(body: string): string | null {
       // \uXXXX is how AWS writes an ordinary ASCII range: [\u0031-\u0039] IS [1-9]. Abandoning the
       // class meant a plain digit field fell back to the neutral value on dozens of real specs.
       if (c === "u" && /^[0-9a-fA-F]{4}$/.test(body.slice(i + 2, i + 6))) {
-        return String.fromCharCode(Number.parseInt(body.slice(i + 2, i + 6), 16));
+        return printableIn(Number.parseInt(body.slice(i + 2, i + 6), 16), body, i + 6);
+      }
+      // `\xNN` is the other spelling, and AWS uses it for ASCII ranges: `[\x00-\x7F]`.
+      if (c === "x" && /^[0-9a-fA-F]{2}$/.test(body.slice(i + 2, i + 4))) {
+        return printableIn(Number.parseInt(body.slice(i + 2, i + 4), 16), body, i + 4);
       }
       if (c && /[.\\/:+*?()[\]{}|^$@-]/.test(c)) return c;
       return null; // \p{...} and friends
@@ -198,6 +244,24 @@ function pickFromClass(body: string): string | null {
     i += 1;
   }
   return null;
+}
+
+/**
+ * A printable character for a class whose range STARTS at an unprintable one.
+ *
+ * `[\x00-\x7F]` begins at NUL. Taking the low bound is correct and useless: a mock body full of
+ * control characters is legal and unreadable. Where the range reaches ordinary ASCII, "a" is picked
+ * instead; where it does not, the low bound stands, because a wrong value is worse than an ugly one.
+ */
+function printableIn(codePoint: number, body: string, after: number): string {
+  const low = String.fromCharCode(codePoint);
+  if (codePoint >= 0x20) return low;
+  // A range follows if the next character is "-" and something comes after it.
+  if (body[after] !== "-") return low;
+  const rest = body.slice(after + 1);
+  const hex = /^\\[ux]([0-9a-fA-F]{2,4})/.exec(rest);
+  const high = hex ? Number.parseInt(hex[1] as string, 16) : rest.charCodeAt(0);
+  return Number.isFinite(high) && high >= 0x61 ? "a" : low;
 }
 
 function findClassEnd(src: string, open: number): number {

@@ -293,11 +293,21 @@ export function validValue(s: Schema | undefined, key = ""): unknown {
       // The key heuristics guess from a NAME; a `pattern` is what the schema actually says, so it
       // wins. A field called `job_id` carrying `^job-[0-9]{3}$` was getting the uuid regardless —
       // 47 rows where a guess beat a statement.
+      // A guess from the field NAME yields to anything the schema actually states — a `pattern`
+      // (PR #44) and equally a length bound. `client_id: {type: "string", maxLength: 20}` never
+      // mentions uuid, and the 36-character one does not fit: 32 rows where a name beat a number.
+      // An EXPLICIT `format` is different — then the schema asked for the value itself, and a
+      // maxLength too small for it is the spec contradicting itself, which crust leaves visible.
+      const fits = (v: string): boolean =>
+        (typeof s.maxLength !== "number" || v.length <= s.maxLength) &&
+        (typeof s.minLength !== "number" || v.length >= s.minLength);
       const named = !s.pattern;
-      if (s.format === "email" || (named && /email/i.test(key))) return "gen@crust.fixture";
+      if (s.format === "email") return "gen@crust.fixture";
+      if (named && /email/i.test(key) && fits("gen@crust.fixture")) return "gen@crust.fixture";
       // Fixed, not random: emitted files must be byte-stable so a checked-in
       // matrix can be CI-diffed against a regeneration.
-      if (s.format === "uuid" || (named && /(^|_)id$/.test(key)))
+      if (s.format === "uuid") return "00000000-0000-4000-8000-00000000c0de";
+      if (named && /(^|_)id$/.test(key) && fits("00000000-0000-4000-8000-00000000c0de"))
         return "00000000-0000-4000-8000-00000000c0de";
       if (s.format === "date") return "2026-08-12";
       if (s.format === "date-time") return "2026-08-12T10:00:00.000Z";
