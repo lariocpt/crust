@@ -1418,3 +1418,39 @@ describe("validValue covers uri, and an explicit pattern outranks a key guess", 
     expect(validValue({ type: "string", format: "date" } as never)).toBe("2026-08-12");
   });
 });
+
+describe("validValue reads enums and allOf the way the mock does", () => {
+  // Two shapes the mock learned to handle and the generator never did — the same divergence that
+  // produced four of the six defects on this axis.
+  //
+  // `{type: "string", enum: [true, false]}` is a spec contradicting itself, and validValue returned
+  // enum[0] before ever looking at the type. And an object composed with `allOf` had its `required`
+  // and `properties` read off the NODE only, so the base body came back `{}` — missing every field
+  // the composition demands.
+  const ok = (schema: Record<string, unknown>, key = "") =>
+    validateSchema(validValue(schema as never, key), schema, {} as never, "");
+
+  test("the enum member picked satisfies the declared type", () => {
+    expect(ok({ type: "string", enum: [true, false, "yes"] })).toEqual([]);
+    expect(ok({ type: "integer", enum: ["none", 3] })).toEqual([]);
+  });
+
+  test("required and properties are read through allOf", () => {
+    const schema = {
+      allOf: [
+        { type: "object", required: ["gid"], properties: { gid: { type: "string" } } },
+        { type: "object", required: ["name"], properties: { name: { type: "string" } } },
+      ],
+    };
+    expect(ok(schema)).toEqual([]);
+    const built = validValue(schema as never) as Record<string, unknown>;
+    expect(built.gid).toBeDefined();
+    expect(built.name).toBeDefined();
+  });
+
+  // Control: where no enum member fits, the first still stands — the schema is unsatisfiable and
+  // inventing a value outside the enum would be worse than reporting the contradiction.
+  test("an unsatisfiable enum keeps its first member", () => {
+    expect(validValue({ type: "integer", enum: ["a", "b"] } as never)).toBe("a");
+  });
+});
