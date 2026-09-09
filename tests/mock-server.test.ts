@@ -2115,3 +2115,49 @@ describe("the enum member picked fits the declared type", () => {
     expect(body({ type: "integer", enum: ["a", "b"] }).v).toBe("a");
   });
 });
+
+describe("a required-but-undescribed placeholder does not clobber a real value", () => {
+  // turbinelabs writes `allOf: [A, B]` where A declares `zone_key: {type: string}` and B merely
+  // REQUIRES `zone_key` without describing it. crust fills an undescribed required name with null
+  // (correctly — presence is forced and nothing constrains it), and that null then overwrote A's
+  // real value in the merge. The result was `zone_key: null` against a schema saying `type: string`.
+  //
+  // The placeholder means "nothing describes this". It cannot outrank a branch that does.
+  test("the branch that describes the property wins over the branch that only requires it", () => {
+    const out = synthesizeBody(
+      {
+        schema: {
+          allOf: [
+            { type: "object", properties: { zone_key: { type: "string" } } },
+            {
+              type: "object",
+              required: ["zone_key", "checksum"],
+              properties: { checksum: { type: "string" } },
+            },
+          ],
+        },
+      },
+      {},
+    ) as Record<string, unknown>;
+    expect(out.zone_key).toBe("string");
+    expect(out.checksum).toBe("string");
+  });
+
+  // Control: when NOTHING describes it, the placeholder is still the answer — presence is required
+  // and null is the least assuming value.
+  test("a name nothing describes is still present as null", () => {
+    const out = synthesizeBody(
+      {
+        schema: {
+          allOf: [
+            { type: "object", properties: { a: { type: "string" } } },
+            { type: "object", required: ["mystery"] },
+          ],
+        },
+      },
+      {},
+    ) as Record<string, unknown>;
+    expect(Object.hasOwn(out, "mystery")).toBe(true);
+    expect(out.mystery).toBeNull();
+  });
+});
