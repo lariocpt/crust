@@ -151,8 +151,17 @@ function generateFromSchema(schema: unknown, spec: OpenApiSpec, visited: Set<str
     case "boolean":
       return false;
     case "array": {
+      // Honour the schema's own bounds. One element was the default and remains it, but minItems
+      // and maxItems are as binding here as minLength is on a string — a maxItems of 0 means the
+      // empty array, and synthesising one element there is a body our own validator rejects.
       const item = generateFromSchema(s.items, spec, visited);
-      return [item];
+      const min = typeof s.minItems === "number" ? s.minItems : null;
+      const max = typeof s.maxItems === "number" ? s.maxItems : null;
+      let count = 1;
+      if (min !== null && min > count) count = min;
+      if (max !== null && max < count) count = max;
+      if (count > 100) count = 100; // a mock body nobody can read helps nobody
+      return Array.from({ length: Math.max(0, count) }, () => item);
     }
     case "object":
     case undefined: {
@@ -226,7 +235,12 @@ function stringDefault(s: Record<string, unknown>): string {
     return value; // a formatted value with no length bounds: leave it exactly as it was
   }
 
-  if (max !== null && value.length > max) value = value.slice(0, Math.max(0, max));
+  // A formatted value that cannot fit maxLength means the SCHEMA contradicts itself: a uuid is 36
+  // characters and cannot be 8. Truncating produced "00000000" — not a uuid — which merely traded a
+  // maxLength violation for a format one while making the mock data less useful. Keep the valid
+  // formatted value; it is the better wrong answer, and the one the docs already described.
+  const formatted = formatDefault(format) !== null;
+  if (max !== null && value.length > max && !formatted) value = value.slice(0, Math.max(0, max));
   if (min !== null && value.length < min) value = value.padEnd(min, "x");
   return value;
 }
