@@ -187,6 +187,17 @@ function generateFromSchema(schema: unknown, spec: OpenApiSpec, visited: Set<str
       for (const [k, v] of Object.entries(props)) {
         out[k] = generateFromSchema(v, spec, visited);
       }
+      // A name in `required` that `properties` never describes. Real specs do this (ton-console's
+      // Participant requires `date_create` and defines no such property), and omitting it made the
+      // mock fail crust's OWN validator. Nothing constrains the name, so any value satisfies it —
+      // `null` is the least assuming one. The exception is `additionalProperties: false`, where the
+      // schema forbids the very key it demands: nothing can satisfy that, and inventing the key
+      // would break the stricter rule instead, so the spec's contradiction is left visible.
+      if (Array.isArray(s.required) && s.additionalProperties !== false) {
+        for (const name of s.required) {
+          if (typeof name === "string" && !Object.hasOwn(out, name)) out[name] = null;
+        }
+      }
       return out;
     }
     case "null":
