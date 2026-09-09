@@ -2161,3 +2161,68 @@ describe("a required-but-undescribed placeholder does not clobber a real value",
     expect(out.mystery).toBeNull();
   });
 });
+
+describe("$ref siblings apply", () => {
+  // JSON Schema 2020-12 and OpenAPI 3.1 allow keywords ALONGSIDE `$ref`, and crust's fixture
+  // generator already merges them — the mock returned the referenced schema and dropped them.
+  //
+  // ideal-postcodes reaches this through an allOf: one branch declares
+  // `country_iso: {$ref: paf_country_iso}` (a plain string) and another narrows it with
+  // `{enum: ["GBR", ...]}`. Merging the two fragments produces `{$ref, enum}`, and the `$ref` branch
+  // returned first, so the enum was discarded and the mock emitted "string" — a value no branch of
+  // the surrounding union accepts.
+  const SPEC = {
+    components: {
+      schemas: { Code: { type: "string", description: "a code" } },
+    },
+  };
+
+  test("an enum beside a $ref constrains the value", () => {
+    const out = synthesizeBody(
+      {
+        schema: {
+          type: "object",
+          properties: { v: { $ref: "#/components/schemas/Code", enum: ["GBR", "IMN"] } },
+        },
+      },
+      SPEC,
+    ) as Record<string, unknown>;
+    expect(out.v).toBe("GBR");
+  });
+
+  // A STRUCTURAL sibling is deliberately ignored. Sibling keywords were illegal beside `$ref` before
+  // OpenAPI 3.1, so every Swagger-2 conversion carries leftovers the tools of that era ignored;
+  // acting on azure's turned seven correct bodies wrong. Narrowing is unambiguous intent, a
+  // conflicting `type` is not, and crust does not act on a guess about which.
+  test("a structural sibling does not override the referenced schema", () => {
+    const out = synthesizeBody(
+      {
+        schema: {
+          type: "object",
+          properties: { v: { $ref: "#/components/schemas/Code", type: "integer" } },
+        },
+      },
+      SPEC,
+    ) as Record<string, unknown>;
+    expect(out.v).toBe("string");
+  });
+
+  // Control: a bare $ref is unchanged, and a $ref with only annotations still resolves normally.
+  test("a bare $ref, and one with only a description, are unchanged", () => {
+    const bare = synthesizeBody(
+      { schema: { type: "object", properties: { v: { $ref: "#/components/schemas/Code" } } } },
+      SPEC,
+    ) as Record<string, unknown>;
+    expect(bare.v).toBe("string");
+    const annotated = synthesizeBody(
+      {
+        schema: {
+          type: "object",
+          properties: { v: { $ref: "#/components/schemas/Code", description: "x" } },
+        },
+      },
+      SPEC,
+    ) as Record<string, unknown>;
+    expect(annotated.v).toBe("string");
+  });
+});

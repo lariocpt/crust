@@ -139,6 +139,43 @@ const UNREPRESENTABLE = Symbol("unrepresentable");
 const NODE_BUDGET = 20_000;
 
 /**
+ * The referenced schema with the referring node's own keywords laid over it.
+ *
+ * Only NARROWING keywords are carried across — `enum`, `format`, `pattern`, the bounds, `example`.
+ * Structural ones (`type`, `properties`, `items`) are not, and that restraint is deliberate: sibling
+ * keywords were ILLEGAL beside `$ref` before OpenAPI 3.1, so every Swagger-2 conversion in the wild
+ * carries siblings that the tools of that era ignored. Applying azure's structural leftovers turned
+ * seven correct bodies wrong. A narrowing sibling is unambiguous intent; a conflicting `type` is far
+ * more likely to be conversion noise, and crust does not act on a guess about which.
+ */
+const NARROWING_SIBLINGS = new Set([
+  "enum",
+  "const",
+  "format",
+  "pattern",
+  "minimum",
+  "maximum",
+  "exclusiveMinimum",
+  "exclusiveMaximum",
+  "minLength",
+  "maxLength",
+  "minItems",
+  "maxItems",
+  "example",
+  "examples",
+  "default",
+]);
+
+function withRefSiblings(node: Record<string, unknown>, resolved: unknown): unknown {
+  if (!resolved || typeof resolved !== "object" || Array.isArray(resolved)) return resolved;
+  const siblings: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(node))
+    if (k !== "$ref" && NARROWING_SIBLINGS.has(k)) siblings[k] = v;
+  if (Object.keys(siblings).length === 0) return resolved;
+  return { ...(resolved as Record<string, unknown>), ...siblings };
+}
+
+/**
  * The other half of discriminator handling: the INHERITANCE idiom, which is what real specs use.
  *
  * The union form — a base with `oneOf` plus a discriminator — is what the specification's own
@@ -289,7 +326,12 @@ function generateFromSchema(schema: unknown, spec: OpenApiSpec, visited: Set<str
     nodeBudget--;
     const next = new Set(visited);
     next.add(refName);
-    return withOwnDiscriminator(generateFromSchema(resolved, spec, next), resolved, refName);
+    // JSON Schema 2020-12 and OpenAPI 3.1 allow keywords ALONGSIDE `$ref`, and they apply. Returning
+    // the referenced schema alone dropped them: ideal-postcodes narrows a referenced string with a
+    // sibling `enum`, and the mock emitted "string" — a value no branch of the surrounding union
+    // accepts. crust's fixture generator already merges these; the mock now agrees with it.
+    const effective = withRefSiblings(s, resolved);
+    return withOwnDiscriminator(generateFromSchema(effective, spec, next), effective, refName);
   }
 
   if ("example" in s && s.example !== undefined) return s.example;
