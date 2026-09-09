@@ -4,8 +4,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { OpenApiSpec } from "../src/mockServer/loadSpec";
 import { joinUpstreamUrl } from "../src/mockServer/proxy";
+import { buildRoutes } from "../src/mockServer/router";
 import { startServer } from "../src/mockServer/server";
-import { type Violation, validateSchema } from "../src/mockServer/validateRequest";
+import {
+  type Violation,
+  validateResponse,
+  validateSchema,
+} from "../src/mockServer/validateRequest";
 
 const SCHEMA_SPEC: OpenApiSpec = {
   openapi: "3.1.0",
@@ -1084,5 +1089,47 @@ describe("--strict mock mode e2e", () => {
       await strictServer.stop();
       await looseServer.stop();
     }
+  });
+});
+
+// OpenAPI 3.1 made `responses` optional on an operation. When one documents NONE, there is
+// nothing to conform to — but the status check reported `undocumented-status` against an empty
+// key list, which is the validator inventing a violation, the one thing its governing rule says
+// it must never do ("a schema the walker can't judge validates successfully").
+//
+// It also made crust disagree with ITSELF: pickResponse defaults such an operation to 200, so
+// under --proxy crust's mock served a 200 that crust's validator then rejected — one spec, two
+// crust processes, no user code. 7 of the 17 usable specs in the react corpus hit it, via a
+// `/openapi.json` operation written with no responses object.
+describe("an operation documenting no responses at all", () => {
+  const spec = {
+    openapi: "3.1.0",
+    info: { title: "nr", version: "1" },
+    paths: {
+      "/undocumented": { get: {} },
+      "/documented": { get: { responses: { "200": { description: "ok" } } } },
+    },
+  } as unknown as OpenApiSpec;
+
+  test("no status is invented as a violation", () => {
+    const routes = buildRoutes(spec);
+    const route = routes.find((r) => r.template === "/undocumented")!;
+    const v = validateResponse(
+      { status: 200, contentType: "application/json", hasBody: true, body: {} },
+      route,
+      spec,
+    );
+    expect(v.filter((x) => x.rule === "undocumented-status")).toEqual([]);
+  });
+
+  test("an operation that DOES document statuses still rejects an undocumented one (control)", () => {
+    const routes = buildRoutes(spec);
+    const route = routes.find((r) => r.template === "/documented")!;
+    const v = validateResponse(
+      { status: 503, contentType: "application/json", hasBody: true, body: {} },
+      route,
+      spec,
+    );
+    expect(v.some((x) => x.rule === "undocumented-status")).toBe(true);
   });
 });

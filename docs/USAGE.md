@@ -1350,6 +1350,8 @@ any branch passes), `allOf`, `format` (`uuid`, `email`, `date`, `date-time`,
 `uri`), `pattern`, `minLength`/`maxLength`, `minimum`/`maximum` (incl. both
 `exclusiveMinimum`/`exclusiveMaximum` forms), and `minItems`/`maxItems`.
 
+An operation that documents **no `responses` object at all** (3.1 makes it optional) has nothing to conform to, so no status is reported as undocumented for it — reporting one would be inventing a violation.
+
 The governing rule: **a schema the walker can't judge validates
 successfully** — unknown formats, uncompilable patterns, unresolvable or
 cyclic `$ref`s, and unsupported keywords (`not`, `uniqueItems`,
