@@ -4,6 +4,14 @@ import { normaliseType } from "./schemaTypes";
 export interface PickedResponse {
   status: number;
   media: MediaTypeObject | null;
+  /**
+   * The content type the media was chosen FROM. pickMedia has always fallen back to the first
+   * documented type when there is no application/json, but callers had no way to learn which —
+   * so the response went out as application/json regardless, and crust's own --proxy validator
+   * rejected it ("content-type 'application/json' is not documented for status 200") on any spec
+   * documenting text/html or application/javascript.
+   */
+  mediaType: string | null;
 }
 
 /**
@@ -24,9 +32,9 @@ export function pickResponse(op: OperationObject, spec?: OpenApiSpec): PickedRes
   for (const k of order) {
     const r = responses[k];
     if (!r) continue;
-    return { status: parseStatus(k), media: pickMedia(r, spec) };
+    return { status: parseStatus(k), ...pickMedia(r, spec) };
   }
-  return { status: 200, media: null };
+  return { status: 200, media: null, mediaType: null };
 }
 
 function parseStatus(key: string): number {
@@ -35,7 +43,10 @@ function parseStatus(key: string): number {
   return Number.isFinite(n) ? n : 200;
 }
 
-function pickMedia(res: ResponseObject, spec?: OpenApiSpec): MediaTypeObject | null {
+function pickMedia(
+  res: ResponseObject,
+  spec?: OpenApiSpec,
+): { media: MediaTypeObject | null; mediaType: string | null } {
   // A RESPONSE may itself be a $ref into components.responses — distinct from a $ref'd schema,
   // and the common style in hand-written specs (95 of ton-console's 99 operations). Reading
   // `.content` off the unresolved node yields undefined, so the operation answered 200 with a
@@ -43,17 +54,19 @@ function pickMedia(res: ResponseObject, spec?: OpenApiSpec): MediaTypeObject | n
   let node = res as ResponseObject & { $ref?: unknown };
   const seen = new Set<string>();
   while (typeof node.$ref === "string" && spec) {
-    if (seen.has(node.$ref)) return null; // cyclic — no media rather than a hang
+    if (seen.has(node.$ref)) return { media: null, mediaType: null }; // cyclic — no hang
     seen.add(node.$ref);
     const target = resolveRef(node.$ref, spec);
-    if (!target || typeof target !== "object") return null;
+    if (!target || typeof target !== "object") return { media: null, mediaType: null };
     node = target as ResponseObject & { $ref?: unknown };
   }
   const content = node.content;
-  if (!content) return null;
-  if (content["application/json"]) return content["application/json"]!;
-  for (const v of Object.values(content)) if (v) return v;
-  return null;
+  if (!content) return { media: null, mediaType: null };
+  if (content["application/json"]) {
+    return { media: content["application/json"]!, mediaType: "application/json" };
+  }
+  for (const [type, v] of Object.entries(content)) if (v) return { media: v, mediaType: type };
+  return { media: null, mediaType: null };
 }
 
 export function synthesizeBody(media: MediaTypeObject | null, spec: OpenApiSpec): unknown {
