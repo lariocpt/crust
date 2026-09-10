@@ -626,6 +626,34 @@ function shallowForCycle(
 ): unknown {
   const empty = emptyOfDeclaredType(resolved, spec);
   if (!resolved || typeof resolved !== "object") return empty;
+  // Terminating ON an array, rather than on an object that holds one. The empty array is finite and
+  // satisfies `required`, but it does not satisfy a `minItems` the spec actually asked for, and this
+  // function used to return it regardless — an array has no properties, so the shape check below
+  // returned `empty` before anything looked at the bound. connect's evaluation forms cut the cycle
+  // exactly here (Section -> ItemsList -> Item -> Section, `minItems: 1` on the list) and every
+  // section came back with `Items: []`, a body our own validator rejects.
+  //
+  // Fill it only where the element type requires NOTHING of its own. One element carrying none of
+  // its required properties is valid at the top and wrong at every level below — the trade this
+  // file refuses everywhere else — so where the element has requirements the empty array stays and
+  // `--validate` reports the bound honestly.
+  const arr = resolved as Record<string, unknown>;
+  if (normaliseType(arr.type, arr.nullable).includes("array")) {
+    const wanted = typeof arr.minItems === "number" ? arr.minItems : 0;
+    if (wanted > 0) {
+      const itemNode = deref(arr.items, spec);
+      const element = emptyOfDeclaredType(itemNode, spec);
+      if (element !== null && composedShape(itemNode, spec).required.length === 0) {
+        const cap = typeof arr.maxItems === "number" ? arr.maxItems : null;
+        const n = cap !== null ? Math.min(wanted, cap) : wanted;
+        // a fresh value per element: one shared reference would alias across the array
+        return Array.from({ length: n }, () =>
+          Array.isArray(element) ? [] : { ...(element as object) },
+        );
+      }
+    }
+    return empty;
+  }
   // Read through allOf: bitbucket composes every recursive type that way, so the node itself
   // carries neither the properties nor the required list that describe it.
   const shape = composedShape(resolved, spec);
