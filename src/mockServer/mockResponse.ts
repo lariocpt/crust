@@ -322,9 +322,17 @@ function generateFromSchema(schema: unknown, spec: OpenApiSpec, visited: Set<str
     if (nodeBudget <= 0 && !isScalarSchema(resolved)) {
       if (!budgetWarned) {
         budgetWarned = true;
+        // Say what was done, not what it guarantees. This line used to end "and remain
+        // schema-valid", which is not true and cannot be: where the budget runs out ON an array
+        // that requires an element, the truncated value is `[]` and crust's own validator rejects
+        // it. quicksight's dashboard definition does exactly that — a 460 KB body whose
+        // `/Definition/Sheets/0/Layouts` is empty against `minItems: 1`, across three operations.
+        // The budget is a legitimate limit; promising validity on top of it told the operator not
+        // to look for the invalid body it had just produced.
         process.stderr.write(
-          `mock-server: schema graph too deeply recursive to expand fully; response bodies are ` +
-            `truncated at ${NODE_BUDGET} nodes and remain schema-valid\n`,
+          `mock-server: schema graph too large to expand fully; response bodies are truncated at ` +
+            `${NODE_BUDGET} nodes, so a truncated body may not satisfy its own schema — ` +
+            `run with --validate to see where\n`,
         );
       }
       return shallowForCycle(resolved, spec, visited, refName);

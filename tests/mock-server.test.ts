@@ -2490,3 +2490,78 @@ describe("a group alternation declines rather than joining its branches", () => 
     expect(matchesPattern("^[a|b]+$", sampleFromPattern("^[a|b]+$"))).toBe(true);
   });
 });
+
+// The node-budget warning promised something it cannot deliver.
+//
+// `mock-server: … truncated at 20000 nodes and remain schema-valid` — the last clause was false.
+// When the budget runs out ON an array that requires an element, the truncated value is `[]`, and
+// crust's own validator rejects it. quicksight's dashboard definition does exactly this: a 460 KB
+// body whose `/Definition/Sheets/0/Layouts` is empty against `minItems: 1`, three operations' worth.
+//
+// The budget itself is a legitimate limit — it is what stops an unbounded graph expanding forever.
+// The claim attached to it is the defect, and it is the worse kind: an operator reading that line
+// has been told not to go looking for the invalid body it just produced.
+describe("the truncation warning does not claim validity it cannot deliver", () => {
+  // A graph wide enough to drain the budget BEFORE it reaches `tail`, which requires an element.
+  // Wide, not deep: the budget counts `$ref` expansions, and a cycle is cut by `visited` long
+  // before the budget notices one.
+  const build = () => {
+    const schemas: Record<string, unknown> = {};
+    schemas.Word = { type: "string" };
+    const leaf: any = { type: "object", properties: {} };
+    for (let i = 0; i < 10; i++) leaf.properties[`f${i}`] = { $ref: "#/components/schemas/Word" };
+    schemas.Leaf = leaf;
+    const mid: any = { type: "object", properties: {} };
+    for (let i = 0; i < 70; i++)
+      mid.properties[`m${i}`] = {
+        type: "array",
+        minItems: 1,
+        items: { $ref: "#/components/schemas/Leaf" },
+      };
+    schemas.Mid = mid;
+    schemas.Tail = { type: "array", minItems: 1, items: { $ref: "#/components/schemas/Leaf" } };
+    const top: any = { type: "object", required: ["tail"], properties: {} };
+    for (let i = 0; i < 70; i++)
+      top.properties[`t${i}`] = {
+        type: "array",
+        minItems: 1,
+        items: { $ref: "#/components/schemas/Mid" },
+      };
+    top.properties.tail = { $ref: "#/components/schemas/Tail" }; // last: the budget is gone by here
+    schemas.Top = top;
+    return { openapi: "3.0.0", components: { schemas } } as unknown as OpenApiSpec;
+  };
+
+  const run = () => {
+    const spec = build();
+    const written: string[] = [];
+    const real = process.stderr.write.bind(process.stderr);
+    (process.stderr as any).write = (chunk: any) => {
+      written.push(String(chunk));
+      return true;
+    };
+    try {
+      const body = synthesizeBody({ schema: { $ref: "#/components/schemas/Top" } } as any, spec);
+      const top = (spec as any).components.schemas.Top;
+      return { body, errs: validateSchema(body, top, spec, ""), warning: written.join("") };
+    } finally {
+      (process.stderr as any).write = real;
+    }
+  };
+
+  // ONE run for both assertions: the warning latches on a module-level flag and is emitted once
+  // per process, so a second run sees an empty string and the test would pass for the wrong reason.
+  const once = run();
+
+  // The behaviour the claim was wrong about. True before and after the fix — the control that
+  // proves the warning had something real to be wrong about.
+  test("a budget-truncated body can violate its own schema", () => {
+    expect((once.body as any).tail).toEqual([]);
+    expect(once.errs.map((e) => e.rule)).toContain("minItems");
+  });
+
+  test("the warning does not promise schema validity", () => {
+    expect(once.warning).toContain("truncated at");
+    expect(once.warning).not.toContain("schema-valid");
+  });
+});
