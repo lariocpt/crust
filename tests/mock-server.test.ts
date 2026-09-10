@@ -2519,7 +2519,17 @@ describe("the truncation warning does not claim validity it cannot deliver", () 
         items: { $ref: "#/components/schemas/Leaf" },
       };
     schemas.Mid = mid;
-    schemas.Tail = { type: "array", minItems: 1, items: { $ref: "#/components/schemas/Leaf" } };
+    // The element REQUIRES a property, which is what makes the truncated array stay empty: filling
+    // it with a shape carrying none of its own required properties would move the violation one
+    // level down rather than removing it, so crust declines. quicksight's `Layout` is exactly this
+    // — it requires `Configuration` — which is why its `Layouts: []` is still an invalid body and
+    // still the honest answer.
+    schemas.Strict = {
+      type: "object",
+      required: ["needed"],
+      properties: { needed: { $ref: "#/components/schemas/Word" } },
+    };
+    schemas.Tail = { type: "array", minItems: 1, items: { $ref: "#/components/schemas/Strict" } };
     const top: any = { type: "object", required: ["tail"], properties: {} };
     for (let i = 0; i < 70; i++)
       top.properties[`t${i}`] = {
@@ -2563,5 +2573,75 @@ describe("the truncation warning does not claim validity it cannot deliver", () 
   test("the warning does not promise schema validity", () => {
     expect(once.warning).toContain("truncated at");
     expect(once.warning).not.toContain("schema-valid");
+  });
+});
+
+// A required array whose element cannot be expanded dropped `minItems` with the element.
+//
+// `if (generatedItem === UNREPRESENTABLE) return []` ignored the bound, so terminating a cycle
+// through a required array gave `[]` against `minItems: 1` — a body crust's own validator rejects.
+// connect's evaluation forms: EvaluationFormSection -> EvaluationFormItemsList ->
+// EvaluationFormItem -> EvaluationFormSection, `minItems: 1` on the list.
+//
+// The plain cyclic form was already right; this only bites when the array is a NAMED schema behind
+// an `allOf` wrapper, which is how AWS composes everything. shallowForCycle's array check derefs
+// `$ref` but not `allOf`, so it sees neither `type: array` nor the `minItems` — both live on the
+// referenced list, not the wrapper — and falls through to the branch that drops the bound.
+//
+// The empty array stays right where the element would be invalid: one element carrying none of its
+// OWN required properties is valid at the top and wrong at every level below. Where the element
+// type requires NOTHING, the empty shape is a legitimate element and the bound costs nothing.
+describe("a cycle through an allOf-wrapped array still honours minItems", () => {
+  const spec = (itemRequired: string[]) =>
+    ({
+      openapi: "3.0.0",
+      components: {
+        schemas: {
+          Section: {
+            type: "object",
+            required: ["Title", "Items"],
+            properties: {
+              Title: { type: "string" },
+              Items: { allOf: [{ $ref: "#/components/schemas/ItemsList" }, { description: "d" }] },
+            },
+          },
+          ItemsList: {
+            type: "array",
+            minItems: 1,
+            maxItems: 100,
+            items: { $ref: "#/components/schemas/Item" },
+          },
+          Item: {
+            type: "object",
+            ...(itemRequired.length ? { required: itemRequired } : {}),
+            properties: {
+              Section: { allOf: [{ $ref: "#/components/schemas/Section" }, { description: "d" }] },
+              Question: { type: "string" },
+            },
+          },
+        },
+      },
+    }) as unknown as OpenApiSpec;
+
+  const innerItems = (s: OpenApiSpec) => {
+    const body: any = synthesizeBody(
+      { schema: { $ref: "#/components/schemas/Section" } } as any,
+      s,
+    );
+    return body?.Items?.[0]?.Section?.Items;
+  };
+
+  test("the terminating level meets the bound when the element type allows it", () => {
+    const s = spec([]);
+    const items = innerItems(s);
+    expect(Array.isArray(items)).toBe(true);
+    expect(items.length).toBeGreaterThanOrEqual(1);
+    expect(validateSchema(items[0], (s as any).components.schemas.Item, s, "")).toHaveLength(0);
+  });
+
+  // Control: honouring the bound with an element that carries none of its own required properties
+  // just moves the violation one level down, so the empty array is still the better answer.
+  test("an element that would itself be invalid is still dropped", () => {
+    expect(innerItems(spec(["Section", "Question"]))).toEqual([]);
   });
 });
