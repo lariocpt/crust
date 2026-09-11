@@ -1175,7 +1175,10 @@ every app-specific detail and must export:
   headers, used for role `"none"`.
 
 A complete runnable module to copy lives at
-[`examples/gen-setup.ts`](../examples/gen-setup.ts).
+[`examples/gen-setup.ts`](../examples/gen-setup.ts). **crust does not ship
+`./tests/gen-setup.ts` — that path is the default by convention in your own
+repo.** Run `gen-fixtures` without one and it says so, naming the path it
+looked at, the template to copy and the `--setup` flag.
 
 **If you get `generated 0 cases`:** derivation keys off **documented
 responses**, not `securitySchemes` — 401 needs a documented `401` whose

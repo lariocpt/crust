@@ -1644,3 +1644,47 @@ describe("an object whose properties live in a union branch", () => {
     expect((validValue(untyped as never) as Record<string, unknown>).id).toBeDefined();
   });
 });
+
+// A missing setup module answered with Bun's module-resolution error, verbatim.
+//
+//   gen-fixtures: Cannot find module '/…/tests/gen-setup.ts' from '/…/src/genFixtures/generate.ts'
+//
+// Everything a user needs is absent from that: `-s/--setup` exists, `./tests/gen-setup.ts` is a
+// CONVENTION in their own repo rather than something crust ships, and `examples/gen-setup.ts` is
+// the template to copy. It also leaks an internal path, which reads as a crust crash rather than
+// a thing they can fix. Compare `wait`, which names the bad target AND every accepted form.
+//
+// The refusal itself is right — generation genuinely needs the module. Only the message was wrong.
+describe("gen-fixtures: a missing setup module explains itself", () => {
+  const runCapturingStderr = async (args: string[]) => {
+    const { runCli } = await import("../src/genFixtures/cli");
+    const chunks: string[] = [];
+    const real = process.stderr.write.bind(process.stderr);
+    (process.stderr as unknown as { write: unknown }).write = (c: unknown) => {
+      chunks.push(String(c));
+      return true;
+    };
+    try {
+      const code = await runCli(args);
+      return { code, err: chunks.join("") };
+    } finally {
+      (process.stderr as unknown as { write: unknown }).write = real;
+    }
+  };
+
+  test("it names the flag, the convention and the template", async () => {
+    const spec = `${import.meta.dir}/self/spec.json`;
+    const { code, err } = await runCapturingStderr([
+      spec,
+      "-o",
+      `${import.meta.dir}/../.crust/tmp-gen-missing`,
+      "-s",
+      "./definitely-absent.ts",
+    ]);
+    expect(code).not.toBe(0);
+    expect(err).toContain("--setup");
+    expect(err).toContain("examples/gen-setup.ts");
+    // and it must not read as a crust crash: no internal source path
+    expect(err).not.toContain("src/genFixtures/generate.ts");
+  });
+});
