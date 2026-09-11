@@ -90,7 +90,28 @@ export async function runCli(args: string[]): Promise<number> {
     }
     return 0;
   } catch (err) {
-    process.stderr.write(`gen-fixtures: ${(err as Error).message}\n`);
+    const message = (err as Error).message;
+    // A missing setup module used to surface as Bun's raw resolution error, which names an
+    // internal source file and nothing the caller can act on. Everything they need is absent from
+    // it: `-s/--setup` exists, `./tests/gen-setup.ts` is a CONVENTION in their repo rather than
+    // something crust ships, and the template is `examples/gen-setup.ts`. It also reads as a crust
+    // crash. `wait` sets the bar here — it names the bad target and every accepted form.
+    // Match on WHICH module failed, not on the word "setup" appearing in it — a caller who
+    // passes `-s ./definitely-absent.ts` names no such word, and that is exactly the caller who
+    // most needs the explanation.
+    const missing = message.match(/Cannot find module ['"]([^'"]+)['"]/)?.[1];
+    const setupBase = setup.split("/").pop();
+    if (missing && (missing === setup || (setupBase && missing.endsWith(setupBase)))) {
+      const looked = missing;
+      process.stderr.write(
+        `gen-fixtures: no setup module at ${looked}\n` +
+          `  The setup module supplies auth, base URL and any fixtures your API needs.\n` +
+          `  ${DEFAULT_SETUP} is the default by convention in YOUR repo — crust does not ship it.\n` +
+          `  Copy examples/gen-setup.ts to that path, or point at your own with --setup <module>.\n`,
+      );
+      return 1;
+    }
+    process.stderr.write(`gen-fixtures: ${message}\n`);
     return 1;
   }
 }
