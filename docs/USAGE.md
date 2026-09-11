@@ -1407,6 +1407,11 @@ applies again to deeper standalone objects inside any branch. The
 object-form `additionalProperties: {schema}` stays unenforced. Violations
 use `rule: "additionalProperties"` with the offending key in the pointer.
 
+It stays opt-in because most specs never ask for it: of 399 APIs-guru specs, **29
+(7.3%) declare `additionalProperties: false` somewhere**, across 1,176 nodes. Where
+a spec does write it, a `--strict` rejection is that spec's own contract being
+honoured rather than crust inferring one.
+
 #### Validation proxy (`--proxy <upstream>`)
 
 Puts the spec in front of a **real** backend: every request is forwarded to
