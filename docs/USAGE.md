@@ -1410,10 +1410,13 @@ applies again to deeper standalone objects inside any branch. The
 object-form `additionalProperties: {schema}` stays unenforced. Violations
 use `rule: "additionalProperties"` with the offending key in the pointer.
 
-It stays opt-in because most specs never ask for it: of 399 APIs-guru specs, **29
-(7.3%) declare `additionalProperties: false` somewhere**, across 1,176 nodes. Where
-a spec does write it, a `--strict` rejection is that spec's own contract being
-honoured rather than crust inferring one.
+It stays opt-in because most specs never ask for it: of the 4,138 APIs-guru specs,
+**157 (3.8%) declare `additionalProperties: false` somewhere**. Swept under `--strict`,
+those 157 produce 141 `additionalProperties` violations across 16,321 responses — and
+**every one is a spec-supplied EXAMPLE carrying a property its own schema forbids**, not a
+body crust synthesised. Corpus-wide `--strict` adds 145 violations and moves the
+residue not at all. A `--strict` rejection is that spec's own contract being honoured;
+the exemptions above are what keep it from inventing one.
 
 #### Validation proxy (`--proxy <upstream>`)
 
