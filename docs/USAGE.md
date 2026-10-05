@@ -270,13 +270,20 @@ procs({
   With `live:`, the healthy stretch ends when a fatal probe streak **began**,
   not when the kill finally lands — a proc that answers ready and then
   wedges still accrues strikes, so `{max}` trips instead of restarting
-  forever.
+  forever. Giving up is a stream line, **not a failure**: after
+  `giving up after N restart(s)` the line exits 0, and so does a run whose
+  child exited nonzero without `restart:` (its stream simply ends). Gate it
+  where CI decides — `procs({api: "bun api.ts", restart: {max: 3}}) | assert (l => !/giving up/.test(l.line))`
+  — because supervision stopping is not the same as the pipeline succeeding.
 - `ready` — a readiness probe: `":3001/health"` / `"http(s)://…"` (ready =
   any 2xx) or `"port:5432"` (ready = TCP connect succeeds). Long form
   `{url?, port?, timeoutMs?, intervalMs?, probeTimeoutMs?}` (defaults 30s /
   250ms; each probe is capped at `min(intervalMs*4, 2s)` unless
   `probeTimeoutMs` raises it — needed for health endpoints that take >2s to
-  first byte). Probe progress is reported on a `ready` stream
+  first byte). Those keys belong INSIDE the probe object: a `timeoutMs`
+  sitting next to `cmd` is ignored without a word, so
+  `procs({api: {cmd: "sleep 40", ready: "port:3001", timeoutMs: 1200}})`
+  waits the full default 30s. Probe progress is reported on a `ready` stream
   (`ready after 120ms (…)`). On
   timeout, a restartable proc is killed and respawned (readiness is
   re-awaited after every restart); a non-restartable one fails the whole
@@ -286,7 +293,10 @@ procs({
   `{url?, port?, intervalMs?, probeTimeoutMs?, failures?, graceMs?}`
   (defaults: 5s interval — liveness polls for the proc's whole life, so the
   cadence is deliberately slower than readiness; 3 consecutive failures;
-  `graceMs: 0` delay after ready before the first probe). It arms once the
+  `graceMs: 0` delay after ready before the first probe). Use `url` here —
+  a `port` probe is only a TCP connect, and a wedged listener still accepts:
+  a server answering 503 for four seconds under `live: {port: 3001, failures:
+  3}` produced no `probe failed` line at all and the run exited 0. It arms once the
   proc is up (after `ready:`, or at spawn without one) and reports on a
   `live` stream: `probe failed (k/N) (…)`, `recovered after k failed
   probe(s) (…)` when a streak breaks, and `unhealthy after N consecutive
