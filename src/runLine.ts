@@ -1,5 +1,5 @@
 import { hasUnquotedShellMeta, stripTrailingComment } from "./args";
-import { builtins, isBuiltin, isToolBuiltin } from "./builtins";
+import { builtinInShellRefusal, builtins, isBuiltin, isToolBuiltin } from "./builtins";
 import { formatItem } from "./format";
 import * as interrupt from "./interrupt";
 import { classify, redirectTail, tokenize } from "./lexer";
@@ -128,6 +128,16 @@ export async function runLine(line: string, ctx: Context, tty?: ReplTty): Promis
     });
 
     if (isPureShell) {
+      // One crust builtin among the stages and sh reports `command not found`
+      // for a tool crust runs in-process. Check every stage, not just the head:
+      // `echo hi | mock-server spec.json` is the common shape of this mistake.
+      for (const t of tokens) {
+        const refusal = builtinInShellRefusal(t.text);
+        if (refusal !== null) {
+          process.stderr.write(`crust: ${refusal}\n`);
+          return 1;
+        }
+      }
       // At the REPL, hand the child a real terminal: cooked mode so the tty
       // itself delivers Ctrl-C (SIGINT to the foreground process group — the
       // child AND crust; we ignore ours) and interactive children (less, vim)

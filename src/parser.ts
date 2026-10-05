@@ -6,6 +6,7 @@
 
 import { expandEnv, splitArgs } from "./args";
 import { sql, sqlSource, sqlStage } from "./builtinFns/sql";
+import { builtinInShellRefusal } from "./builtins";
 import { formatItem } from "./format";
 import { registerChild } from "./interrupt";
 import { classify, rejectRedirect, tokenize } from "./lexer";
@@ -526,6 +527,10 @@ function exitFailure(proc: { exitCode: number | null }, cmd: string): ShellExitE
 }
 
 function shellSource(cmd: string): Pipeline<unknown> {
+  // Refuse a crust builtin name BEFORE spawning: sh's `command not found` reads
+  // as "crust does not have that tool". See builtinInShellRefusal.
+  const refusal = builtinInShellRefusal(cmd);
+  if (refusal) throw new Error(refusal);
   return Pipeline.of(
     (async function* () {
       const proc = Bun.spawn(["sh", "-c", cmd], {
@@ -565,6 +570,10 @@ function shellSource(cmd: string): Pipeline<unknown> {
 }
 
 function shellTransform(input: Pipeline<unknown>, cmd: string): Pipeline<unknown> {
+  // Same refusal as shellSource — this is the mid-pipeline position, where a
+  // builtin name is by far the most likely mistake.
+  const refusal = builtinInShellRefusal(cmd);
+  if (refusal) throw new Error(refusal);
   return Pipeline.of(
     (async function* () {
       const proc = Bun.spawn(["sh", "-c", cmd], {

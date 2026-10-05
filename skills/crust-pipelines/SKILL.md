@@ -117,8 +117,11 @@ flushes terminal stages (bare `stats` prints there), `exit` leaves.
   fn is a parse error; so is a trailing `parallel N`.
 - A glob source yields PATHS; `read <glob>` yields file CONTENTS. `POST`ing
   a glob posts path strings.
-- Builtins (`test-pipes`, `mock-server`, `logs`, …) cannot be piped — a
-  builtin line must contain no `|`.
+- Builtins (`test-pipes`, `mock-server`, `logs`, …) cannot be piped. A builtin
+  name in a shell context — `mock-server spec.json | grep ok`, `range(0,2) |
+  test-fixture a.ts` — refuses naming the tool instead of letting sh answer
+  `command not found` for a tool crust runs in-process. Put the builtin on its
+  own line; `logs` takes its filters at the `logs>` prompt.
 - No redirect on a crust stage. `<` / `>` mean something only on a SHELL
   stage, whose text goes to `sh` verbatim: `… | cat > out.json` saves a
   pipeline, `lines <path>` / `read <path>` feeds a file in. Anywhere else the

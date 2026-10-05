@@ -187,3 +187,86 @@ describe("a redirect on a builtin line says so instead of exec-ing", () => {
     expect(await Bun.file(`${dir}/ran.txt`).text()).toContain("real-binary-ran");
   });
 });
+
+// The same class, one step wider: a builtin NAME inside a shell context —
+// `mock-server spec.json | grep ok`, `logs tail -F app.log | grep ERROR`,
+// `range(0,2) | test-fixture a.ts`. Shell metacharacters make crust hand the
+// stage to `sh -c`, and sh answered `command not found` (127) for a tool crust
+// runs in-process. The message said crust did not have the builtin.
+describe("a crust builtin reaching sh refuses by name", () => {
+  async function run(
+    line: string,
+    opts: { cwd?: string; path?: string; checkOnly?: boolean } = {},
+  ): Promise<{ code: number; out: string }> {
+    const proc = Bun.spawn(["bun", ENTRY, opts.checkOnly ? "--check" : "-c", line], {
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+      cwd: opts.cwd,
+      env: {
+        ...process.env,
+        CRUST_CONFIG: "/dev/null",
+        CRUST_GLOBAL_PREFIX: "/tmp/crust-redirect-none",
+        PATH: opts.path ?? process.env.PATH,
+      },
+    });
+    const [stdout, stderr] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ]);
+    await proc.exited;
+    return { code: proc.exitCode ?? -1, out: stdout + stderr };
+  }
+
+  test("builtin at the head of a shell pipeline", async () => {
+    const r = await run("mock-server /nonexistent/spec.json | grep ok");
+    expect(r.code).toBe(1);
+    expect(r.out).toMatch(/mock-server is a crust builtin/);
+    expect(r.out).not.toMatch(/command not found/);
+  });
+
+  test("logs: the refusal says where its filters actually go", async () => {
+    const r = await run("logs tail -F /nonexistent/app.log | grep ERROR");
+    expect(r.code).toBe(1);
+    expect(r.out).toMatch(/logs is a crust builtin/);
+    expect(r.out).toMatch(/logs>` prompt/);
+  });
+
+  test("builtin mid-pipeline (after a crust stage) — the parser path", async () => {
+    const r = await run("range(0,2) | test-fixture /nonexistent/a.ts");
+    expect(r.code).toBe(1);
+    expect(r.out).toMatch(/test-fixture is a crust builtin/);
+    expect(r.out).not.toMatch(/command not found/);
+  });
+
+  test("builtin mid-pipeline behind a lambda", async () => {
+    const r = await run("range(0,2) | (x => x) | gen-fixtures /nonexistent/spec.json");
+    expect(r.code).toBe(1);
+    expect(r.out).toMatch(/gen-fixtures is a crust builtin/);
+  });
+
+  test("CONTROL: an ordinary shell pipeline still runs", async () => {
+    const r = await run("range(0,2) | wc -l");
+    expect(r.code).toBe(0);
+    expect(r.out.trim()).toBe("3");
+  });
+
+  test("CONTROL: --check keeps parsing the documented logs line", async () => {
+    // The guard must not fire at parse time — docs-lint and the website's
+    // Grammar stage --check `logs tail -n 0 -F app.log` on every commit.
+    const r = await run("logs tail -n 0 -F app.log", { checkOnly: true });
+    expect(r.code).toBe(0);
+  });
+
+  test("CONTROL: a real binary by a builtin's name runs mid-pipeline", async () => {
+    const fs = await import("node:fs");
+    const dir = fs.mkdtempSync("/tmp/crust-builtin-shadow-");
+    fs.writeFileSync(`${dir}/test-fixture`, "#!/bin/sh\necho real-binary-ran\n", { mode: 0o755 });
+    const r = await run("range(0,1) | test-fixture whatever.ts", {
+      cwd: dir,
+      path: `${dir}:${process.env.PATH}`,
+    });
+    expect(r.out).not.toMatch(/is a crust builtin/);
+    expect(r.out).toContain("real-binary-ran");
+  });
+});

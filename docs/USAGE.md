@@ -681,10 +681,14 @@ sequencing (`&`, `;`) operator. Quoted ones are fine, which is what makes
 `export DB='postgres://h/d?a=1&b=2'` and `alias two='a | b'` work — before the
 gate understood quotes, both silently did nothing and exited 0.
 
-A tool builtin carrying a redirect says so rather than reaching `sh` (`sh: line
-1: mock-server: command not found` read as crust not having the builtin):
-redirect the whole invocation instead — `crust -c 'mock-server spec.json' >
-mock.log`. Shell-word builtins (`cd`, `export`, `source`, …) keep sh's meaning
+A tool builtin carrying a redirect, or appearing anywhere in a shell pipeline,
+says so rather than reaching `sh` (`sh: line 1: mock-server: command not found`
+read as crust not having the builtin): redirect the whole invocation instead —
+`crust -c 'mock-server spec.json' > mock.log`. The same refusal covers every
+position, so `mock-server spec.json | grep ok` and `range(0,2) | test-fixture
+a.ts` name the builtin instead of exiting 127 — the tools run in-process, so no
+shell operator can wrap them; `logs` adds that its filters belong at the `logs>`
+prompt. Shell-word builtins (`cd`, `export`, `source`, …) keep sh's meaning
 for the operator, and a real binary installed under one of these names is never
 shadowed.
 
