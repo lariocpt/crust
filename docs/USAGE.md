@@ -548,8 +548,12 @@ with the tag keys to scope it:
 … | stats --every 5 | assert (s => !s.final  || s.p95 < 200)   # final only
 ```
 
-Both guards are also correct without `--every` (the plain summary carries
-neither key, so the threshold applies).
+**A guard needs the object it guards.** The plain summary (no `--every`)
+carries *neither* key, so `!s.window` is already true and `||` short-circuits:
+the threshold never runs and the gate passes anything. Verified —
+`range(0,9) | parallel 2 | GET :3000/health | stats | assert (s => !s.window || s.p95 < 0.1)`
+exits **0** with p95 at 4.2. Same for `!s.final ||`. Drop the guard when you
+drop `--every`; a gate that can never fail is worse than no gate.
 
 **Warmup** is a separate line in the same `-c` script — its summary simply
 isn't gated:
