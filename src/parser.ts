@@ -5,6 +5,7 @@
 // user typed. Not a code-injection risk; it's the design.
 
 import { expandEnv, splitArgs } from "./args";
+import { sql, sqlSource, sqlStage } from "./builtinFns/sql";
 import { formatItem } from "./format";
 import { registerChild } from "./interrupt";
 import { classify, tokenize } from "./lexer";
@@ -262,7 +263,7 @@ export function buildSource(kind: StageKind, ctx?: Context): Pipeline<unknown> {
       // as a single item.
       return Pipeline.of(
         (async function* () {
-          const result = await fn(...kind.args);
+          const result = await (fn === sql ? sqlSource(kind.args) : fn(...kind.args));
           if (Array.isArray(result)) {
             for (const r of result) yield r;
           } else {
@@ -398,7 +399,13 @@ function applyStage(
     case "function": {
       const fn = ctx?.functions.get(kind.name);
       if (!fn) throw new Error(`function "${kind.name}" not registered`);
-      const apply = (item: unknown) => fn(item, ...kind.args);
+      // `sql`'s query is DECLARED on the line, so it cannot be found by looking
+      // at the arguments: fn(item, ...args) with a string item would put the
+      // item in the query's slot. Dispatch the builtin by identity instead of
+      // by argument type — a user who replaced `sql` through `crust.fn` keeps
+      // the general convention their own handler was written against.
+      const apply = (item: unknown) =>
+        fn === sql ? sqlStage(kind.args, item) : fn(item, ...kind.args);
       const mapped =
         concurrency !== null && concurrency !== undefined
           ? (input.pipe(transforms.parallel(concurrency, apply) as never) as Pipeline<unknown>)

@@ -1632,7 +1632,7 @@ Crust ships a small set of `crust.fn`-registered helpers. They work as both pipe
 | `salt [bytes] [hex\|base64\|base64url]` | Cryptographically random bytes. Defaults: 16 bytes, hex. `salt 32 base64`. |
 | `jwt sign \| verify \| decode --secret <s>` | HS256 JWT. Reads `$JWT_SECRET` if `--secret` omitted. Item can be a JSON string (sign) or a token (verify/decode). |
 | `bundle <entry> [--outdir \| --outfile \| --minify \| --sourcemap \| --target=bun\|browser\|node]` | Wraps `Bun.build` for one-shot bundling. With `--outfile`, writes the first artifact and returns `{outfile, bytes}`. |
-| `sql "<query>" [params…]` | Runs a SQL query via Bun's SQL client using `$DATABASE_URL`. **Streams one item per row in both positions** — as a source and mid-pipeline. Mid-pipeline the upstream item **binds as the first parameter** when the line declares none, so `range(1,1) \| sql "SELECT … WHERE id = ?"` queries id 1; an explicitly declared parameter still wins. |
+| `sql "<query>" [params…]` | Runs a SQL query via Bun's SQL client using `$DATABASE_URL`. **Streams one item per row in both positions** — as a source and mid-pipeline. **The query is always the one you wrote on the line**, whatever the upstream item is; mid-pipeline that item **binds as the first parameter** when the line declares none, so `range(1,1) \| sql "SELECT … WHERE id = ?"` queries id 1 and `"beta" \| sql "SELECT … WHERE name = ?"` queries `'beta'`. An explicitly declared parameter still wins. |
 | `wait <target> [--timeout <dur>] [--interval <dur>] [--probe-timeout <dur>]` | Blocks until a target answers, then emits `{target, ready, ms, attempts}`. Target: `:3001/health` / `http(s)://…` (ready = any 2xx) or `port:5432` (TCP connect). Durations like `300ms`/`30s`/`2m` (defaults 30s / 500ms). `--probe-timeout` caps each probe (default `min(interval*4, 2s)`) — raise it for slow-to-accept targets. Not ready in time → error, exit 1 — CI-friendly. |
 
 Examples:
@@ -1648,6 +1648,11 @@ echo eyJhbGciOiJIUzI1Ni… | jwt verify --secret k     # { sub: "42" }
 
 # SQL as a streaming source — pipe rows downstream
 sql "select id, email from users limit 5" | (r => r.email)
+
+# Mid-pipeline — the piped value is a PARAMETER, never the query. Handy when
+# the value only exists upstream (and it stays a parameter even when the row
+# it came from is a string).
+range(2,2) | (n => "beta") | sql "SELECT name FROM t WHERE name = ?" | assert (r => r.name === "beta")
 
 # Block a CI step until the app is up (exit 1 if it never is)
 wait :3001/health --timeout 30s

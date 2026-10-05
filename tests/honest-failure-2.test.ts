@@ -143,6 +143,66 @@ describe("sql binds the piped item", () => {
     );
     expect(r.code).toBe(0);
   });
+
+  test("a string item binds as the parameter instead of becoming the query", async () => {
+    // The parser calls a mid-pipeline function as fn(item, ...declaredArgs),
+    // and `sql` decided which argument was the QUERY by testing whether the
+    // first one was a string. So a string item WON the argument slot: the
+    // declared query was thrown away and the item was executed instead.
+    const r = await cli('range(2,2) | (n => "beta") | sql "SELECT name FROM t WHERE name = ?"', {
+      DATABASE_URL: db,
+    });
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("beta");
+  });
+
+  test("the declared query is never replaced by upstream text", async () => {
+    // The same defect with a nastier shape: upstream data that happens to be
+    // valid SQL ran as the query, and the line exited 0 with rows the user
+    // never asked for — a false pass. `99`/`hijack` must never appear.
+    const r = await cli(
+      'range(1,1) | (n => "SELECT 99 AS hijack") | sql "SELECT name FROM t WHERE id = 1"',
+      { DATABASE_URL: db },
+    );
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("alpha");
+    expect(r.stdout).not.toMatch(/hijack|99/);
+  });
+
+  test("an empty upstream value is a parameter, not a missing query", async () => {
+    // A blank item used to reach the driver as the query ("SQL string mustn't
+    // be blank"), so a legitimately empty value looked like a malformed line.
+    const r = await cli('range(1,1) | (n => "") | sql "SELECT name FROM t WHERE name = ?"', {
+      DATABASE_URL: db,
+    });
+    expect(r.code).toBe(0);
+    expect(r.out).not.toMatch(/blank/i);
+    expect(r.stdout.trim()).toBe("");
+  });
+
+  test("a declared parameter still wins over a string item", async () => {
+    const r = await cli(
+      'range(2,2) | (n => "beta") | sql "SELECT name FROM t WHERE name = ?" "alpha"',
+      { DATABASE_URL: db },
+    );
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("alpha");
+    expect(r.stdout).not.toContain("beta");
+  });
+
+  test("CONTROL: every other registered fn still gets fn(item, ...args)", async () => {
+    // `sql` is special-cased in the parser, so pin the general convention it
+    // deliberately does NOT change: item first, then the line's declared args.
+    const c = ctx();
+    c.functions.set("join3", (item: unknown, ...args: unknown[]) =>
+      [item, ...args].map(String).join("/"),
+    );
+    const out: unknown[] = [];
+    for await (const item of parse('range(3,3) | (n => `s${n}`) | join3 "a" "b"')(c).lines()) {
+      out.push(item);
+    }
+    expect(out).toEqual(["s3/a/b"]);
+  });
 });
 
 describe("bundle uses the shared flag parser", () => {
