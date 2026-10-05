@@ -1444,6 +1444,13 @@ mutually exclusive with `--stateful`. `--strict` composes with `--proxy`:
 the additionalProperties check then applies to both request and response
 bodies — recorded, never enforced, like every proxy-mode violation.
 
+Turn the findings into a gate. The decode stage is required — an HTTP stage
+hands over the response object, so `.violations` is `undefined` without it:
+
+```crust
+GET :4000/__crust/violations | (r => r.json()) | (v => v.violations.filter(x => x.direction === "response")) | assert (a => a.length === 0)
+```
+
 ```bash
 mock-server --swagger ./openapi.yaml --port 4000 --validate
 mock-server --swagger ./openapi.yaml --port 4000 \
