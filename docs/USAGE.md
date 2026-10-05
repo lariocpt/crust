@@ -146,6 +146,23 @@ The shell parser classifies each `|`-separated stage by looking at its first tok
 
 Single-stage pure-shell lines (`ls -la`, `git status`) are short-circuited: crust execs `sh -c` with **inherited stdio** so colors, paging, and TUIs work normally. Mixed pipelines stream items through TS land.
 
+**Redirects belong to the shell stage.** `<` and `>` are not crust syntax — a
+shell stage's text is handed to `sh -c` verbatim, so its redirects are real, and
+that is the way to save a pipeline. Any other stage carrying one stops the line
+instead of guessing, because what it used to do varied: an HTTP stage dropped it
+(request ran, nothing written, exit 0), a lambda compiled it into a regex literal
+with invalid flags, and a `crust.fn` received `>` plus the path as arguments.
+
+```bash
+range(0, 3) | (x => `v${x}`) | cat > versions.txt   # save: end on a shell stage
+read **/*.log | grep ERROR > errors.txt             # save: same, from a file source
+lines body.json | POST :3000/users                  # feed in: start from a file source
+```
+
+    crust: `> out.json`: crust has no redirect except on a shell stage, whose text
+    goes to sh as-is — a http stage would read it as data. to save a pipeline, end
+    the line with a shell stage instead: | cat > out.json
+
 ---
 
 ## Shell-line syntax
@@ -644,11 +661,18 @@ logs <source>                   # interactive log search over a held stream
 skills <list|install>           # install the embedded agent skills
 ```
 
-Builtins run in-process. They dispatch when the first token matches a builtin
-name **and** the line has no *unquoted* pipe (`|`), redirect (`<`, `>`), or
+Builtins run in-process. They dispatch when the first token matches a tool
+builtin name **and** the line has no *unquoted* pipe (`|`), redirect (`<`, `>`), or
 sequencing (`&`, `;`) operator. Quoted ones are fine, which is what makes
 `export DB='postgres://h/d?a=1&b=2'` and `alias two='a | b'` work — before the
 gate understood quotes, both silently did nothing and exited 0.
+
+A tool builtin carrying a redirect says so rather than reaching `sh` (`sh: line
+1: mock-server: command not found` read as crust not having the builtin):
+redirect the whole invocation instead — `crust -c 'mock-server spec.json' >
+mock.log`. Shell-word builtins (`cd`, `export`, `source`, …) keep sh's meaning
+for the operator, and a real binary installed under one of these names is never
+shadowed.
 
 Builtin lines accept sh-style trailing comments, same as shell stages:
 `dotenv .env.test # matrix run`. Only an unquoted `#` that starts a word
@@ -1878,6 +1902,9 @@ Honest about what doesn't work yet:
   crust lines; multi-line bash constructs (`if`/`fi`, loops) won't survive
   line-by-line execution — run those with `sh file.sh`.
 - **No `$(...)` substitution across stages.** Within a single shell stage it works (delegated to `sh`).
+- **No redirects on crust stages.** `<` / `>` belong to the shell stage, whose
+  text goes to `sh` as-is; anywhere else the line is refused. Save with `… | cat
+  > f`, feed in from `lines <path>` / `read <path>`.
 - **No `|>` operator and no `[0..9]` range literal.** Need a Bun loader; v0.2.
 - **No syntax highlighting in the editor.** v0.1.5.
 - **No fuzzy history search (Ctrl-R).** v0.2.

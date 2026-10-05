@@ -56,7 +56,78 @@ export function tokenize(line: string): Token[] {
   return stages.map((s) => ({ kind: "stage" as const, text: s.trim() }));
 }
 
+/**
+ * The unquoted, depth-0 `<` or `>` in a stage — a redirect. Only a SHELL stage
+ * has one: its text is handed to `sh -c` verbatim, so `cat > f` redirects for
+ * real. For every other stage kind the operator is just trailing text, and what
+ * it used to do varied, none of it a useful answer: an http stage dropped it
+ * (request ran, file never written, exit 0), a lambda compiled it into JS
+ * where `/tmp/f` opened a regex literal whose `f` were invalid flags, and a
+ * registered fn received `>` and the path as query parameters.
+ *
+ * Returns the operator and everything after it, or null.
+ */
+export function redirectTail(text: string): string | null {
+  let depth = 0;
+  let quote: string | null = null;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]!;
+    if (quote) {
+      // Same escape rule as tokenize: inside `"` a backslash takes the next
+      // char, so `{"note":"say \"hi\" > x"}` stays one quoted run.
+      if (quote === '"' && c === "\\" && i + 1 < text.length) {
+        i++;
+        continue;
+      }
+      if (c === quote) quote = null;
+      continue;
+    }
+    if (c === '"' || c === "'" || c === "`") {
+      quote = c;
+      continue;
+    }
+    if (c === "(" || c === "[") {
+      depth++;
+      continue;
+    }
+    if (c === ")" || c === "]") {
+      depth--;
+      continue;
+    }
+    if (depth === 0 && (c === "<" || c === ">")) return text.slice(i);
+  }
+  return null;
+}
+
+function refusal(where: string, tail: string): Error {
+  const target = tail.trim();
+  const hint = target.startsWith("<")
+    ? `to feed a file in, start the line from a file source instead: lines ${target.slice(1).trim()}`
+    : `to save a pipeline, end the line with a shell stage instead: | cat ${target}`;
+  return new Error(
+    `\`${target}\`: crust has no redirect except on a shell stage, whose text goes to sh as-is — a ${where} would read it as data. ${hint}`,
+  );
+}
+
+/**
+ * Refuse a redirect that the stage named by `where` would read as data.
+ * Exported because registered fns are demoted from shell stages in the parser
+ * (the lexer is ctx-free), so `sql "…" > f` is still `shell` at classify time.
+ */
+export function rejectRedirect(text: string, where: string): void {
+  const tail = redirectTail(text);
+  if (tail) throw refusal(where, tail);
+}
+
 export function classify(text: string): StageKind {
+  const kind = classifyStage(text);
+  // Checked after classification, not before: `grep ERROR > combined.log` is
+  // a redirect that WORKS, precisely because it classifies as a shell stage.
+  if (kind.kind !== "shell") rejectRedirect(text, `${kind.kind} stage`);
+  return kind;
+}
+
+function classifyStage(text: string): StageKind {
   const t = text.trim();
 
   if (t.startsWith('"') || t.startsWith("'")) {

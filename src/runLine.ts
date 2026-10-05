@@ -1,8 +1,8 @@
 import { hasUnquotedShellMeta, stripTrailingComment } from "./args";
-import { builtins, isBuiltin } from "./builtins";
+import { builtins, isBuiltin, isToolBuiltin } from "./builtins";
 import { formatItem } from "./format";
 import * as interrupt from "./interrupt";
-import { classify, tokenize } from "./lexer";
+import { classify, redirectTail, tokenize } from "./lexer";
 import { parse, ShellExitError } from "./parser";
 import { shellEnv } from "./shellPath";
 import type { Context } from "./types";
@@ -96,6 +96,23 @@ export async function runLine(line: string, ctx: Context, tty?: ReplTty): Promis
     } finally {
       dispose?.();
     }
+  }
+
+  // The gate above steps aside for shell metacharacters so `export DB='…&b=2'`
+  // and friends still reach sh. A TOOL builtin NAME carrying a redirect is not
+  // one of those: `mock-server spec.json > out.log` fell through to `sh -c`,
+  // answered `sh: line 1: mock-server: command not found` and exited 127 — which
+  // reads as crust not having the builtin. Tools run in-process, so the redirect
+  // has to wrap the whole invocation. `Bun.which` keeps this from shadowing a
+  // real binary by one of these names (a user's `dotenv` stays theirs).
+  const redirect = isToolBuiltin(exHead) ? redirectTail(expanded) : null;
+  if (redirect !== null && !Bun.which(exHead)) {
+    const rest = expanded.slice(0, expanded.length - redirect.length).trim();
+    process.stderr.write(
+      `crust: ${exHead} is a crust builtin, it runs in-process and cannot redirect. ` +
+        `Redirect the whole invocation instead: crust -c '${rest}' ${redirect.trim()}\n`,
+    );
+    return 1;
   }
 
   try {

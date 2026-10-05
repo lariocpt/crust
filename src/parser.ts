@@ -8,7 +8,7 @@ import { expandEnv, splitArgs } from "./args";
 import { sql, sqlSource, sqlStage } from "./builtinFns/sql";
 import { formatItem } from "./format";
 import { registerChild } from "./interrupt";
-import { classify, tokenize } from "./lexer";
+import { classify, rejectRedirect, tokenize } from "./lexer";
 import { Pipeline } from "./pipeline";
 import { shellEnv } from "./shellPath";
 import * as sources from "./sources";
@@ -157,6 +157,10 @@ function resolveKind(text: string, ctx?: Context): StageKind {
     const parts = splitArgs(text.trim());
     const head = parts[0]!;
     if (ctx.functions.has(head)) {
+      // `sql "…" > out.json` would otherwise hand `>` and the path to the fn
+      // as query parameters. Same refusal the lexer raises, at the point where
+      // this stage stops being a shell stage.
+      rejectRedirect(text, `${head} stage`);
       // Env-expand fn args so `sql "..." "prefix $RUN_ID"` works in .pipes
       // files. SQL positional params ($1, $2) survive — a digit can't start
       // an env var name.

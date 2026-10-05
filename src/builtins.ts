@@ -362,3 +362,25 @@ export function renderBuiltinList(): string {
 export function isBuiltin(name: string): boolean {
   return name in builtins;
 }
+
+/**
+ * The builtins crust implements as SHELL words — sh has its own version of each,
+ * so `source .env > /dev/null` is a line where the redirect means what sh says
+ * it means. The tools (`mock-server`, `test-fixture`, `logs`…) have no shell
+ * counterpart, so a redirect on one of those can only be a mistake: it used to
+ * reach sh and answer `mock-server: command not found`.
+ */
+const SHELL_WORD_BUILTINS = new Set([
+  "cd",
+  "export",
+  "alias",
+  "unalias",
+  "source",
+  "exit",
+  "history",
+  "help",
+]);
+
+export function isToolBuiltin(name: string): boolean {
+  return isBuiltin(name) && !SHELL_WORD_BUILTINS.has(name);
+}

@@ -119,6 +119,12 @@ flushes terminal stages (bare `stats` prints there), `exit` leaves.
   a glob posts path strings.
 - Builtins (`test-pipes`, `mock-server`, `logs`, …) cannot be piped — a
   builtin line must contain no `|`.
+- No redirect on a crust stage. `<` / `>` mean something only on a SHELL
+  stage, whose text goes to `sh` verbatim: `… | cat > out.json` saves a
+  pipeline, `lines <path>` / `read <path>` feeds a file in. Anywhere else the
+  line is refused — an http stage used to swallow the operator (request ran,
+  nothing written, exit 0). A builtin carrying one refuses too, and the fix is
+  redirecting the whole call: `crust -c 'mock-server spec.json' > mock.log`.
 - Native grep patterns are JS regexes: quoted `'a|b'` ALTERNATES (ERE)
   where BRE grep matched the literal — use `grep -F 'a|b'` for the literal.
 - `stdin` is single-shot per process: inside a bare `cmd | crust` script it
