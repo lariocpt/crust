@@ -60,6 +60,11 @@ beforeAll(() => {
           `<urlset><url><loc>${base}/anchor-bad</loc></url><url><loc>${base}/about</loc></url></urlset>`,
         );
       }
+      // /anchor-bad alone: with --no-recurse its link destinations are fetched
+      // for status only, never parsed, so their ids are unknown.
+      if (p === "/sitemap-anchor-only.xml") {
+        return xml(`<urlset><url><loc>${base}/anchor-bad</loc></url></urlset>`);
+      }
       if (p === "/sitemap-redirect.xml") {
         return xml(
           `<urlset><url><loc>${base}/redirect-old</loc></url><url><loc>${base}/about</loc></url></urlset>`,
@@ -185,6 +190,59 @@ describe("verify-web-links CLI", () => {
 
     const r2 = await runCli(["--site-map-url", `${base}/sitemap-anchor.xml`, "--no-anchors"]);
     expect(r2.code).toBe(0);
+  });
+
+  test("--no-recurse invents no missing anchors and reports what it skipped", async () => {
+    // /about is reachable but NOT a seed here, so with --no-recurse it is
+    // fetched for status only and its ids are unknown. Empty `ids` must not be
+    // read as "anchor missing" — both fragments were reported missing before.
+    const r = await runCli(["--site-map-url", `${base}/sitemap-anchor-only.xml`, "--no-recurse"]);
+    expect(r.code).toBe(0);
+    expect(r.stdout).not.toContain("missing-anchor");
+    expect(r.stdout).toContain("#fragment link(s) NOT checked");
+
+    // Same skip when the destination is excluded outright (never fetched).
+    const r2 = await runCli([
+      "--site-map-url",
+      `${base}/sitemap-anchor.xml`,
+      "--exclude",
+      "/about",
+    ]);
+    expect(r2.code).toBe(0);
+    expect(r2.stdout).not.toContain("missing-anchor");
+    expect(r2.stdout).toContain("#fragment link(s) NOT checked");
+
+    // Control: recurse into the same sitemap and /about IS parsed — #nope is a
+    // real failure and nothing is skipped. Without this the fix could just
+    // disable anchor checking.
+    const c = await runCli(["--site-map-url", `${base}/sitemap-anchor-only.xml`]);
+    expect(c.code).toBe(1);
+    expect(c.stdout).toContain("missing-anchor");
+    expect(c.stdout).toContain("#nope");
+    expect(c.stdout).not.toContain("#fragment link(s) NOT checked");
+  });
+
+  test('--json distinguishes "no ids" from "never read the page"', async () => {
+    const r = await runCli([
+      "--site-map-url",
+      `${base}/sitemap-anchor-only.xml`,
+      "--no-recurse",
+      "--json",
+    ]);
+    expect(r.code).toBe(0);
+    const parsed = JSON.parse(r.stdout);
+    expect(parsed.totals.anchorsSkipped).toBe(2);
+    const dest = parsed.results[`${base}/about`];
+    expect(dest.status).toBe(200);
+    expect(dest.parsed).toBe(false);
+    expect(dest.ids).toEqual([]);
+
+    // Control: the same page as a seed is parsed, so ids are real.
+    const c = await runCli(["--site-map-url", `${base}/sitemap-anchor.xml`, "--json"]);
+    const cParsed = JSON.parse(c.stdout);
+    expect(cParsed.results[`${base}/about`].parsed).toBe(true);
+    expect(cParsed.results[`${base}/about`].ids).toContain("team");
+    expect(cParsed.totals.anchorsSkipped).toBe(0);
   });
 
   test("redirect chain → exit 1; --no-redirect-warnings → exit 0", async () => {

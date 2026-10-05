@@ -86,6 +86,7 @@ function placeholder(url: string): CrawlResult {
     contentType: "",
     ids: [],
     links: [],
+    parsed: false,
     meta: { byKey: {} },
     durationMs: 0,
   };
@@ -120,6 +121,7 @@ async function process(
       fetched.status < 400
     ) {
       const ext = await extractFromHtml(fetched.response);
+      result.parsed = true;
       result.ids = [...ext.ids];
       result.meta = ext.meta;
       const refs: LinkRef[] = [];

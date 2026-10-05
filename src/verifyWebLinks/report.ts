@@ -2,10 +2,16 @@ import type { CrawlResult, Failure, VerifyReport } from "./types";
 
 export function renderText(report: VerifyReport): string {
   const lines: string[] = [];
-  const { pages, assets, failures, dropped } = report.totals;
+  const { pages, assets, failures, dropped, anchorsSkipped } = report.totals;
   lines.push(`verify-web-links: ${pages} page(s), ${assets} asset(s), ${failures} failure(s)`);
   if (dropped > 0) {
     lines.push(`  note: --max-pages reached — ${dropped} discovered URL(s) NOT checked`);
+  }
+  if (anchorsSkipped > 0) {
+    lines.push(
+      `  note: ${anchorsSkipped} #fragment link(s) NOT checked — crust never read the destination's HTML ` +
+        `(--no-recurse / --exclude / --max-depth, or an off-origin link without --include-external)`,
+    );
   }
   if (failures > 0) {
     lines.push("");
@@ -36,6 +42,7 @@ export function renderJson(report: VerifyReport): string {
       redirectChain: r.redirectChain,
       contentType: r.contentType,
       ids: r.ids,
+      parsed: r.parsed,
       meta: r.meta,
       durationMs: r.durationMs,
       linkCount: r.links.length,

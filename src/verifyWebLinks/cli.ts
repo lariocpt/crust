@@ -78,7 +78,7 @@ export async function runCli(args: string[]): Promise<number> {
   }
 
   const { results, dropped } = await crawl(seeds, origin, opts);
-  const failures = collectFailures(results, fixtures, opts);
+  const { failures, anchorsSkipped } = collectFailures(results, fixtures, opts);
 
   let pages = 0;
   let assets = 0;
@@ -90,7 +90,7 @@ export async function runCli(args: string[]): Promise<number> {
   const report: VerifyReport = {
     results,
     failures,
-    totals: { pages, assets, failures: failures.length, dropped },
+    totals: { pages, assets, failures: failures.length, dropped, anchorsSkipped },
   };
 
   if (opts.json) {
@@ -113,8 +113,9 @@ function collectFailures(
   results: Map<string, import("./types").CrawlResult>,
   fixtures: MetaFixture[],
   opts: VerifyOpts,
-): Failure[] {
+): { failures: Failure[]; anchorsSkipped: number } {
   const failures: Failure[] = [];
+  let anchorsSkipped = 0;
 
   for (const r of results.values()) {
     if (r.error) {
@@ -146,8 +147,22 @@ function collectFailures(
         if (!frag) continue;
         const targetUrl = stripFragment(ref.resolved);
         const target = results.get(targetUrl);
-        if (!target || target.error) continue;
+        if (!target || target.error) {
+          // Never fetched (excluded, off-origin without --include-external):
+          // crust cannot say anything about the fragment. Skipping silently is
+          // what lets a report claim a clean anchor check — count it.
+          anchorsSkipped++;
+          continue;
+        }
         if (target.status < 200 || target.status >= 400) continue;
+        // Fetched, but its body was never parsed as a page — `--no-recurse`,
+        // an `--exclude`d destination, or a depth cap. `ids` is empty because
+        // nothing read the document, not because the id is missing: this used
+        // to report every fragment on such a page as missing-anchor.
+        if (!target.parsed) {
+          anchorsSkipped++;
+          continue;
+        }
         if (!target.ids.includes(frag)) {
           failures.push({
             kind: "missing-anchor",
@@ -207,7 +222,7 @@ function collectFailures(
     }
   }
 
-  return failures;
+  return { failures, anchorsSkipped };
 }
 
 export const SPEC: FlagSpec = {
