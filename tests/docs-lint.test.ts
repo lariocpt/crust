@@ -222,14 +222,20 @@ describe("the lint can actually fail", () => {
     // parse() calls anything ok. `crust --check` asks sh with `-n`; the docs
     // lint must too, or flushing the buffer above only counts the mistake.
     // `-n` parses and reports without executing (see src/index.ts:184-193).
-    expect(await shStageProblem("range(1,")).toMatch(/syntax error/);
+    expect(await shStageProblem("range(1,")).toMatch(/syntax error/i);
     expect(await shStageProblem("ls -1 *.json | wc -l")).toBeNull();
     // A builtin head must never be handed to sh, and this is why: sh rejects the
     // whole line, while crust dispatches `logs` before parsing and holds that
     // expression as the stream (`--check` rc 0; runs in a pty). parse() alone
     // refuses it — F16's refusal — because on its own it would be a shell stage.
+    // Match case-insensitively on purpose: /bin/sh is dash on the CI runner and
+    // bash here, and they word the same rejection differently —
+    //   dash: sh: 1: Syntax error: word unexpected (expecting ")")
+    //   bash: sh: -c: line 1: syntax error near unexpected token `1,'
+    // (CI proved the first). Only the exit code is load-bearing, which is also
+    // why shStageProblem returns text for the human and the caller tests it.
     expect(isBuiltin("logs")).toBe(true);
-    expect(await shStageProblem(`logs procs({web: "echo hi"})`)).toMatch(/syntax error/);
+    expect(await shStageProblem(`logs procs({web: "echo hi"})`)).toMatch(/syntax error/i);
   });
 
   test("the gate rejects a truncated example end to end", async () => {
