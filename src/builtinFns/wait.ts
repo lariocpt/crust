@@ -58,6 +58,19 @@ export async function wait(...args: unknown[]): Promise<{
   }
 
   const res = await awaitReady(parsed, { intervalMs, timeoutMs, probeTimeoutMs });
-  if (!res) throw new Error(`wait: ${target} not ready after ${timeout}`);
+  if (!res) {
+    // A bare ":3000" is an HTTP probe of "/". A spec-driven server — mock-server,
+    // most APIs — has no root route, so it answers 404 forever and readiness never
+    // fires while the process is perfectly up (measured: `wait :4481` timed out at
+    // 30s while `GET :4481/pets` returned 200 the whole time). Name the probe and
+    // both escapes, or the user reads it as a server that boots slowly.
+    const rootProbe = target.startsWith(":") && !target.slice(1).includes("/");
+    const hint = rootProbe
+      ? ` — ":${target.slice(1)}" probes the root path, and an HTTP target is ready only ` +
+        `on a 2xx. Point it at a health path (":${target.slice(1)}/health") or use ` +
+        `"port:${target.slice(1)}" for a TCP connect`
+      : "";
+    throw new Error(`wait: ${target} not ready after ${timeout}${hint}`);
+  }
   return { target, ready: true, ms: res.ms, attempts: res.attempts };
 }

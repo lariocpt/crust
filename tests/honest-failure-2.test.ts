@@ -564,3 +564,53 @@ describe("a trailing backslash continues the line", () => {
     expect(r.out).toContain("empty stage");
   });
 });
+
+describe("wait says which probe it is running", () => {
+  // Measured against a real mock-server: `wait :4481` never became ready and
+  // exited 1 after the full timeout while `GET :4481/pets` answered 200 the
+  // whole time. An HTTP target is ready only on a 2xx, and a bare ":PORT"
+  // probes "/", which a spec-driven server has no route for — so the honest
+  // reading (the server is up, the path does not exist) was invisible and the
+  // run looked like a slow boot. `port:PORT` and a real path both pass.
+  let port = 0;
+  let server: ReturnType<typeof Bun.serve> | null = null;
+
+  beforeAll(() => {
+    server = Bun.serve({
+      port: 0,
+      fetch(req) {
+        return new Response(null, { status: new URL(req.url).pathname === "/health" ? 200 : 404 });
+      },
+    });
+    port = server.port ?? 0;
+  });
+  afterAll(() => server?.stop());
+
+  test("a 404 at / is not readiness — and the message says where it looked", async () => {
+    const r = await cli(`wait :${port} --timeout 2s --interval 200ms`);
+    expect(r.code).toBe(1);
+    expect(r.out).toContain("not ready after");
+    expect(r.out).toContain("root path");
+    expect(r.out).toContain("2xx");
+    expect(r.out).toContain(`port:${port}`);
+  });
+
+  test("CONTROL: a real health path still waits and returns", async () => {
+    const r = await cli(`wait :${port}/health --timeout 5s`);
+    expect(r.out + r.code, r.out).toContain('"ready":true');
+    expect(r.code).toBe(0);
+  });
+
+  test("CONTROL: port:PORT is readiness by TCP connect, not by status", async () => {
+    const r = await cli(`wait port:${port} --timeout 5s`);
+    expect(r.code, r.out).toBe(0);
+    expect(r.out).toContain(`port:${port}`);
+  });
+
+  test("CONTROL: a path target that never answers gets no misleading hint", async () => {
+    const r = await cli(`wait :${port}/nope --timeout 2s --interval 200ms`);
+    expect(r.code).toBe(1);
+    expect(r.out).toContain("not ready after");
+    expect(r.out).not.toContain("probes the root path");
+  });
+});

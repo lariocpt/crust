@@ -33,6 +33,12 @@ description: How to invoke crust and read its answer — the run modes (`-c`, sc
 `timeout(1)` — your harness — killed crust. Give `wait`/`load`/`procs` probes a
 generous outer timeout, and when testing cancellation signal the real bun PID.
 
+A **bare `wait :3000` probes `/`**, and readiness means a **2xx** — a mock server
+or an API with no root route 404s forever, so the line fails after the full
+timeout on a server that is perfectly up. Use a real health path (`wait
+:3000/health`) or `wait port:3000` for a TCP connect; crust says so in the
+failure message now, because "not ready" alone reads like a slow boot.
+
 ### The last command wins (the one CI trap here)
 
 A line made **entirely of shell stages** is handed to sh as one `sh -c` string,
@@ -48,7 +54,7 @@ failing shell stage propagates. So a gate must **end on a crust stage**:
 
 ```crust
 # a run.crust: blanks and `#` are skipped, lines run in order, first failure stops the file
-wait :3000
+wait :3000/health
 range(1,99) | parallel 10 | GET http://localhost:3000/items | expect 200 | stats
 GET http://localhost:3000/items | assert (x => x.length > 0)
 # a trailing `\` continues the line — the only way to write a pipeline over
