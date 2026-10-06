@@ -71,6 +71,15 @@ crust -c 'src/**/*.ts | wc -l'
 | `crust -h`, `--help` | Show usage. |
 | `crust -V`, `--version` | Show version. |
 
+### How to read the examples in this document
+
+Every example that starts with a tool name — `mock-server ./openapi.yaml -p4000`,
+`test-fixture fixtures/*.crust.ts`, `skills list` — is a **crust line**, not a shell command.
+Run it at the REPL, or as `crust -c '<line>'`. A builtin is **not** an argv subcommand: crust
+treats every positional as a script file, so `crust mock-server -p4000 …` exits **2**
+(`script arguments are not supported`) and `crust verify-web-links` alone exits **127**
+(`cannot read verify-web-links`), which looks like a missing binary but is not one.
+
 ### Continuing a line
 
 A line ending in `\` continues on the next one. The two lines are joined with a
