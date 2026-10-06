@@ -44,16 +44,14 @@ function pickPositionals(args: unknown[]): unknown[] {
 }
 
 export function jwt(...args: unknown[]): unknown {
-  const head = args[0];
-  let op: Op;
-  let rest: unknown[];
-  if (head === "sign" || head === "verify" || head === "decode") {
-    op = head;
-    rest = args.slice(1);
-  } else {
-    op = "sign";
-    rest = args;
-  }
+  // The pipeline calls a registered function as `fn(item, ...args)`, so mid-pipeline
+  // the ITEM is args[0] and the op sits after it. It used to be read from args[0]
+  // only, which meant the documented line `echo <token> | jwt verify --secret k`
+  // missed the op, fell through to the `sign` default, and SIGNED the token while
+  // exiting 0 — a verification that minted a credential instead of checking one.
+  const opIndex = args.findIndex((a) => a === "sign" || a === "verify" || a === "decode");
+  const op: Op = opIndex === -1 ? "sign" : (args[opIndex] as Op);
+  const rest = opIndex === -1 ? args : args.filter((_, i) => i !== opIndex);
   const positionals = pickPositionals(rest);
   const value = positionals[0];
 

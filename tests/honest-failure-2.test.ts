@@ -4,8 +4,9 @@
 // requests reported success; a mistyped `-t 1ms` was silently ignored so the
 // request ran untimed; `sql` mid-pipeline threw away the piped item and
 // returned []; `bundle --outdir --minify` created a directory literally named
-// "--minify"; `procs` deleted blank lines from its children's output; and two
-// globals the docs promised did not exist.
+// "--minify"; `procs` deleted blank lines from its children's output; two
+// globals the docs promised did not exist; and `jwt verify` mid-pipeline SIGNED
+// the token it was handed and exited 0.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -315,5 +316,48 @@ describe("stats percentiles stay honest under the histogram", () => {
     const s = out[out.length - 1]!;
     expect(s.p99).toBeLessThan(100);
     expect(s.p99).toBeGreaterThanOrEqual(99);
+  });
+});
+
+describe("jwt verify mid-pipeline", () => {
+  // `fn(item, ...args)` puts the ITEM first, so the op sat in args[1] — and the
+  // op was read from args[0] only. The line the docs print,
+  // `echo <token> | jwt verify --secret k`, therefore missed the op, took the
+  // `sign` default, and printed a freshly SIGNED token with exit 0.
+  let token: string;
+  beforeAll(async () => {
+    const r = await cli(`jwt sign '{"sub":"42"}' --secret k`);
+    expect(r.code).toBe(0);
+    token = r.stdout.trim().split("\n").pop()!;
+  });
+
+  test("verifies the piped token instead of signing it", async () => {
+    const r = await cli(`echo ${token} | jwt verify --secret k`);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain('"sub":"42"');
+    // A signed token would be three dot-separated parts; the payload is not.
+    expect(r.stdout.trim().split(".")).toHaveLength(1);
+  });
+
+  test("a wrong secret fails loudly rather than passing", async () => {
+    const r = await cli(`echo ${token} | jwt verify --secret nope`);
+    expect(r.code).toBe(1);
+    expect(r.out).toContain("signature mismatch");
+  });
+
+  test("decode works mid-pipeline too", async () => {
+    const r = await cli(`echo ${token} | jwt decode`);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain('"sub":"42"');
+  });
+
+  test("the op-first forms are unchanged", async () => {
+    const verify = await cli(`jwt verify ${token} --secret k`);
+    expect(verify.code).toBe(0);
+    expect(verify.stdout).toContain('"sub":"42"');
+    // No op at all still means sign, with the item as payload.
+    const sign = await cli(`echo '{"sub":"7"}' | jwt --secret k`);
+    expect(sign.code).toBe(0);
+    expect(sign.stdout.trim().split(".")).toHaveLength(3);
   });
 });
