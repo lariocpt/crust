@@ -766,7 +766,7 @@ The full pipeline surface is globals **wherever crust starts its runtime**: ever
 crust line (`-c`, REPL, stdin, `.crust` files), `~/.config/crust/init.ts`, and any
 `.ts`/`.js` file crust imports (`source file.ts`). A file run by plain `bun
 script.ts` never starts crust, so it gets none of them — import what you need
-from the modules below instead. Crust assigns these as globals at startup:
+from the modules below instead. Crust exposes these as globals when it starts up:
 
 ```ts
 Pipeline             // class — the unified stream abstraction

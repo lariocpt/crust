@@ -108,6 +108,8 @@ describe("documented examples parse", () => {
     ["skills/crust-load-testing/SKILL.md", 5],
     ["skills/crust-mock-server/SKILL.md", 3],
     ["skills/crust-procs/SKILL.md", 3],
+    ["skills/crust-logs/SKILL.md", 4],
+    ["skills/crust-verify-web-links/SKILL.md", 8],
   ])("%s", async (rel, minLines) => {
     const text = await Bun.file(`${import.meta.dir}/../${rel}`).text();
     const lines = crustLines(text);
