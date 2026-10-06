@@ -18,6 +18,35 @@ import type { Context, StageKind } from "./types";
 
 export function parse(line: string): (ctx?: Context) => Pipeline<unknown> {
   const tokens = tokenize(line);
+  // An empty stage is never something crust should be quiet about. It classified
+  // as a shell stage with no command, so `sh -c ""` READ the pipeline and
+  // discarded it: `load 5s 100/s |` reported a clean run at exit 0 having thrown
+  // away every sample. `||` splits the same way, and the command on its right
+  // never ran at all (a shell transform with zero items never spawns) while the
+  // line still exited 0 — a fallback that silently doesn't fall back.
+  //
+  // A line that is entirely blank keeps its old no-op behaviour: scripts, piped
+  // stdin and --check all skip blank lines before parse(), so the only way to
+  // reach here with nothing is `crust -c ''`.
+  if (tokens.length > 1) {
+    for (let i = 0; i < tokens.length; i++) {
+      if (tokens[i]!.text !== "") continue;
+      if (i === 0) {
+        throw new Error("empty stage: a pipeline starts with a source — remove the leading `|`");
+      }
+      if (i === tokens.length - 1) {
+        throw new Error(
+          "trailing `|`: nothing follows the pipe — the pipeline's output goes nowhere. " +
+            "Remove it, or end with a real stage",
+        );
+      }
+      throw new Error(
+        "empty stage between pipes: crust splits on `|`, so `||` is an empty stage, " +
+          "not an or-operator (`&&` is fine — it contains no pipe). Put the whole shell " +
+          "command in one stage instead: sh -c 'a || b'",
+      );
+    }
+  }
   return (ctx) => {
     // `time "label"` is a prefix-only decorator: it doesn't participate in
     // the data flow, it just wraps the resulting pipeline with a timing

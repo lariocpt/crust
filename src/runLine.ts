@@ -118,6 +118,10 @@ export async function runLine(line: string, ctx: Context, tty?: ReplTty): Promis
   try {
     const tokens = tokenize(expanded);
     const isPureShell = tokens.every((t) => {
+      // An empty stage is not "pure shell": sh rejects it as a syntax error
+      // (`| head -3`), and crust's own message says which pipe is empty. Let it
+      // through to parse(), which refuses it.
+      if (t.text === "") return false;
       const kind = classify(t.text);
       // grep counts as shell here: a pure shell line (`ps aux | grep node`)
       // must keep inherit-stdio `sh -c` byte-for-byte. The native stage only

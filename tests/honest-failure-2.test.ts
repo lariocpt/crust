@@ -361,3 +361,80 @@ describe("jwt verify mid-pipeline", () => {
     expect(sign.stdout.trim().split(".")).toHaveLength(3);
   });
 });
+
+describe("empty stages (a `|` with nothing on one side)", () => {
+  // Both shapes used to be silent successes. A trailing `|` classified as a
+  // shell stage with no command, so `sh -c ""` read the pipeline and dropped it
+  // at exit 0; `||` split the same way, and the command to its right never ran
+  // because a shell transform with zero items never spawns.
+  test("a trailing pipe fails instead of discarding the data at exit 0", async () => {
+    const r = await cli(`range(1,3) |`);
+    expect(r.code).toBe(1);
+    expect(r.out).toContain("trailing `|`");
+    expect(r.stdout).toBe("");
+  });
+
+  test("so does one on a line that produces a lot", async () => {
+    // The shape a load run would hit: the gate looks green, zero samples kept.
+    const r = await cli(`range(1,100) | (n => n * 2) |`);
+    expect(r.code).toBe(1);
+    expect(r.out).toContain("trailing `|`");
+  });
+
+  test("`||` is refused on every line, and the quoted escape works", async () => {
+    // `||` splits into an empty stage, so it cannot mean an or-operator here. It
+    // used to be accepted by the pure-shell fast path and reach sh — where it
+    // worked — while the same construct on a mixed line ran a crust pipeline and
+    // silently dropped the fallback. One answer now, and it names the escape.
+    const mixed = await cli(`range(1,3) | (n => n) || echo fallback`);
+    expect(mixed.code).toBe(1);
+    expect(mixed.out).toContain("empty stage between pipes");
+
+    const pure = await cli(`echo a || echo b`);
+    expect(pure.code).toBe(1);
+    expect(pure.out).toContain("sh -c 'a || b'");
+
+    const escaped = await cli(`sh -c 'echo a || echo b'`);
+    expect(escaped.code).toBe(0);
+    expect(escaped.stdout).toContain("a");
+
+    // `&&` contains no pipe, so it is an ordinary single shell stage.
+    const andThen = await cli(`echo a && echo b`);
+    expect(andThen.code).toBe(0);
+    expect(andThen.stdout).toContain("b");
+  });
+
+  test("a leading pipe is refused by crust, not by sh", async () => {
+    const r = await cli(`| head -3`);
+    expect(r.code).toBe(1);
+    expect(r.out).toContain("starts with a source");
+    // Not sh's raw syntax error any more.
+    expect(r.out).not.toContain("syntax error");
+  });
+
+  test("--check catches all three", async () => {
+    // --check is how the website validates its examples; a hole here means a
+    // broken example publishes green.
+    for (const line of ["range(1,3) |", "echo a || echo b", "| head -3"]) {
+      const proc = Bun.spawn(["bun", ENTRY, "--check", line], {
+        stdin: "ignore",
+        stdout: "pipe",
+        stderr: "pipe",
+        env: { ...process.env, CRUST_CONFIG: "/dev/null" },
+      });
+      const [out, err] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+      ]);
+      await proc.exited;
+      expect(proc.exitCode, line).toBe(1);
+      expect(out + err, line).toContain("in: " + line);
+    }
+  });
+
+  test("a blank line stays a no-op, not an error", async () => {
+    const r = await cli("");
+    expect(r.code).toBe(0);
+    expect(r.out).toBe("");
+  });
+});

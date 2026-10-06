@@ -144,7 +144,28 @@ The shell parser classifies each `|`-separated stage by looking at its first tok
 | First token is a `crust.fn`-registered function | Registered function (per-item transform) |
 | Anything else | Shell stage — handed to `sh -c "<text>"` |
 
-Single-stage pure-shell lines (`ls -la`, `git status`) are short-circuited: crust execs `sh -c` with **inherited stdio** so colors, paging, and TUIs work normally. Mixed pipelines stream items through TS land.
+Single-stage pure-shell lines (`ls -la`, `git status`) are short-circuited: crust execs `sh -c` with **inherited stdio** so colors, paging, and TUIs work normally. So is a line whose *every* stage is shell — `ps aux | grep node` becomes one `sh -c`, byte for byte, which keeps `| head -3` and its early exit behaving like the shell you know. Mixed pipelines stream items through TS land.
+
+**That short-circuit carries shell's exit-code rule.** In an all-shell line the
+code is the *last* command's, exactly like a shell without `pipefail`:
+`ls /nope | wc -l` exits **0** (`wc` succeeded), while `ls /nope` alone exits 2.
+As soon as one crust stage joins the line, every shell stage is run by crust and
+a nonzero exit fails the line. If a gate must notice an upstream failure, end the
+line on a crust stage (`… | assert (l => …)`) rather than trusting the tail of a
+shell pipeline.
+
+**A `|` always splits, so there is no empty stage.** `||` is two pipes, not an
+or-operator, and a trailing `|` leaves nothing after the pipe — both used to be
+silently accepted, and the trailing one read the whole pipeline into `sh -c ""`,
+threw the output away and exited 0. Now both stop the line:
+
+```bash
+sh -c 'curl -s "$URL" || echo degraded'   # want or-logic? keep it inside one shell stage
+```
+
+    crust: empty stage between pipes: crust splits on `|`, so `||` is an empty stage,
+    not an or-operator (`&&` is fine — it contains no pipe). Put the whole shell
+    command in one stage instead: sh -c 'a || b'
 
 **Redirects belong to the shell stage.** `<` and `>` are not crust syntax — a
 shell stage's text is handed to `sh -c` verbatim, so its redirects are real, and
