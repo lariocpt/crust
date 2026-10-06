@@ -32,7 +32,10 @@ export function parse(line: string): (ctx?: Context) => Pipeline<unknown> {
     for (let i = 0; i < tokens.length; i++) {
       if (tokens[i]!.text !== "") continue;
       if (i === 0) {
-        throw new Error("empty stage: a pipeline starts with a source — remove the leading `|`");
+        throw new Error(
+          "empty stage: a pipeline starts with a source — remove the leading `|`, or if this " +
+            "line belongs to the one above it, end that line with a trailing `\\`",
+        );
       }
       if (i === tokens.length - 1) {
         throw new Error(

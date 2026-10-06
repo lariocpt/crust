@@ -64,12 +64,41 @@ crust -c 'src/**/*.ts | wc -l'
 | Flag | Effect |
 |---|---|
 | `crust` | Interactive REPL (default, when stdin is a TTY). |
-| `crust <file.crust>` | Run a script file and exit. Blank lines and `#` comments are skipped (so a `#!/usr/bin/env crust` shebang works), and execution is **fail-fast**: crust stops at the first failing line and exits with *its* code. Positional script arguments are not supported — extra arguments are rejected (exit 2). An unreadable file exits 127. |
-| `cmd \| crust` | With stdin piped, crust reads it to EOF and runs the lines exactly like a script file — same comment handling, same fail-fast exit codes. Because stdin is drained up front, shell stages inside the script see EOF on their stdin. Piping **data** (not a program) is the [`stdin` source](#reading-piped-stdin-stdin-source)'s job: `docker logs -f app \| crust -c 'stdin \| grep ERROR'`. |
-| `crust -c <line>` | Run one line and exit. Multi-line strings split on `\n`, skip blanks and `#` comments, and are **fail-fast**: crust stops at the first failing line and exits with *its* code (previously a later success masked an earlier failure). |
+| `crust <file.crust>` | Run a script file and exit. Blank lines and `#` comments are skipped (so a `#!/usr/bin/env crust` shebang works), and execution is **fail-fast**: crust stops at the first failing line and exits with *its* code. Positional script arguments are not supported — extra arguments are rejected (exit 2). An unreadable file exits 127. A line ending in `\` continues on the next line (see [Continuing a line](#continuing-a-line)). |
+| `cmd \| crust` | With stdin piped, crust reads it to EOF and runs the lines exactly like a script file — same comment handling, same fail-fast exit codes, same `\` continuation. Because stdin is drained up front, shell stages inside the script see EOF on their stdin. Piping **data** (not a program) is the [`stdin` source](#reading-piped-stdin-stdin-source)'s job: `docker logs -f app \| crust -c 'stdin \| grep ERROR'`. |
+| `crust -c <line>` | Run one line and exit. Multi-line strings split on `\n`, skip blanks and `#` comments, honour `\` continuation, and are **fail-fast**: crust stops at the first failing line and exits with *its* code (previously a later success masked an earlier failure). |
 | `crust --env-file <path> …` | Load a `.env` file (same parser as the [`dotenv` builtin](#dotenv), overwrite mode) *before* any run mode — `-c`, a script, piped stdin, or the REPL — and before `init.ts`, so config code sees the vars. The "loaded" note goes to **stderr** (a `-c` pipeline's stdout stays clean), and a **missing file exits 2 loudly** — this flag exists to replace shell shims whose silent env failures made runs measure the wrong thing. Doesn't combine with `--check` (parse-only by contract). |
 | `crust -h`, `--help` | Show usage. |
 | `crust -V`, `--version` | Show version. |
+
+### Continuing a line
+
+A line ending in `\` continues on the next one. The two lines are joined with a
+single space and the continuation's leading whitespace is dropped, so a long
+pipeline can be written one stage per line:
+
+```crust
+range(1,50) | stats \
+  | assert (s => s.count === 50)
+```
+
+This works in a script file, in piped stdin, in a multi-line `-c`, and in
+`--check` (which uses the same splitting as the runtime, so a checked block is
+the line crust actually runs). **Not the REPL** — there Enter means run.
+
+Two edges, both tested:
+
+- Only an **odd** run of trailing backslashes continues. A line ending in `\\`
+  is an escaped backslash and stays its own line.
+- Continuation is **never inferred from indentation**. A line that starts with
+  `|` without a preceding `\` is two lines, and the second is the empty-stage
+  refusal — put the `\` on the line above it.
+
+Before this existed, every multi-line example in this file and on the website
+was a bug: a trailing backslash is a shell metacharacter, so the line was
+classified `shell`, handed to `sh -c`, and answered `syntax error near
+unexpected token` — while both doc linters joined `\`+newline before parsing,
+which is exactly how those examples stayed green in CI and died in a terminal.
 
 ### Checking a line without running it
 
@@ -103,8 +132,9 @@ crust --check 'range(1,3) | head -('
 ```
 
 That makes it the linter for documented examples: blank lines and `#` comments
-are skipped, so a whole fenced block can be piped in as one argument. crust's
-own suite lints every ```crust example in the shipped agent skills this way.
+are skipped and `\` continuations are joined — the same splitting the runtime
+does — so a whole fenced block can be piped in as one argument. crust's own
+suite lints every ```crust example in the shipped agent skills this way.
 
 ## Hello world
 

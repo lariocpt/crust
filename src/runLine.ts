@@ -25,7 +25,43 @@ export interface ReplTty {
   suspend(): () => void;
 }
 
-// Run a block of lines — a script file, piped stdin, multi-line -c, or a
+// A line ending in a backslash continues on the next one.
+//
+// This is the shape every multi-line pipeline in this repo's docs and the
+// website is written in (`load … | stats \` / `  | assert (…)`), and crust did
+// not have it: a trailing backslash is a shell metacharacter, so the line was
+// classified `shell`, handed to `sh -c`, and answered `syntax error near
+// unexpected token` — while BOTH doc linters join `\`+newline before parsing,
+// which is exactly how the examples stayed green in CI and died in a terminal.
+//
+// Joined with a single space, mirroring the linters, and only after an ODD run
+// of trailing backslashes: `…\\` at end of line is an escaped backslash, not a
+// continuation, and stays its own line (a test pins this, because the naive
+// version passes every other case here). Continuation is never inferred from
+// indentation — a leading `|` is still crust's empty-stage refusal.
+//
+// Scripts, piped stdin, multi-line `-c` and `--check`. Not the REPL: there,
+// Enter means run.
+export function splitLines(source: string): string[] {
+  const lines: string[] = [];
+  let pending: string | null = null;
+  for (const raw of source.split("\n")) {
+    const line: string = pending === null ? raw : `${pending} ${raw.trim()}`;
+    pending = null;
+    const body: string = line.trimEnd();
+    let slashes = 0;
+    while (body.length > slashes && body[body.length - 1 - slashes] === "\\") slashes++;
+    if (slashes % 2 === 1 && body.length > slashes) {
+      pending = body.slice(0, -1);
+      continue;
+    }
+    lines.push(line);
+  }
+  if (pending !== null) lines.push(pending);
+  return lines;
+}
+
+// Run a block of lines — a script file, piped stdin, multi-line `-c`, or a
 // `source`d .crust file. Fail-fast: stop at the first failing line and
 // return ITS code. Blank lines and `#` comments are skipped, which also
 // covers a `#!/usr/bin/env crust` shebang on line 1.
@@ -33,7 +69,7 @@ export interface ReplTty {
 // cycle is call-time-only, so it's safe under ESM.)
 export async function runLines(source: string, ctx: Context): Promise<number> {
   let last = 0;
-  for (const l of source.split("\n")) {
+  for (const l of splitLines(source)) {
     const trimmed = l.trim();
     if (!trimmed || trimmed.startsWith("#")) continue;
     last = await runLine(l, ctx);

@@ -11,8 +11,8 @@ description: How to invoke crust and read its answer — the run modes (`-c`, sc
 | --- | --- |
 | `crust` (stdin is a TTY) | Interactive REPL. |
 | `crust` (stdin is piped) | Reads **lines of crust** from stdin to EOF and runs them like a script (fail-fast, same exit codes). stdin is the *command* source in this mode, so a shell stage inside those lines sees EOF. Want data on stdin? Use `-c`. |
-| `crust run.crust` | Script mode: blank lines and `#` comments are skipped (so a `#!/usr/bin/env crust` shebang works), lines run in order, and it **fails fast** — the first failing line stops the file and becomes the process exit code. The extension doesn't matter. Positional args after the path are refused (exit 2), an unreadable path is 127. |
-| `crust -c '<line>'` | One line. A shell stage inherits the process stdin, so `docker logs app \| crust -c 'grep ERROR'` really does grep the logs. To feed a **crust** pipeline, name the source: `docker logs -f app \| crust -c 'stdin \| grep ERROR'`. To run several lines, put a **newline inside the one argument** — they then behave like a script (fail-fast). Two lines as two arguments is refused. Quote the whole pipeline: `-c range(1,2) extra` splits into three argv words and is refused. |
+| `crust run.crust` | Script mode: blank lines and `#` comments are skipped (so a `#!/usr/bin/env crust` shebang works), lines run in order, and it **fails fast** — the first failing line stops the file and becomes the process exit code. A line ending in `\` continues on the next. The extension doesn't matter. Positional args after the path are refused (exit 2), an unreadable path is 127. |
+| `crust -c '<line>'` | One line. A shell stage inherits the process stdin, so `docker logs app \| crust -c 'grep ERROR'` really does grep the logs. To feed a **crust** pipeline, name the source: `docker logs -f app \| crust -c 'stdin \| grep ERROR'`. To run several lines, put a **newline inside the one argument** — they then behave like a script (fail-fast) — or continue one line with a trailing `\`. Two lines as two arguments is refused. Quote the whole pipeline: `-c range(1,2) extra` splits into three argv words and is refused. |
 | `crust --check '<line>'` | Parse without running. See below. |
 | `crust --env-file <path> …` | Loads `.env` before *any* run mode and before `init.ts`. The "loaded" note goes to stderr so a `-c` pipeline's stdout stays clean. A missing file exits **2, loudly** — this flag exists to replace shell shims that failed silently. Does not combine with `--check`. |
 | `crust -h` / `-V` | Usage / version, exit 0. |
@@ -51,6 +51,10 @@ failing shell stage propagates. So a gate must **end on a crust stage**:
 wait :3000
 range(1,99) | parallel 10 | GET http://localhost:3000/items | expect 200 | stats
 GET http://localhost:3000/items | assert (x => x.length > 0)
+# a trailing `\` continues the line — the only way to write a pipeline over
+# more than one line, in a script, in piped stdin or in a multi-line -c
+load 10s 100/s | parallel 20 | GET http://localhost:3000/items \
+  | expect 200 | stats
 ```
 
 Or ask sh to gate, explicitly:

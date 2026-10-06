@@ -408,6 +408,9 @@ describe("empty stages (a `|` with nothing on one side)", () => {
     const r = await cli(`| head -3`);
     expect(r.code).toBe(1);
     expect(r.out).toContain("starts with a source");
+    // The hint matters because `\` continuation exists: this is exactly the
+    // shape a multi-line pipeline takes when the backslash is missing.
+    expect(r.out).toContain("trailing `\\`");
     // Not sh's raw syntax error any more.
     expect(r.out).not.toContain("syntax error");
   });
@@ -485,5 +488,79 @@ describe("--check validates shell stages through sh -n", () => {
     const r = await check(`range(1,2) | cat > ${path}`);
     expect(r.code).toBe(0);
     expect(await Bun.file(path).exists()).toBe(false);
+  });
+});
+
+describe("a trailing backslash continues the line", () => {
+  // Every multi-line pipeline in crust's own docs and the website is written
+  // with a trailing `\` and the next line starting with `|` — and crust had no
+  // continuation: the line was classified shell (a trailing backslash is a
+  // metacharacter), handed to `sh -c`, and answered `syntax error near
+  // unexpected token`. Both doc linters JOIN `\`+newline before parsing, so the
+  // examples checked clean in CI and died the moment a human ran them.
+  async function run(script: string, args: string[] = []) {
+    const proc = Bun.spawn(["bun", ENTRY, script, ...args], {
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+      env: { ...process.env, CRUST_CONFIG: "/dev/null" },
+    });
+    const [stdout, stderr] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ]);
+    await proc.exited;
+    return { code: proc.exitCode ?? -1, out: stdout + stderr };
+  }
+  async function script(text: string) {
+    const dir = await mkdtemp(join(tmpdir(), "crust-cont-"));
+    const path = join(dir, "run.crust");
+    await writeFile(path, text);
+    return run(path);
+  }
+
+  test("a continued pipeline runs as one line", async () => {
+    const r = await script("range(1,3) \\\n  | (n => n * 2)\n");
+    expect(r.code).toBe(0);
+    expect(r.out.split(/\s+/).filter(Boolean)).toEqual(["2", "4", "6"]);
+  });
+
+  test("multi-line -c continues too", async () => {
+    const r = await cli("range(1,2) \\\n  | stats\n");
+    expect(r.code).toBe(0);
+    expect(r.out).toContain("count");
+  });
+
+  test("--check agrees with the runtime about a continued line", async () => {
+    const proc = Bun.spawn(["bun", ENTRY, "--check", "range(1,3) \\\n  | (n => n * 2)"], {
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+      env: { ...process.env, CRUST_CONFIG: "/dev/null" },
+    });
+    const [out, err] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ]);
+    await proc.exited;
+    expect((proc.exitCode ?? -1) + out + err, out + err).toBe(0 + "ok: 1 line(s) parse\n");
+  });
+
+  test("CONTROL: an escaped backslash is not a continuation", async () => {
+    // A line ending in `\\` (an escaped backslash) is two lines, both run. A
+    // naive "join anything ending in a backslash" merges them into
+    // `sh -c 'echo one' \ range(1,2)` — a shell syntax error.
+    const r = await script("sh -c 'echo one' \\\\\nrange(1,2)\n");
+    expect(r.code).toBe(0);
+    expect(r.out).toContain("one");
+    expect(r.out).toContain("2");
+  });
+
+  test("CONTROL: a comment line still ends the comment block, not the pipeline", async () => {
+    const r = await script("range(1,2)\n# a comment\n  | (n => n * 3)\n");
+    // Not joined (no backslash), so this is the refused-empty-stage case — the
+    // continuation must not be inferred from indentation.
+    expect(r.code).toBe(1);
+    expect(r.out).toContain("empty stage");
   });
 });

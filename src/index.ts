@@ -10,7 +10,7 @@ import { appendHistory, loadHistory } from "./history";
 import { classify, tokenize } from "./lexer";
 import { parse } from "./parser";
 import { defaultPrompt } from "./prompt";
-import { runLine, runLines } from "./runLine";
+import { runLine, runLines, splitLines } from "./runLine";
 import { markStdinConsumed } from "./sources";
 import type { Context } from "./types";
 
@@ -151,7 +151,10 @@ async function main(): Promise<void> {
       const ctx = newContext([]);
       registerBuiltinFns(ctx);
       let checked = 0;
-      for (const raw of argv[1]!.split("\n")) {
+      // Same line-splitting as the runtime, so what the linter checks is what
+      // crust runs — including `\` continuation, which is how the multi-line
+      // examples in docs and on the website are written.
+      for (const raw of splitLines(argv[1]!)) {
         const line = raw.trim();
         if (!line || line.startsWith("#")) continue;
         // A builtin line is not a pipeline — the parser would classify it as an
