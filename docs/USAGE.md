@@ -91,6 +91,17 @@ It also validates BUILTIN invocations against each CLI's own flag spec, so
 fail — the parser alone treats a builtin line as an opaque shell stage and would
 call either one fine.
 
+And it validates SHELL stages by asking `sh` itself, in noexec mode (`sh -n`),
+which parses a command and cannot execute it (`cat > f` under `-n` does not
+create `f`). crust's parser cannot see inside a shell stage, so before this a
+line malformed enough to be classified as one checked clean and then exited 2
+the instant it ran — `range(1,` did exactly that:
+
+```bash
+crust --check 'range(1,3) | head -('
+# crust: shell stage does not parse (stage: head -(): sh: -c: line 1: syntax error near unexpected token `(`
+```
+
 That makes it the linter for documented examples: blank lines and `#` comments
 are skipped, so a whole fenced block can be piped in as one argument. crust's
 own suite lints every ```crust example in the shipped agent skills this way.

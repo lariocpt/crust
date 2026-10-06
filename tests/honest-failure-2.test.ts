@@ -438,3 +438,52 @@ describe("empty stages (a `|` with nothing on one side)", () => {
     expect(r.out).toBe("");
   });
 });
+
+describe("--check validates shell stages through sh -n", () => {
+  // --check is the website's ONLY grammar gate (crust-website cannot import the
+  // lexer). A stage crust classifies as `shell` is opaque to its parser, so a
+  // line malformed enough to fall through to shell checked "ok" and then exited
+  // 2 at runtime: `range(1,` did exactly that.
+  async function check(line: string) {
+    const proc = Bun.spawn(["bun", ENTRY, "--check", line], {
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+      env: { ...process.env, CRUST_CONFIG: "/dev/null" },
+    });
+    const [out, err] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ]);
+    await proc.exited;
+    return { code: proc.exitCode ?? 0, out: out + err };
+  }
+
+  test("a malformed stage that fell through to shell stops the check", async () => {
+    const r = await check("range(1,");
+    expect(r.code).toBe(1);
+    expect(r.out).toContain("shell stage does not parse");
+    expect(r.out).toContain("in: range(1,");
+  });
+
+  test("the offending stage is named when the line has several", async () => {
+    const r = await check("range(1,3) | head -(");
+    expect(r.code).toBe(1);
+    expect(r.out).toContain("(stage: head -()");
+  });
+
+  test("valid shell stages still check clean", async () => {
+    for (const line of ["ls -la", "ps aux | grep -c crust", `sh -c 'a || b'`]) {
+      const r = await check(line);
+      expect(r.code, line).toBe(0);
+      expect(r.out, line).toContain("line(s) parse");
+    }
+  });
+
+  test("noexec really means noexec: a checked redirect creates nothing", async () => {
+    const path = join(await mkdtemp(join(tmpdir(), "crust-noexec-")), "nope.txt");
+    const r = await check(`range(1,2) | cat > ${path}`);
+    expect(r.code).toBe(0);
+    expect(await Bun.file(path).exists()).toBe(false);
+  });
+});

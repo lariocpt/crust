@@ -7,6 +7,7 @@ import { checkBuiltinLine } from "./checkBuiltin";
 import { type CrustGlobal, loadConfig } from "./config";
 import { onInterrupt, readLine, suspendEditor } from "./editor";
 import { appendHistory, loadHistory } from "./history";
+import { classify, tokenize } from "./lexer";
 import { parse } from "./parser";
 import { defaultPrompt } from "./prompt";
 import { runLine, runLines } from "./runLine";
@@ -135,11 +136,13 @@ async function main(): Promise<void> {
       await shutdown(await runLines(argv[1]!, ctx));
     }
     // Parse without running: the linter for documented examples. Building a
-    // pipeline touches no filesystem and spawns nothing — every source is a
-    // lazy generator — so an example referencing fixtures/*.json or :3000 checks
-    // clean on a machine that has neither. That is what lets a SEPARATE repo
-    // (the website) validate its own code blocks: it cannot import crust's
-    // lexer, but it can run the binary it already has.
+    // pipeline touches no filesystem and runs nothing — every source is a lazy
+    // generator — so an example referencing fixtures/*.json or :3000 checks clean
+    // on a machine that has neither. The one exception is sh in NOEXEC mode
+    // (`sh -n`), which parses a shell stage's text and cannot execute it.
+    // That is what lets a SEPARATE repo (the website) validate its own code
+    // blocks: it cannot import crust's lexer, but it can run the binary it
+    // already has.
     if (flag === "--check") {
       if (argv.length < 2) {
         process.stderr.write("crust: --check requires a line\n");
@@ -170,11 +173,38 @@ async function main(): Promise<void> {
         }
         try {
           parse(line)(ctx);
-          checked++;
         } catch (err) {
           process.stderr.write(`crust: ${(err as Error).message}\n  in: ${line}\n`);
           process.exit(1);
         }
+        // parse() proved crust's own grammar. A stage that fell through to
+        // `shell` is opaque to it — the text is only ever read by sh — so ask
+        // sh, in NOEXEC mode: `-n` parses and reports syntax errors without
+        // executing anything (verified: `cat > f` under -n does not create f,
+        // `echo $(cmd)` does not run cmd). Without this, a line malformed
+        // enough to be classified as shell checked "ok" and then exited 2 at
+        // runtime — `range(1,` did — which is exactly how a broken documented
+        // example reaches the website: the fallback hides the mistake from the
+        // one tool meant to catch it.
+        for (const t of tokenize(line)) {
+          if (t.text === "" || classify(t.text).kind !== "shell") continue;
+          const proc = Bun.spawn(["sh", "-n", "-c", t.text], {
+            stdin: "ignore",
+            stdout: "pipe",
+            stderr: "pipe",
+          });
+          const shErr = await new Response(proc.stderr).text();
+          await proc.exited;
+          if ((proc.exitCode ?? 0) !== 0) {
+            const first = shErr.trim().split("\n")[0] || "syntax error";
+            const where = t.text === line ? "" : ` (stage: ${t.text})`;
+            process.stderr.write(
+              `crust: shell stage does not parse${where}: ${first}\n  in: ${line}\n`,
+            );
+            process.exit(1);
+          }
+        }
+        checked++;
       }
       process.stdout.write(`ok: ${checked} line(s) parse\n`);
       process.exit(0);
