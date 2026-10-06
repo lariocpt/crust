@@ -762,7 +762,11 @@ verbatim and stays unexpanded.)
 
 ## TypeScript API
 
-The full pipeline surface is available to any `.ts` file run by Bun, including `~/.config/crust/init.ts`. Crust exposes these as globals when starting up:
+The full pipeline surface is globals **wherever crust starts its runtime**: every
+crust line (`-c`, REPL, stdin, `.crust` files), `~/.config/crust/init.ts`, and any
+`.ts`/`.js` file crust imports (`source file.ts`). A file run by plain `bun
+script.ts` never starts crust, so it gets none of them — import what you need
+from the modules below instead. Crust assigns these as globals at startup:
 
 ```ts
 Pipeline             // class — the unified stream abstraction
@@ -1853,9 +1857,14 @@ POST the path strings. For a whole suite of lines like this, put them in a
 range(0, 999) | parallel 50 | GET :3000/health | expect 200 | stats
 ```
 
-Or in a `.ts` file (run with `bun script.ts`):
+Or in a `.ts` file, run with `bun script.ts`. Plain Bun gives you no crust
+globals — those exist only inside a crust line — so the file imports what it
+uses itself (`crust/sources` once published; paths below resolve in a checkout):
 
 ```ts
+import { load } from "../src/sources";
+import { parallel, statsStage, timedGet } from "../src/transforms";
+
 const summary = await load([{ durMs: 10_000, rps: 100 }])
   .pipe(parallel(50, timedGet("http://localhost:3000/health")))
   .pipe(statsStage())
