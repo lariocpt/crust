@@ -51,6 +51,21 @@ describe("salt", () => {
     expect(() => salt("0")).toThrow();
     expect(() => salt("-4")).toThrow();
   });
+
+  // A registered function is called `fn(item, ...args)` mid-pipeline (the
+  // crust.fn convention), so the item occupies args[0]. `salt` used to read
+  // THAT as the byte count: `echo abc | salt 4` died on `invalid byte count
+  // 'abc'` and the 4 was never examined. The size comes from the last
+  // positional, the only slot a line argument can occupy behind an item.
+  test("mid-pipeline: the item arrives first, the size trails it", () => {
+    expect(salt("abc", "4")).toMatch(/^[0-9a-f]{8}$/);
+    expect(salt("abc", "8", "base64")).toMatch(/^[A-Za-z0-9+/=]{12}$/);
+  });
+
+  test("a size that is not a size says so, with the spelling that works", () => {
+    expect(() => salt("abc")).toThrow(/is not a byte count/);
+    expect(() => salt("abc")).toThrow(/salt 8/);
+  });
 });
 
 describe("jwt", () => {

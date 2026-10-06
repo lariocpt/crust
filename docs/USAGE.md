@@ -1684,7 +1684,7 @@ Crust ships a small set of `crust.fn`-registered helpers. They work as both pipe
 | Function | Usage |
 |---|---|
 | `base64 [-d \| decode]` | Encode (default) or decode. `echo hi \| base64` → `aGk=`; `echo aGk= \| base64 -d` → `hi`. |
-| `salt [bytes] [hex\|base64\|base64url]` | Cryptographically random bytes. Defaults: 16 bytes, hex. `salt 32 base64`. |
+| `salt [bytes] [hex\|base64\|base64url]` | Cryptographically random bytes. Defaults: 16 bytes, hex. `salt 32 base64`. Mid-pipeline it emits one salt per item and the byte count is the argument that *trails* the item — `lines users.csv \| salt 16` — because the item takes the first slot in any registered function; a bare `\| salt` refuses to guess. |
 | `jwt sign \| verify \| decode --secret <s>` | HS256 JWT. Reads `$JWT_SECRET` if `--secret` omitted. Item can be a JSON string (sign) or a token (verify/decode). |
 | `bundle <entry> [--outdir \| --outfile \| --minify \| --sourcemap \| --target=bun\|browser\|node]` | Wraps `Bun.build` for one-shot bundling. With `--outfile`, writes the first artifact and returns `{outfile, bytes}`. |
 | `sql "<query>" [params…]` | Runs a SQL query via Bun's SQL client using `$DATABASE_URL`. **Streams one item per row in both positions** — as a source and mid-pipeline. **The query is always the one you wrote on the line**, whatever the upstream item is; mid-pipeline that item **binds as the first parameter** when the line declares none, so `range(1,1) \| sql "SELECT … WHERE id = ?"` queries id 1 and `"beta" \| sql "SELECT … WHERE name = ?"` queries `'beta'`. An explicitly declared parameter still wins. |
