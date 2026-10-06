@@ -350,7 +350,9 @@ result should mean:
 | `filter (x => …)` | the item is **dropped** (plain JS truthiness: `0`, `""`, `null`, `undefined` all drop) | passes |
 | `assert (x => …)` | the **pipeline fails** naming the item | **fails** |
 
-Async predicates are awaited in all three.
+Async predicates are awaited in all three. A lambda body may `await` directly —
+write `(s => JSON.parse(await Bun.file(s).text()))`, no `async` keyword needed:
+a body that mentions `await` is compiled as an async arrow.
 
 **Shell stages see `node_modules/.bin` on PATH, npm-run style.** Every
 ancestor `node_modules/.bin` of the current directory is prepended

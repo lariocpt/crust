@@ -1,4 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { parse } from "../src/parser";
 
 describe("parser — sources", () => {
@@ -210,5 +213,60 @@ describe("parser — HTTP", () => {
     const out = (await p.collect()) as Response[];
     expect(out).toHaveLength(1);
     expect(out[0]!.status).toBe(200);
+  });
+});
+
+// A lambda is compiled with `new Function`, which cannot produce an async arrow,
+// so `await` in a body used to be refused at parse time — including in the
+// documented `ls *.json | (s => JSON.parse(await Bun.file(s).text()))` idiom.
+// Such bodies are now recompiled `async`; the pipeline already awaited every
+// stage result, so nothing downstream had to change.
+describe("lambda — await in a body", () => {
+  const run = async (line: string) => parse(line)().collect();
+  let dir: string;
+  let file: string;
+
+  beforeAll(async () => {
+    dir = await mkdtemp(join(tmpdir(), "crust-await-"));
+    file = join(dir, "a.json");
+    await Bun.write(file, JSON.stringify({ id: "abc" }));
+  });
+  afterAll(() => rm(dir, { recursive: true, force: true }));
+
+  test("the awaited value is what downstream sees, not a Promise", async () => {
+    expect(await run("range(0, 0) | (_ => await Promise.resolve(7))")).toEqual([7]);
+  });
+
+  test("reads a real file per item — the documented idiom", async () => {
+    expect(
+      await run(`range(0, 0) | (_ => JSON.parse(await Bun.file("${file}").text()).id)`),
+    ).toEqual(["abc"]);
+  });
+
+  test("works under `parallel`, where one request per item is the point", async () => {
+    expect(await run("range(0, 4) | parallel 2 | (_ => await Promise.resolve(1))")).toEqual([
+      1, 1, 1, 1, 1,
+    ]);
+  });
+
+  test("filter and assert await their predicates", async () => {
+    expect(await run("range(0, 3) | filter (x => await Promise.resolve(x % 2 === 0))")).toEqual([
+      0, 2,
+    ]);
+    expect(await run("range(0, 0) | assert (x => await Promise.resolve(x === 0))")).toEqual([0]);
+    await expect(run("range(0, 0) | assert (x => await Promise.resolve(false))")).rejects.toThrow(
+      // the ORIGINAL text is echoed, not the asyncified body
+      /assert:.*x => await Promise\.resolve\(false\)/s,
+    );
+  });
+
+  test("an explicitly async body still compiles (this always worked)", async () => {
+    expect(await run("range(0, 0) | (async _ => await Promise.resolve(9))")).toEqual([9]);
+  });
+
+  test("a genuine syntax error keeps its own diagnostic", async () => {
+    await expect(run("range(0, 0) | (x => x +)")).rejects.toThrow(/Unexpected/);
+    // head is not a parameter list -> no async rewrite, same original message
+    await expect(run("range(0, 0) | (f(x) => await x)")).rejects.toThrow(/Unexpected/s);
   });
 });

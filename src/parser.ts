@@ -492,12 +492,49 @@ function describeItem(item: unknown): string {
   return JSON.stringify(item)?.slice(0, 200) ?? String(item);
 }
 
+// `await` in a lambda body is a syntax error in a SYNC arrow, and bodies are
+// compiled with `new Function`, so the documented
+// `ls *.json | (s => JSON.parse(await Bun.file(s).text()))` idiom was refused at
+// parse time. When a body mentions `await`, recompile it as an ASYNC arrow: the
+// pipeline already awaits every stage result (`yield await fn(item)` in
+// Pipeline.pipe, `U | Promise<U>` in parallel), so nothing downstream changes.
+// A body that is not actually an arrow, or whose async retry fails, keeps the
+// original diagnostic rather than a confusing second one.
 function compileLambda(source: string): (x: unknown) => unknown {
-  const fn = new Function(`return (${source});`)();
+  let fn: unknown;
+  try {
+    fn = new Function(`return (${source});`)();
+  } catch (err) {
+    const asyncBody = /\bawait\b/.test(source) ? asyncifiedArrow(source) : null;
+    if (asyncBody === null) throw err;
+    try {
+      fn = new Function(`return (${asyncBody});`)();
+    } catch {
+      throw err;
+    }
+  }
   if (typeof fn !== "function") {
     throw new Error(`expected a function, got ${typeof fn}: ${source}`);
   }
   return fn as (x: unknown) => unknown;
+}
+
+// `(x => …)` -> `async x => …`, `((a, b) => …)` -> `async (a, b) => …`,
+// `x => …` -> `async x => …`. Returns null for anything whose head is not a
+// parameter list (`async (x => x)` is not JavaScript), so the caller keeps the
+// original, precise diagnostic. Params may be bare, parenthesised (one level of
+// nesting, so a `(x = fetch(u))` default still counts), or destructured.
+function asyncifiedArrow(source: string): string | null {
+  const text = source.trim();
+  const inner = text.startsWith("(") && text.endsWith(")") ? text.slice(1, -1).trim() : text;
+  const arrow = inner.indexOf("=>");
+  if (arrow < 0) return null;
+  const params = inner.slice(0, arrow).trim();
+  const plausible =
+    /^\(.*\)$/s.test(params) || // `(a, b)`, `({ a }, b)`, `(x = (1))`
+    /^[A-Za-z_$][\w$]*$/.test(params) || // `x`
+    /^[{[]/s.test(params); // `({ a }) => …`, `([x]) => …`
+  return plausible ? `async ${inner}` : null;
 }
 
 const evalLambda = compileLambda;
