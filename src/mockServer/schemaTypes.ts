@@ -118,10 +118,18 @@ function growToLength(pattern: string, candidate: string, minLen: number): strin
 }
 
 /** Structural walk over the pattern. Returns null the moment it meets something it cannot build. */
-function buildFromPattern(pattern: string, extra = 0): string | null {
-  const extraBudget = extra;
-  let src = pattern.trim();
+function buildFromPattern(pattern: string, extra = 0, depth = 0): string | null {
+  // Trim the pattern, never a BRANCH. Trailing whitespace in a spec's `pattern` string is a typo;
+  // a trailing space inside one alternative is the pattern asking for a space, and dropping it made
+  // the value unmatchable. `^ssh-(rsa|dss|ed25519) |^ecdsa-…` is 19 fields of the GitHub spec and
+  // every branch of it ends in one.
+  let src = depth === 0 ? pattern.trim() : pattern;
   if (!src) return null;
+  // Both recursive paths — alternation and group — count here. The character walk's own `guard`
+  // cannot: it counts characters inside ONE call, not depth across calls, which is exactly how the
+  // nested-pipe RangeError escaped it (see the block in tests/mock-server.test.ts that names the
+  // 198 specs it took down).
+  if (depth > MAX_PATTERN_DEPTH) return null;
   // alternation at the top level: take the first branch that yields something.
   //
   // `includes("|")` is not the same question as "is there a top-level alternation". splitTopLevel
@@ -138,14 +146,38 @@ function buildFromPattern(pattern: string, extra = 0): string | null {
     const branches = splitTopLevel(src, "|");
     if (branches.length > 1) {
       for (const branch of branches) {
-        const v = buildFromPattern(branch, extra);
+        const v = buildFromPattern(branch, extra, depth + 1);
         if (v !== null) return v;
       }
       return null;
     }
   }
   src = src.replace(/^\^/, "").replace(/^\^/, "").replace(/\$$/, "");
+  return walkSequence(src, extra, depth);
+}
 
+/**
+ * A sequence of atoms, each with its quantifier. This is the character walk; `buildFromPattern` is
+ * the entry that chooses an alternation branch and strips anchors.
+ *
+ * A group is ONE ATOM here. It used to be scenery — `(` and `)` were skipped and their contents
+ * appended as loose literals — and that single choice is why three ordinary shapes fell back to the
+ * neutral value while the regex said exactly what to build:
+ *
+ *   (?:…)      `startsWith("(?")` refused every special group, including the non-capturing one
+ *   (a|b)      the contents reached the walk with a bare `|` in them, and a bare `|` declines
+ *   (…)n * +   the quantifier after `)` had no atom to attach to, because the group had already
+ *              been skipped, so it read as "a quantifier with nothing before it" and declined
+ *
+ * Measured over the 39 APIs-guru specs whose generated suite F33 had to shrink: 175 of the 186
+ * declined fields were one of those three. The builder returns the group's value as the atom, so
+ * the quantifier below attaches to it the way it already did for a class, and the alternation
+ * inside the group is chosen by the same first-buildable-branch rule as at the top level.
+ * Verification still happens in `sampleFromPattern`, on the whole pattern, so the reachable risk of
+ * reading more is a build that declines — never a wrong value.
+ */
+function walkSequence(src: string, extra: number, depth: number): string | null {
+  const extraBudget = extra;
   let out = "";
   let i = 0;
   let guard = 0;
@@ -171,17 +203,31 @@ function buildFromPattern(pattern: string, extra = 0): string | null {
     } else if (src[i] === ".") {
       atom = "a";
       i += 1;
-    } else if ("()".includes(src[i]!)) {
-      // a plain group adds no characters of its own; a special group we cannot read
-      if (src.startsWith("(?", i)) return null;
-      i += 1;
-      continue;
+    } else if (src[i] === "(") {
+      // `(?:` is the only special group crust reads: the prefix contributes no characters, so what
+      // follows is an ordinary group. A lookahead, lookbehind, atomic group, named group or inline
+      // flag changes what the pattern MEANS, and guessing at those invents a value the schema never
+      // asked for. Decline, and let the caller say so.
+      let body = i + 1;
+      if (src.startsWith("(?", i)) {
+        if (!src.startsWith("(?:", i)) return null;
+        body = i + 3;
+      }
+      const end = findGroupEnd(src, i);
+      if (end < body) return null; // unbalanced, or a `)` that starts a special group crust refuses
+      const built = buildFromPattern(src.slice(body, end), extra, depth + 1);
+      if (built === null) return null;
+      atom = built;
+      i = end + 1;
+    } else if (src[i] === ")") {
+      return null; // a group this walk did not open
     } else if ("+*?{".includes(src[i]!)) {
       return null; // a quantifier with nothing before it
     } else if (src[i] === "|") {
-      // A bare `|` here is an alternation the walk cannot choose between — it is only reached when
-      // the pipe was nested in a group, since a top-level one was split off above and a class one is
-      // consumed by the class reader. Treating it as a literal built BOTH branches joined by a pipe:
+      // A bare `|` here is an alternation the walk cannot choose between. It used to be reached by
+      // any group alternation at all; now the group itself is the atom and its contents were
+      // already chosen above, so reaching here means the pipe is genuinely top-level or a stray.
+      // Treating it as a literal built BOTH branches joined by a pipe:
       // `(0000000000-|AAAAAAAA-…)` became "0000000000-|AAAAAAAA-…", 48 characters against a
       // maxLength of 47. Worse, it survived verification — matchesPattern is an UNANCHORED test, so
       // the regex found one branch inside the joined string and pronounced it good. 36 such values
@@ -194,31 +240,11 @@ function buildFromPattern(pattern: string, extra = 0): string | null {
 
     // quantifier attached to that atom. `room` is how far this one may be stretched to spend the
     // caller's `extra` budget — 0 for a fixed width, so a `{3}` is never widened into a mismatch.
-    let count = 1;
-    let room = 0;
-    if (src[i] === "{") {
-      const close = src.indexOf("}", i);
-      if (close < 0) return null;
-      const body = src.slice(i + 1, close);
-      const m = /^(\d+)(,(\d*))?$/.exec(body);
-      if (!m) return null;
-      count = Number(m[1]);
-      if (m[2] !== undefined)
-        room = m[3] ? Math.max(0, Number(m[3]) - count) : Number.MAX_SAFE_INTEGER;
-      i = close + 1;
-    } else if (src[i] === "+") {
-      count = 1;
-      room = Number.MAX_SAFE_INTEGER;
-      i += 1;
-    } else if (src[i] === "*") {
-      count = 0;
-      room = Number.MAX_SAFE_INTEGER;
-      i += 1;
-    } else if (src[i] === "?") {
-      count = 0;
-      room = 1;
-      i += 1;
-    }
+    const q = readQuantifier(src, i);
+    if (q === "bad") return null;
+    let count = q ? q.count : 1;
+    const room = q ? q.room : 0;
+    if (q) i = q.next;
     if (extra > 0 && room > 0 && atom.length === 1) {
       const take = Math.min(extra, room);
       count += take;
@@ -228,9 +254,77 @@ function buildFromPattern(pattern: string, extra = 0): string | null {
     // definition: cloudhsm declares `minLength: 600` and the cap rejected the build outright,
     // handing back the neutral value for a field that could have been satisfied exactly.
     if (count > Math.max(256, extraBudget)) return null;
+    // The same ceiling on the RESULT, because a group atom is longer than one character and the
+    // count cap alone let `(a|b){200}`-shaped things multiply out to whatever they liked.
+    if (atom.length * count > Math.max(MAX_PATTERN_BUILD, extraBudget)) return null;
     out += atom.repeat(count);
   }
   return out;
+}
+
+/**
+ * `{n}`, `{n,m}`, `+`, `*`, `?` at `i`, or null when nothing is quantified there. `"bad"` is a
+ * malformed or unhandled repetition, which is a decline, not a literal.
+ */
+function readQuantifier(
+  src: string,
+  i: number,
+): { count: number; room: number; next: number } | "bad" | null {
+  if (src[i] === "{") {
+    const close = src.indexOf("}", i);
+    if (close < 0) return "bad";
+    const m = /^(\d+)(,(\d*))?$/.exec(src.slice(i + 1, close));
+    if (!m) return "bad";
+    const count = Number(m[1]);
+    const room =
+      m[2] !== undefined ? (m[3] ? Math.max(0, Number(m[3]) - count) : Number.MAX_SAFE_INTEGER) : 0;
+    return { count, room, next: close + 1 };
+  }
+  if (src[i] === "+") return { count: 1, room: Number.MAX_SAFE_INTEGER, next: i + 1 };
+  if (src[i] === "*") return { count: 0, room: Number.MAX_SAFE_INTEGER, next: i + 1 };
+  if (src[i] === "?") return { count: 0, room: 1, next: i + 1 };
+  return null;
+}
+
+/** Cap on group nesting, and on how deep alternation may be entered through either path. */
+const MAX_PATTERN_DEPTH = 8;
+
+/**
+ * Ceiling on a built value the schema did not ask for. `extra` — the caller's length request — lifts
+ * it, so a `minLength: 600` field is still satisfied exactly. What it stops is a multi-character
+ * group repeating past anything a person would read.
+ */
+const MAX_PATTERN_BUILD = 2048;
+
+/**
+ * Index of the `)` that closes the group opening at `open`, or -1.
+ *
+ * Balanced, because `(a(b|c))d)` is one group followed by a stray `)`, and matching the first `)`
+ * builds an atom that the verifier would pass — `matchesPattern` is an unanchored test, and the
+ * remainder of the pattern happens to appear inside what was already built. Classes and escapes are
+ * skipped, so `[(]` and `\)` do not open or close anything.
+ */
+function findGroupEnd(src: string, open: number): number {
+  let depth = 0;
+  for (let i = open + 1; i < src.length; i++) {
+    const c = src[i];
+    if (c === "\\") {
+      i++;
+      continue;
+    }
+    if (c === "[") {
+      const close = findClassEnd(src, i);
+      if (close < 0) return -1;
+      i = close;
+      continue;
+    }
+    if (c === "(") depth++;
+    else if (c === ")") {
+      if (depth === 0) return i;
+      depth--;
+    }
+  }
+  return -1;
 }
 
 /** A representative character from a character class, or null if it is negated-and-unreadable. */

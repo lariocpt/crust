@@ -1352,7 +1352,7 @@ describe("no wrong-type case is generated that cannot fail", () => {
 });
 
 describe("a base body crust cannot fill does not carry cases it cannot attribute", () => {
-  // The sampler declines a pattern it cannot build and returns `gen-value-x`, which is knowingly
+  // The sampler declines a pattern it cannot read and returns `gen-value-x`, which is knowingly
   // wrong for the MOCK and was silently wrong for the GENERATOR: the placeholder went into the base
   // body that every 400-case perturbs, so a case about field `name` shipped a body invalid in
   // `subnetId`. Against a real API that 400 names subnetId — the case fails a correct implementation
@@ -1362,6 +1362,11 @@ describe("a base body crust cannot fill does not carry cases it cannot attribute
   // crust owns the validator, so the honest move is the one `wrongTypeFor` already takes: do not
   // emit a case that cannot fail for the reason it names — and say what was dropped, so a smaller
   // suite is disclosed rather than quietly shipped.
+  //
+  // Both halves matter, and the second one was missing. Dropping is only correct for a pattern that
+  // is genuinely unreadable; the alternation share of that number was the builder refusing `(?:…)`,
+  // `(a|b)` and `(…){n}` — which it reads now (see mock-server.test.ts), so the same rule drops far
+  // less. What remains is lookaheads, JS regex literals written into `pattern`, and `\A`/`\Z`.
   let dir: string;
   beforeAll(async () => {
     dir = await mkdtemp(join(tmpdir(), "crust-gen-unsound-"));
@@ -1400,7 +1405,7 @@ describe("a base body crust cannot fill does not carry cases it cannot attribute
     return { text, notes, result };
   }
 
-  /** A body with one pattern crust cannot build and one plain string. */
+  /** A body with one pattern the sampler cannot read and one plain string. */
   const withPattern = (pattern: string, extra: Record<string, unknown> = {}) => ({
     openapi: "3.0.0",
     paths: {
@@ -1427,12 +1432,17 @@ describe("a base body crust cannot fill does not carry cases it cannot attribute
     },
   });
 
-  // The nested alternation the corpus is full of (an AWS subnet id): the sampler cannot build a value
-  // for it, so the base body is invalid in subnetId.
-  const UNBUILDABLE = "^(subnet-[0-9a-f]{8}|subnet-[0-9a-f]{17})$";
+  // Moved 2026-10-07. The shape the corpus is full of — an AWS subnet id, an alternation inside a
+  // group — used to be unbuildable, and it is now BUILT (see the group tests in mock-server.test.ts).
+  // So the drop rule is pinned here with a pattern the wider builder still refuses: a lookahead
+  // bolted onto the same corpus shape, so the rule is tested against the field it was written for
+  // rather than a convenient one. `NOW_READ` is the flip side and is asserted below, because a drop
+  // rule that cannot tell these apart is how coverage quietly disappears.
+  const UNREADABLE = "^(subnet-[0-9a-f]{8}|subnet-[0-9a-f]{17})(?!z)$";
+  const NOW_READ = "^(subnet-[0-9a-f]{8}|subnet-[0-9a-f]{17})$";
 
   test("cases about another field are dropped; cases about that field are kept", async () => {
-    const { text, notes } = await emit("gap", withPattern(UNBUILDABLE));
+    const { text, notes } = await emit("gap", withPattern(UNREADABLE));
     // Kept: the only defect in these bodies IS the field they assert.
     expect(text).toContain("missing required 'subnetId'");
     expect(text).toContain("wrong type for 'subnetId'");
@@ -1442,6 +1452,16 @@ describe("a base body crust cannot fill does not carry cases it cannot attribute
     // And disclosed, naming the field and the rule it breaks.
     expect(notes.join("\n")).toContain("case(s) skipped for POST /things");
     expect(notes.join("\n")).toContain("'subnetId' (pattern)");
+  });
+
+  // The falsifier for the drop rule: it fires because the body is unsound, not because a pattern is
+  // present. Reading one more family of patterns must not turn the rule into a blanket refusal — that
+  // is how a generator loses coverage without anyone deciding to.
+  test("a pattern the builder reads is not dropped, whatever its shape", async () => {
+    const { text, notes } = await emit("gap-read", withPattern(NOW_READ));
+    expect(text).toContain("missing required 'name'");
+    expect(text).toContain("wrong type for 'name'");
+    expect(notes.join("\n")).not.toContain("skipped");
   });
 
   test("control: a pattern crust can fill emits every case and says nothing", async () => {
@@ -1455,7 +1475,7 @@ describe("a base body crust cannot fill does not carry cases it cannot attribute
   test("control: the authz case survives, because the gate answers before the body is read", async () => {
     const { text } = await emit(
       "gap-auth",
-      withPattern(UNBUILDABLE, { "401": { description: "the caller is not authenticated" } }),
+      withPattern(UNREADABLE, { "401": { description: "the caller is not authenticated" } }),
     );
     expect(text).toContain("without credentials -> 401");
   });
@@ -1501,7 +1521,7 @@ describe("a base body crust cannot fill does not carry cases it cannot attribute
         },
       },
     });
-    const bad = await emit("flow-gap", flow(UNBUILDABLE));
+    const bad = await emit("flow-gap", flow(UNREADABLE));
     expect(bad.result.flowCount).toBe(0);
     expect(bad.result.flowSkipped).toBe(1);
     expect(bad.notes.join("\n")).toContain("skipping flow for /things");

@@ -116,11 +116,13 @@ required foreign keys → `skip`).
 The `--out` dir is DELETED and recreated every run — never hand-edit
 generated files.
 
-What crust cannot attribute it does not emit. The pattern sampler declines
-what it cannot build (alternation inside a group — an AWS id like
-`^(subnet-[0-9a-f]{8}|subnet-[0-9a-f]{17})$`) and returns a knowingly-wrong
-placeholder; in a base body that makes a case about `name` invalid in
-`subnetId`, so its 400 names the wrong field. Those cases — and a CRUD flow
+What crust cannot attribute it does not emit. The pattern sampler returns a
+knowingly-wrong placeholder for a pattern it cannot read — a lookahead, Python
+`\A`/`\Z` anchors, a JavaScript regex literal written into `pattern` (groups
+it reads: `(?:…)`, `(a|b)`, `(…){n}`, so an AWS id like
+`^(subnet-[0-9a-f]{8}|subnet-[0-9a-f]{17})$` yields `subnet-00000000`); in a
+base body a placeholder makes a case about `name` invalid in `subnetId`, so its
+400 names the wrong field. Those cases — and a CRUD flow
 whose create body cannot be filled — are dropped and NAMED on stdout
 (`gen-fixtures: 2 case(s) skipped for POST /things …`, `skipping flow for
 /things …`). A silently smaller suite would look like coverage.
