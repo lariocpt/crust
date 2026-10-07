@@ -1351,6 +1351,169 @@ describe("no wrong-type case is generated that cannot fail", () => {
   });
 });
 
+describe("a base body crust cannot fill does not carry cases it cannot attribute", () => {
+  // The sampler declines a pattern it cannot build and returns `gen-value-x`, which is knowingly
+  // wrong for the MOCK and was silently wrong for the GENERATOR: the placeholder went into the base
+  // body that every 400-case perturbs, so a case about field `name` shipped a body invalid in
+  // `subnetId`. Against a real API that 400 names subnetId — the case fails a correct implementation
+  // or passes for a reason unrelated to its own name. The corpus: 1,799 fields, 1,077 of them an
+  // alternation pattern (measured field-by-field across all 4,138 specs).
+  //
+  // crust owns the validator, so the honest move is the one `wrongTypeFor` already takes: do not
+  // emit a case that cannot fail for the reason it names — and say what was dropped, so a smaller
+  // suite is disclosed rather than quietly shipped.
+  let dir: string;
+  beforeAll(async () => {
+    dir = await mkdtemp(join(tmpdir(), "crust-gen-unsound-"));
+  });
+  afterAll(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  async function emit(name: string, spec: Record<string, unknown>) {
+    const specPath = join(dir, `${name}.json`);
+    await writeFile(specPath, JSON.stringify(spec));
+    const setupPath = join(dir, `${name}.setup.ts`);
+    await writeFile(
+      setupPath,
+      "export const scopeParam = null;\nexport async function shared() { return {}; }\n" +
+        "export function headersFor() { return { 'content-type': 'application/json' }; }\n" +
+        "export function resolvePath(_c, t) { return 'http://127.0.0.1:1' + t; }\n",
+    );
+    const notes: string[] = [];
+    const result = await generateFixtures({
+      swagger: specPath,
+      out: join(dir, `out-${name}`),
+      setup: setupPath,
+      log: (line) => notes.push(line),
+    });
+    const text =
+      (
+        await Promise.all(
+          result.files.map((f) =>
+            Bun.file(f)
+              .text()
+              .catch(() => ""),
+          ),
+        )
+      ).join("\n") + (result.flowFile ? await Bun.file(result.flowFile).text() : "");
+    return { text, notes, result };
+  }
+
+  /** A body with one pattern crust cannot build and one plain string. */
+  const withPattern = (pattern: string, extra: Record<string, unknown> = {}) => ({
+    openapi: "3.0.0",
+    paths: {
+      "/things": {
+        post: {
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["subnetId", "name"],
+                  properties: {
+                    subnetId: { type: "string", pattern },
+                    name: { type: "string" },
+                  },
+                },
+              },
+            },
+          },
+          responses: { "200": { description: "ok" }, "400": { description: "bad" }, ...extra },
+        },
+      },
+    },
+  });
+
+  // The nested alternation the corpus is full of (an AWS subnet id): the sampler cannot build a value
+  // for it, so the base body is invalid in subnetId.
+  const UNBUILDABLE = "^(subnet-[0-9a-f]{8}|subnet-[0-9a-f]{17})$";
+
+  test("cases about another field are dropped; cases about that field are kept", async () => {
+    const { text, notes } = await emit("gap", withPattern(UNBUILDABLE));
+    // Kept: the only defect in these bodies IS the field they assert.
+    expect(text).toContain("missing required 'subnetId'");
+    expect(text).toContain("wrong type for 'subnetId'");
+    // Dropped: their 400 would name subnetId, not name.
+    expect(text).not.toContain("missing required 'name'");
+    expect(text).not.toContain("wrong type for 'name'");
+    // And disclosed, naming the field and the rule it breaks.
+    expect(notes.join("\n")).toContain("case(s) skipped for POST /things");
+    expect(notes.join("\n")).toContain("'subnetId' (pattern)");
+  });
+
+  test("control: a pattern crust can fill emits every case and says nothing", async () => {
+    const { text, notes } = await emit("ok", withPattern("^[0-9]{6}$"));
+    expect(text).toContain("missing required 'subnetId'");
+    expect(text).toContain("missing required 'name'");
+    expect(text).toContain("wrong type for 'name'");
+    expect(notes.join("\n")).not.toContain("skipped");
+  });
+
+  test("control: the authz case survives, because the gate answers before the body is read", async () => {
+    const { text } = await emit(
+      "gap-auth",
+      withPattern(UNBUILDABLE, { "401": { description: "the caller is not authenticated" } }),
+    );
+    expect(text).toContain("without credentials -> 401");
+  });
+
+  test("a CRUD flow whose create body crust cannot fill is skipped, not shipped", async () => {
+    const flow = (pattern: string) => ({
+      openapi: "3.0.0",
+      paths: {
+        "/things": {
+          post: {
+            requestBody: {
+              required: true,
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    required: ["subnetId"],
+                    properties: { subnetId: { type: "string", pattern } },
+                  },
+                },
+              },
+            },
+            responses: {
+              "201": {
+                description: "created",
+                content: {
+                  "application/json": {
+                    schema: {
+                      type: "object",
+                      required: ["id"],
+                      properties: { id: { type: "string" } },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+        "/things/{id}": {
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          get: { responses: { "200": { description: "the thing" } } },
+          delete: { responses: { "204": { description: "gone" } } },
+        },
+      },
+    });
+    const bad = await emit("flow-gap", flow(UNBUILDABLE));
+    expect(bad.result.flowCount).toBe(0);
+    expect(bad.result.flowSkipped).toBe(1);
+    expect(bad.notes.join("\n")).toContain("skipping flow for /things");
+    expect(bad.text).not.toContain("POST http");
+
+    const good = await emit("flow-ok", flow("^[0-9]{6}$"));
+    expect(good.result.flowCount).toBe(1);
+    expect(good.result.flowSkipped).toBe(0);
+    expect(good.text).toContain("assert");
+  });
+});
+
 describe("validValue respects the schema's own bounds", () => {
   // `validValue` builds the VALID base body that every 400-case perturbs. Where it produces an
   // invalid value the case perturbs an already-broken body, so the expected 400 can arrive for the

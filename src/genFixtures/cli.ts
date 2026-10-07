@@ -86,7 +86,13 @@ export async function runCli(args: string[]): Promise<number> {
     if (result.flowFile) {
       process.stdout.write(`generated ${result.flowCount} CRUD flows -> ${result.flowFile}\n`);
     } else if (flows) {
-      process.stdout.write(`generated 0 CRUD flows (no qualifying collection paths)\n`);
+      // "no qualifying collection paths" is only the truth when nothing was dropped: a flow skipped
+      // for an unfillable body is explained by its own note above, not by this line.
+      const why =
+        result.flowSkipped > 0
+          ? `${result.flowSkipped} candidate(s) skipped — see the notes above`
+          : "no qualifying collection paths";
+      process.stdout.write(`generated 0 CRUD flows (${why})\n`);
     }
     return 0;
   } catch (err) {

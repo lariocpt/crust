@@ -132,6 +132,8 @@ export interface GenerateResult {
   totalCases: number;
   flowFile: string | null;
   flowCount: number;
+  /** Flow candidates that were derived and dropped (each one logged with its reason). */
+  flowSkipped: number;
 }
 
 // Optional per-collection-template flow tuning from the setup module: some
@@ -417,6 +419,30 @@ function baseBody(schema: Schema): Record<string, unknown> {
   return body;
 }
 
+/**
+ * Which top-level body fields the generated base body does NOT satisfy, by crust's own validator.
+ *
+ * The sampler declines a pattern it cannot build and returns its placeholder, which is knowingly
+ * wrong for the MOCK and quietly wrong for a GENERATOR: the placeholder lands in the base body, so
+ * every case built on that body is invalid in a field it does not mention. The API then 400s for
+ * the placeholder, and a case asserting `fieldErrors has 'name'` either fails against a correct
+ * implementation or passes for a reason that has nothing to do with its own name. `wrongTypeFor`
+ * already refuses to emit a case for a value the API should accept; this is the same rule one level
+ * up, on the body the cases share.
+ *
+ * Pointers come back as `/field` for both a constraint violation and a missing required property,
+ * so an empty string here means a violation of the object itself (minProperties, dependentRequired)
+ * — which blocks every case, since no case is about it.
+ */
+function unsoundFields(body: Record<string, unknown>, schema: unknown): Map<string, string> {
+  const bad = new Map<string, string>();
+  for (const v of validateSchema(body, schema, {} as OpenApiSpec, "")) {
+    const field = v.pointer.replace(/^\//, "").split("/")[0];
+    if (!bad.has(field)) bad.set(field, v.rule);
+  }
+  return bad;
+}
+
 // Minimal sampler for simple digit/dash regexes (^\d{6}$, ^\d{4,16}$,
 // ^\d{4}-\d{2}-\d{2}$). Anything fancier falls back to a generic string —
 // a failing case will point at the gap.
@@ -491,6 +517,19 @@ interface GenCase {
   responseSchema?: unknown;
 }
 
+/**
+ * An operation whose body cases were dropped because the base body is not schema-valid. Reported to
+ * the caller so a shrunken suite is DISCLOSED rather than silently shipped — the same accounting a
+ * skipped flow gets. Dropping is the honest half: the alternative is a case that 400s for the wrong
+ * reason and passes.
+ */
+interface UnsoundOp {
+  template: string;
+  /** Field ("" = the object itself) and the schema rule crust's own value breaks. */
+  fields: [string, string][];
+  dropped: number;
+}
+
 function isScopeGated(path: string, firstParam: string | null, scope: ScopeConfig): boolean {
   if (firstParam === null || scope.scopeParam === null) return false;
   if (firstParam === scope.scopeParam) return true;
@@ -499,7 +538,13 @@ function isScopeGated(path: string, firstParam: string | null, scope: ScopeConfi
   return scope.scopeRoots.some((root) => path.startsWith(`${root.replace(/\/+$/, "")}/{`));
 }
 
-function deriveCases(path: string, method: string, op: Operation, scope: ScopeConfig): GenCase[] {
+function deriveCases(
+  path: string,
+  method: string,
+  op: Operation,
+  scope: ScopeConfig,
+  unsound: UnsoundOp[],
+): GenCase[] {
   const cases: GenCase[] = [];
   const responses = op.responses ?? {};
   const has = (code: number) => String(code) in responses;
@@ -668,6 +713,32 @@ function deriveCases(path: string, method: string, op: Operation, scope: ScopeCo
         expectStatus: 400,
         expectValidationCode: true,
       });
+    }
+
+    // Attribution. Each case above names ONE field and expects the 400 to name that field back,
+    // which only holds if the rest of the body is valid. It is not when a required field's pattern
+    // could not be built: the placeholder invalidates a field the case never mentions, so the case
+    // passes on the wrong defect or fails against a correct API. Drop those, keep the ones about
+    // the very field that is invalid (whose body's only defect IS what they assert), and report it.
+    const baseBad = unsoundFields(base, bodySchema);
+    if (baseBad.size > 0) {
+      const kept = cases.filter((c) => {
+        // Authz and unknown-param cases carry a body but assert the GATE, which answers before the
+        // body is read — an unsound body cannot make those wrong.
+        if (c.expectValidationField === undefined && c.expectValidationCode !== true) return true;
+        const f = c.expectValidationField;
+        return f !== undefined && baseBad.size === 1 && baseBad.has(f);
+      });
+      const dropped = cases.length - kept.length;
+      if (dropped > 0) {
+        cases.length = 0;
+        cases.push(...kept);
+        unsound.push({
+          template: `${method.toUpperCase()} ${path}`,
+          fields: [...baseBad],
+          dropped,
+        });
+      }
     }
   }
 
@@ -858,6 +929,24 @@ function deriveFlows(
     if (!idPath) {
       skipped.push({ template, reason: "no id derivable from the POST 2xx response" });
       continue;
+    }
+
+    // The create step posts a schema-valid body and asserts a 2xx. A body crust cannot fill — a
+    // required field whose pattern it cannot build — 400s against a correct implementation on the
+    // FIRST step, so the flow would fail for a reason nobody wrote. Unless the setup module supplies
+    // the body (the documented escape for exactly this), skip the flow and say why.
+    if (!override?.body) {
+      const bad = [...unsoundFields(baseBody(bodySchema), bodySchema)].filter(
+        ([field]) => field !== "",
+      );
+      if (bad.length > 0) {
+        const named = bad.map(([field, rule]) => `'${field}' (${rule})`).join(", ");
+        skipped.push({
+          template,
+          reason: `crust's own value for ${named} does not satisfy the schema, so the create step would 400`,
+        });
+        continue;
+      }
     }
 
     flows.push({ template, post, itemOps, idPath, envName: "", bodyOverride: override?.body });
@@ -1103,15 +1192,30 @@ export async function generateFixtures(opts: GenerateOpts): Promise<GenerateResu
       (setupMod as { flowOverrides?: Record<string, FlowOverride> }).flowOverrides ?? {},
   };
 
+  const log = opts.log ?? ((line: string) => process.stdout.write(`${line}\n`));
+  const unsound: UnsoundOp[] = [];
   const byTag = new Map<string, GenCase[]>();
   for (const [path, methods] of Object.entries(spec.paths ?? {})) {
     for (const [method, op] of Object.entries(methods as Record<string, Operation>)) {
       if (!["get", "post", "patch", "put", "delete"].includes(method)) continue;
       const tag = op.tags?.[0] ?? "untagged";
       const arr = byTag.get(tag) ?? [];
-      arr.push(...deriveCases(path, method, op, scope));
+      arr.push(...deriveCases(path, method, op, scope, unsound));
       byTag.set(tag, arr);
     }
+  }
+
+  // Cases dropped for an unfillable body are disclosed here, not left as a silently smaller suite.
+  for (const u of unsound) {
+    const named =
+      u.fields.length > 0
+        ? u.fields
+            .map(([field, rule]) => (field ? `'${field}' (${rule})` : `the body (${rule})`))
+            .join(", ")
+        : "crust's own value";
+    log(
+      `gen-fixtures: ${u.dropped} case(s) skipped for ${u.template} — crust's own value for ${named} does not satisfy the schema, so a 400 from that body would name the wrong field`,
+    );
   }
 
   await rm(outDir, { recursive: true, force: true });
@@ -1145,8 +1249,8 @@ ${fixtures}
   // test-pipes with zero extra flags.
   let flowFile: string | null = null;
   let flowCount = 0;
+  let flowSkipped = 0;
   if (opts.flows !== false) {
-    const log = opts.log ?? ((line: string) => process.stdout.write(`${line}\n`));
     const { flows, skipped } = deriveFlows(
       (spec.paths ?? {}) as Record<string, Record<string, Operation>>,
       scope,
@@ -1154,6 +1258,7 @@ ${fixtures}
     for (const s of skipped) {
       log(`gen-fixtures: skipping flow for ${s.template} — ${s.reason}`);
     }
+    flowSkipped = skipped.length;
     if (flows.length > 0) {
       const flowsDir = resolve(outDir, "flows");
       await mkdir(flowsDir, { recursive: true });
@@ -1167,5 +1272,5 @@ ${fixtures}
     }
   }
 
-  return { outDir, files, totalCases, flowFile, flowCount };
+  return { outDir, files, totalCases, flowFile, flowCount, flowSkipped };
 }

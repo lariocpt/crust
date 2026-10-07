@@ -1235,6 +1235,7 @@ Derived cases:
 - The **valid base body honours the schema's own bounds** — `maxLength`, `minLength`, `minItems`/`maxItems`, `minimum`/`maximum`. Every 400-case perturbs that body, so where it was already invalid the expected 400 could arrive for the wrong reason: a false pass, which is the one thing crust must never produce. The fixed format values (`gen@crust.fixture`, the stable uuid) are deliberately unchanged, since checked-in matrices are CI-diffed against a regeneration.
 - A **wrong-type case is only generated when the value is actually rejected**. A field whose schema constrains nothing — `{properties: {…}}` with no `type`, a description-only node — has no wrong value, and such a case would assert `-> 400` for a request a correct API answers 200: a test that fails against a correct implementation. 6,101 were derivable from the APIs-guru corpus. crust owns the validator, so it asks it rather than guessing.
 - A missing `type` is **inferred from the keywords present**, shared with the mock — so `{minLength: 3}` with no type now yields the boundary case it silently skipped before.
+- A **body crust cannot fill carries no cases it cannot attribute**. The pattern sampler declines what it cannot build — an AWS id like `^(subnet-[0-9a-f]{8}|subnet-[0-9a-f]{17})$`, alternation inside a group inside alternation — and returns its placeholder, which is *knowingly* wrong for the mock and was quietly wrong here: the placeholder landed in the base body, so a case about `name` shipped a body invalid in `subnetId`. The 400 then names `subnetId`, and the case fails a correct implementation or passes for a reason unrelated to its own name. 1,799 of the 164,473 request-body fields in the APIs-guru corpus were in that state. So the base body is checked with crust's own validator and every case whose 400 could name a field other than the one it asserts is dropped — keeping the cases about the invalid field itself, and the 401/403/404 cases, whose gate answers before the body is read. The drop is printed (`gen-fixtures: 2 case(s) skipped for POST /things — crust's own value for 'subnetId' (pattern) does not satisfy the schema, so a 400 from that body would name the wrong field`): a smaller suite is a fact to report, not a silence to ship.
 - Every `$ref` is inlined once and **shared**, and inlining stops after 200,000 nodes. azure's `network-applicationGateway` is a DAG of a few schemas referenced from many places: copying at each occurrence turned a few-MB spec into a 2.03 GB structure — 17s where it survived and OUT OF MEMORY on five of nine versions, so `gen-fixtures` there did not run slowly, it did not run. Past the budget a `$ref` inlines as `{}`, exactly as a cyclic one does, and gen-fixtures says so on stderr: fewer generated cases, none of them wrong.
   below minimum / above maximum (`maximum: Number.MAX_SAFE_INTEGER` is
   treated as an "unbounded" sentinel and skipped), and pattern violation
@@ -1264,7 +1265,10 @@ scope param (nested collections are skipped with a stdout notice), and the
 created id's location is derivable from the POST's 2xx response (the media
 `example`, else `schema.properties`: top-level `id`, else the first
 object-valued property containing an `id`; not derivable → skipped with a
-notice).
+notice). A flow whose derived create body crust cannot fill — a required field
+whose pattern it cannot build — is also skipped with a notice instead of
+shipped: its very first step would 400 against a correct implementation, so
+the flow would fail for a reason nobody wrote.
 
 Each flow chains create → read → update → delete → read-after-delete using
 the [capture](#shorthand-fixture-grammar) stage — the POST captures the new
