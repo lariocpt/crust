@@ -145,6 +145,15 @@ are skipped and `\` continuations are joined — the same splitting the runtime
 does — so a whole fenced block can be piped in as one argument. crust's own
 suite lints every ```crust example in the shipped agent skills this way.
 
+One edge to know when CI runs this over a docs file: `$VAR` is expanded from the
+**real environment** while the line is being built, so `--check` proves a line
+parses *for that environment*. An unset variable inside a JSON literal makes the
+literal malformed before anything runs — `--check '{"n":$N}'` is a JSON parse
+error with `N` unset and `ok` with `N=7` — while a URL, a header value or a
+`read` path is never parsed as JSON and checks clean whatever the variable
+holds. The lint therefore catches the shape mistakes a docs file can actually
+contain, and says nothing about values it never saw.
+
 ## Hello world
 
 ```text
