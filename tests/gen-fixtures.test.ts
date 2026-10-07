@@ -2340,3 +2340,172 @@ describe("a drop notice blames whoever is responsible", () => {
     expect(partial.result.withNoCases).toBe(0);
   });
 });
+
+describe("a union body whose branch carries the required (F43)", () => {
+  // urlbox.io writes a two-form POST the way anyone would: the node declares the fields ONCE, and
+  // each union branch says which one of them this form needs —
+  //   {oneOf: [{required: ["url"]}, {required: ["html"]}], properties: {url, html, format, …}}
+  // The composed read took a union branch only when the node owned NOTHING at all, so this one
+  // composed to `{}`: the base body satisfied no branch, crust's validator answered `anyOf`, and
+  // F33's honest rule removed EVERY negative case of the operation behind a notice blaming crust's
+  // own value. urlbox generated 0 cases from the whole spec; 23 of the corpus's specs were in that
+  // state, and 21 of them reported no negative cases at all (the 93 operations are the static
+  // census — skills.src/crust-dogfood/scripts/gen_union_bodies.py).
+  //
+  // So read a branch when the view cannot satisfy one — and the controls are what make that rule
+  // mean something. A branch already satisfied by the node's own `required` is NOT read: for a
+  // `oneOf`, adding the other alternative would make the base body match TWO branches and fail the
+  // very thing being composed for. A branch with no `required` is satisfied by anything, which is
+  // what keeps whatsapp on the first branch. And `allOf` stays an intersection: every branch, no
+  // choosing.
+  let dir: string;
+  beforeAll(async () => {
+    dir = await mkdtemp(join(tmpdir(), "crust-gen-union-"));
+  });
+  afterAll(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  async function emit(name: string, schema: Record<string, unknown>) {
+    const specPath = join(dir, `${name}.json`);
+    const spec = {
+      openapi: "3.0.0",
+      paths: {
+        "/things": {
+          post: {
+            requestBody: {
+              required: true,
+              content: { "application/json": { schema } },
+            },
+            responses: { "200": { description: "ok" }, "400": { description: "bad" } },
+          },
+        },
+      },
+    };
+    await writeFile(specPath, JSON.stringify(spec));
+    const setupPath = join(dir, `${name}.setup.ts`);
+    await writeFile(
+      setupPath,
+      "export const scopeParam = null;\nexport async function shared() { return {}; }\n" +
+        "export function headersFor() { return { 'content-type': 'application/json' }; }\n" +
+        "export function resolvePath(_c, t) { return 'http://127.0.0.1:1' + t; }\n",
+    );
+    const notes: string[] = [];
+    const result = await generateFixtures({
+      swagger: specPath,
+      out: join(dir, `out-${name}`),
+      setup: setupPath,
+      log: (line) => notes.push(line),
+    });
+    const text = (
+      await Promise.all(
+        result.files.map((f) =>
+          Bun.file(f)
+            .text()
+            .catch(() => ""),
+        ),
+      )
+    ).join("\n");
+    return { text, notes, result };
+  }
+
+  const RENDER = {
+    oneOf: [{ required: ["url"] }, { required: ["html"] }],
+    properties: {
+      url: { type: "string" },
+      html: { type: "string" },
+      format: { type: "string", enum: ["png", "json"] },
+    },
+  };
+
+  test("the branch's field gets cases, and no operation is emptied behind a notice", async () => {
+    const r = await emit("urlbox-shape", RENDER);
+    expect(r.notes.join("\n")).not.toContain("case(s) skipped");
+    expect(r.result.withNoCases).toBe(0);
+    expect(r.text).toContain("missing required 'url'");
+    // the base body carries a real value for the branch's field — not `{}`, and not `"x"`
+    expect(r.text).toContain(
+      '"{\\"url\\":\\"gen-value-x\\",\\"format\\":\\"__not_a_real_enum_value__\\"}"',
+    );
+  });
+
+  test("anyOf behaves the same way (linode writes records this shape)", async () => {
+    const r = await emit("anyof-shape", {
+      anyOf: [{ required: ["country"] }, { required: ["state"] }],
+      properties: { country: { type: "string" }, state: { type: "string" } },
+    });
+    expect(r.notes.join("\n")).not.toContain("case(s) skipped");
+    expect(r.text).toContain("missing required 'country'");
+  });
+
+  test("a node that requires its own field and a branch that requires another satisfies both", async () => {
+    // anyOf with BOTH requirements holds: the body has to carry `a` for the node and `b` for the
+    // branch, so both names must appear in the composed view or every case dies with the base body.
+    const r = await emit("node-and-branch", {
+      anyOf: [{ required: ["b"] }],
+      required: ["a"],
+      properties: { a: { type: "string" }, b: { type: "integer" } },
+    });
+    expect(r.notes.join("\n")).not.toContain("case(s) skipped");
+    expect(r.text).toContain("missing required 'a'");
+    expect(r.text).toContain("missing required 'b'");
+  });
+
+  test("control: a oneOf the node already satisfies is not widened to the second branch", async () => {
+    // The trap in the fix. The node requires `a`, which satisfies branch one; merging branch two
+    // would give a body matching BOTH branches, and `oneOf` means exactly one — so the base body
+    // crust builds to satisfy the union would be the thing that breaks it.
+    const r = await emit("oneof-exactly-one", {
+      oneOf: [{ required: ["a"] }, { required: ["b"] }],
+      required: ["a"],
+      properties: { a: { type: "string" }, b: { type: "string" } },
+    });
+    expect(r.notes.join("\n")).not.toContain("case(s) skipped");
+    expect(r.text).toContain("missing required 'a'");
+    expect(r.text).not.toContain("missing required 'b'");
+  });
+
+  test("control: a branch that requires nothing is satisfied by a body that requires nothing", async () => {
+    // Vacuous branch = any body matches, so the union is already satisfied and reading another
+    // branch would only invent a requirement the spec never asked for.
+    const r = await emit("branch-vacuous", {
+      anyOf: [{}, { required: ["b"] }],
+      properties: { a: { type: "string" }, b: { type: "string" } },
+    });
+    expect(r.notes.join("\n")).not.toContain("case(s) skipped");
+    expect(r.text).not.toContain("missing required 'b'");
+  });
+
+  test("control: the whatsapp shape still takes branch one, required included", async () => {
+    // The shape the rule already handled (the node leaves the whole shape to the branch). Branch
+    // two's `image` must stay out of the required set — taking both branches would invent a body
+    // needing audio AND image, which is no branch's request.
+    const r = await emit("branch-owns-shape", {
+      type: "object",
+      oneOf: [
+        {
+          properties: { audio: { type: "string" }, caption: { type: "string" } },
+          required: ["audio"],
+        },
+        { properties: { image: { type: "string" } }, required: ["image"] },
+      ],
+    });
+    expect(r.notes.join("\n")).not.toContain("case(s) skipped");
+    expect(r.text).toContain("missing required 'audio'");
+    expect(r.text).not.toContain("missing required 'image'");
+  });
+
+  test("control: an unsatisfiable field inside a union body still drops on its own blame", async () => {
+    // F33's honesty has to survive the new read. `a` is `{type: string, enum: [true, false]}` — no
+    // value satisfies it — but every case that SURVIVES is sound on its own terms (missing 'a',
+    // wrong type for 'a', a bad enum member), so nothing is dropped and nothing is blamed. The
+    // point of this test is what it refuses to assert: no notice, because no case went.
+    const r = await emit("dead-enum-in-union", {
+      oneOf: [{ required: ["a"] }, { required: ["b"] }],
+      properties: { a: { type: "string", enum: [true, false] }, b: { type: "string" } },
+    });
+    expect(r.notes.join("\n")).not.toContain("case(s) skipped");
+    expect(r.text).toContain("invalid enum for 'a'");
+    expect(r.result.totalCases).toBeGreaterThan(0);
+  });
+});

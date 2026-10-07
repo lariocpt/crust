@@ -253,9 +253,26 @@ function composedObject(
   // The FIRST branch is taken, the convention the combinator path and the mock both already use: a
   // union offers alternatives, not an intersection, so merging them all would invent a shape no
   // branch describes.
-  if (out.required.length === 0 && Object.keys(out.properties).length === 0) {
-    const branches = Array.isArray(s.oneOf) ? s.oneOf : Array.isArray(s.anyOf) ? s.anyOf : null;
-    if (branches && branches.length > 0) {
+  //
+  // The mirror shape was still broken: the node owns `properties` and each branch only says WHICH
+  // of them is mandatory — urlbox's `RenderRequest` is `oneOf: [{required:[url]},
+  // {required:[html]}]` over a shared `properties` block, which is how a two-form POST gets
+  // written. Reading a branch only when the node owned nothing at all left this one composing to
+  // `{}`: the body satisfied no branch, the validator said `anyOf`, and every negative case of the
+  // operation was dropped behind a notice naming crust.
+  //
+  // So read a branch when the view cannot satisfy one. A branch that declares no `required` is
+  // satisfied by any object — that is what keeps the whatsapp shape on the first branch instead of
+  // chasing it — and a branch already satisfied by the node's own `required` is NOT read: adding
+  // the OTHER alternative would make a `oneOf` match two branches and fail the very thing being
+  // composed for. When nothing satisfies the union the FIRST branch is the one, same convention as
+  // above; on the rare union where that branch's own requirements also satisfy a later one, the
+  // base body crust builds is invalid, F33's check says so, and the notice names it.
+  const branches = Array.isArray(s.oneOf) ? s.oneOf : Array.isArray(s.anyOf) ? s.anyOf : null;
+  if (branches && branches.length > 0) {
+    const satisfiedBy = (b: Schema): boolean =>
+      !Array.isArray(b.required) || b.required.every((r) => out.required.includes(r));
+    if (Object.keys(out.properties).length === 0 || !branches.some(satisfiedBy)) {
       const sub = composedObject(branches[0], depth + 1);
       Object.assign(out.properties, sub.properties);
       out.required.push(...sub.required);
