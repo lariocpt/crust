@@ -72,6 +72,13 @@ export async function runCli(args: string[]): Promise<number> {
     process.stdout.write(
       `generated ${result.totalCases} cases across ${result.files.length} files -> ${result.outDir}\n`,
     );
+    // The aggregate survives whatever a harness filters out of the notices above: an operation whose
+    // cases were ALL dropped has no negative coverage, which is not the same fact as "one case fewer".
+    if (result.withNoCases > 0) {
+      process.stdout.write(
+        `note: ${result.withNoCases} operation(s) left with no negative cases — the notes above say why\n`,
+      );
+    }
     if (result.totalCases === 0) {
       process.stdout.write(
         "hint: cases derive from DOCUMENTED responses, not securitySchemes — " +

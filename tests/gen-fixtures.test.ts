@@ -2025,3 +2025,318 @@ describe("an allOf-composed request body (F36)", () => {
     expect(notes.join("\n")).not.toContain("skipped");
   });
 });
+
+describe("a drop notice blames whoever is responsible", () => {
+  // The base-body check says "crust's own value for 'vmSpecs' (type) does not satisfy the schema".
+  // Half of that is a lie about where the defect lives. visualstudio.com/v1 declares
+  //   VMDiskType: {type: integer, format: int32, enum: ["0 (StandardHDD)", "1 (StandardSSD)", …]}
+  // — the enum members are YAML strings beside an int32, so NO value satisfies the node, and no
+  // generator on earth would fill that field. apptigent writes {type: string, enum: [true, false]}
+  // for the same effect. Saying "crust's own value" sends the reader to open an issue against the
+  // wrong repo, and the honest disclosure the F33 rule bought is then aimed at nothing.
+  //
+  // So the notice asks the validator the only question that settles it: does any member of that
+  // enum satisfy the node holding it? All fail => the SPEC contradicts itself, and the walk says
+  // WHERE (/diskType), because the reported field is the outer one. The controls are the load-
+  // bearing half: a contradiction in something OPTIONAL, in a union branch that is alive, or in an
+  // enum that agrees with its own type must not be reported as the spec's, or the escape hatch
+  // becomes a way to stop reading crust's own bugs.
+  let dir: string;
+  beforeAll(async () => {
+    dir = await mkdtemp(join(tmpdir(), "crust-gen-blame-"));
+  });
+  afterAll(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  async function emit(name: string, schema: Record<string, unknown>) {
+    const specPath = join(dir, `${name}.json`);
+    const spec = {
+      openapi: "3.0.0",
+      paths: {
+        "/things": {
+          post: {
+            requestBody: {
+              required: true,
+              content: { "application/json": { schema } },
+            },
+            responses: { "200": { description: "ok" }, "400": { description: "bad" } },
+          },
+        },
+      },
+    };
+    await writeFile(specPath, JSON.stringify(spec));
+    const setupPath = join(dir, `${name}.setup.ts`);
+    await writeFile(
+      setupPath,
+      "export const scopeParam = null;\nexport async function shared() { return {}; }\n" +
+        "export function headersFor() { return { 'content-type': 'application/json' }; }\n" +
+        "export function resolvePath(_c, t) { return 'http://127.0.0.1:1' + t; }\n",
+    );
+    const notes: string[] = [];
+    const result = await generateFixtures({
+      swagger: specPath,
+      out: join(dir, `out-${name}`),
+      setup: setupPath,
+      log: (line) => notes.push(line),
+    });
+    const text = (
+      await Promise.all(
+        result.files.map((f) =>
+          Bun.file(f)
+            .text()
+            .catch(() => ""),
+        ),
+      )
+    ).join("\n");
+    return { text, notes, result };
+  }
+
+  /** The corpus's unsatisfiable field, and one crust genuinely cannot build. */
+  const VM_SPECS = {
+    type: "object",
+    required: ["diskType"],
+    properties: {
+      diskType: {
+        type: "integer",
+        format: "int32",
+        enum: ["0 (StandardHDD)", "1 (StandardSSD)", "2 (PremiumSSD)"],
+      },
+    },
+  };
+  const UNREADABLE = { type: "string", pattern: "^(subnet-[0-9a-f]{8})(?!z)$" };
+  const body = (properties: Record<string, unknown>, required: string[]) => ({
+    type: "object",
+    properties,
+    required,
+  });
+
+  // `name` is the innocent bystander. A body with ONE unsound field drops nothing (every case is
+  // about that field, so each keeps its own blame) and so prints nothing — the notice only exists
+  // where cases were actually dropped, which is the right rule and makes the bystander necessary.
+  const INNOCENT = { type: "string" };
+
+  test("a spec that allows no value is named as the spec's own contradiction", async () => {
+    const { text, notes } = await emit(
+      "spec-dead",
+      body({ vmSpecs: VM_SPECS, name: INNOCENT }, ["vmSpecs", "name"]),
+    );
+    const joined = notes.join("\n");
+    expect(joined).toContain("case(s) skipped for POST /things");
+    expect(joined).toContain("the SPEC contradicts itself");
+    expect(joined).toContain("'vmSpecs'");
+    // Where, not just which field: the contradiction is one level below the reported field.
+    expect(joined).toContain("/diskType");
+    expect(joined).toContain('"0 (StandardHDD)"');
+    expect(joined).toContain("fails type");
+    // The half that was the lie: nothing blames crust for a field nothing can fill.
+    expect(joined).not.toContain("crust's own value");
+    // The drop itself is unchanged by who is blamed: cases about other fields go.
+    expect(text).toContain("missing required 'vmSpecs'");
+    expect(text).not.toContain("missing required 'name'");
+  });
+
+  test("a crust gap keeps the wording that names crust, byte for byte", async () => {
+    const { notes } = await emit(
+      "crust-gap",
+      body({ subnetId: UNREADABLE, name: INNOCENT }, ["subnetId", "name"]),
+    );
+    const joined = notes.join("\n");
+    expect(joined).toContain(
+      "crust's own value for 'subnetId' (pattern) does not satisfy the schema, so a 400 from " +
+        "that body would name the wrong field",
+    );
+    expect(joined).not.toContain("SPEC contradicts");
+  });
+
+  test("one body, both halves: each field is named by whoever is responsible", async () => {
+    const { notes } = await emit(
+      "mixed",
+      body({ vmSpecs: VM_SPECS, subnetId: UNREADABLE }, ["vmSpecs", "subnetId"]),
+    );
+    const joined = notes.join("\n");
+    expect(joined).toContain("the SPEC contradicts itself: 'vmSpecs'");
+    expect(joined).toContain("crust's own value for 'subnetId' (pattern)");
+  });
+
+  test("control: an enum that agrees with its own type is not a contradiction", async () => {
+    const { text, notes } = await emit(
+      "enum-ok",
+      body({ diskType: { type: "string", enum: ["StandardHDD", "PremiumSSD"] }, name: INNOCENT }, [
+        "diskType",
+        "name",
+      ]),
+    );
+    expect(notes.join("\n")).not.toContain("skipped");
+    expect(text).toContain("wrong type for 'diskType'");
+  });
+
+  test("control: a contradiction in an OPTIONAL field is crust's to omit, not the spec's to blame", async () => {
+    // baseBody fills required fields only, so an unsatisfiable optional field costs nothing. Were
+    // the walk to descend through optional properties it would report a dead end crust never
+    // entered — and the notice would stop being evidence.
+    const { notes } = await emit(
+      "optional-dead",
+      body({ vmSpecs: VM_SPECS, name: { type: "string" } }, ["name"]),
+    );
+    expect(notes.join("\n")).not.toContain("skipped");
+  });
+
+  test("control: a union with one live branch is crust choosing a branch, not the spec", async () => {
+    const { notes } = await emit(
+      "union-alive",
+      body(
+        {
+          diskType: {
+            anyOf: [{ type: "integer", enum: ["0 (StandardHDD)"] }, { type: "boolean" }],
+          },
+          name: INNOCENT,
+        },
+        ["diskType", "name"],
+      ),
+    );
+    const joined = notes.join("\n");
+    // crust composes a union to its first branch (see the F36 tests) and its value satisfies
+    // neither; `type: boolean` is satisfiable, so this one is crust's to fix and must read that way.
+    expect(joined).toContain("crust's own value for 'diskType' (anyOf)");
+    expect(joined).not.toContain("SPEC contradicts");
+  });
+
+  test("control: a union where every branch is impossible IS the spec's", async () => {
+    const { notes } = await emit(
+      "union-dead",
+      body(
+        {
+          diskType: {
+            anyOf: [
+              { type: "integer", enum: ["a"] },
+              { type: "string", enum: [1] },
+            ],
+          },
+          name: INNOCENT,
+        },
+        ["diskType", "name"],
+      ),
+    );
+    const joined = notes.join("\n");
+    expect(joined).toContain("the SPEC contradicts itself: 'diskType'");
+    expect(joined).toContain("every branch of its anyOf is unsatisfiable");
+    expect(joined).not.toContain("crust's own value");
+  });
+
+  // A CRUD-shaped spec: the flow derivation needs a create whose 2xx carries an id and an item path
+  // with a 404, or the flow is never a candidate and the create-body check never runs.
+  async function emitCrud(name: string, schema: Record<string, unknown>) {
+    const specPath = join(dir, `${name}.json`);
+    await writeFile(
+      specPath,
+      JSON.stringify({
+        openapi: "3.0.0",
+        paths: {
+          "/things": {
+            post: {
+              requestBody: { required: true, content: { "application/json": { schema } } },
+              responses: {
+                "201": {
+                  description: "created",
+                  content: {
+                    "application/json": {
+                      schema: {
+                        type: "object",
+                        required: ["id"],
+                        properties: { id: { type: "string" } },
+                        example: { id: "abc123" },
+                      },
+                    },
+                  },
+                },
+                "400": { description: "bad" },
+              },
+            },
+            get: { responses: { "200": { description: "ok" } } },
+          },
+          "/things/{thingId}": {
+            parameters: [
+              { name: "thingId", in: "path", required: true, schema: { type: "string" } },
+            ],
+            get: { responses: { "200": { description: "ok" }, "404": { description: "nope" } } },
+            put: {
+              requestBody: { required: true, content: { "application/json": { schema } } },
+              responses: { "200": { description: "ok" }, "400": { description: "bad" } },
+            },
+            delete: {
+              responses: { "204": { description: "gone" }, "404": { description: "nope" } },
+            },
+          },
+        },
+      }),
+    );
+    const setupPath = join(dir, `${name}.setup.ts`);
+    await writeFile(
+      setupPath,
+      "export const scopeParam = null;\nexport async function shared() { return {}; }\n" +
+        "export function headersFor() { return { 'content-type': 'application/json' }; }\n" +
+        "export function resolvePath(_c, t) { return 'http://127.0.0.1:1' + t; }\n",
+    );
+    const notes: string[] = [];
+    const result = await generateFixtures({
+      swagger: specPath,
+      out: join(dir, `out-${name}`),
+      setup: setupPath,
+      log: (line) => notes.push(line),
+    });
+    return { notes, result };
+  }
+
+  test("a contradiction in a create body is the spec's too, in the flow notice", async () => {
+    const { notes, result } = await emitCrud("flow-dead", body({ vmSpecs: VM_SPECS }, ["vmSpecs"]));
+    const joined = notes.join("\n");
+    expect(result.flowSkipped).toBe(1);
+    expect(joined).toContain("skipping flow for /things");
+    expect(joined).toContain("the SPEC contradicts itself: 'vmSpecs' — /diskType");
+    expect(joined).not.toContain("crust's own value");
+  });
+
+  test("control: a create body crust cannot fill still says so, word for word as before", async () => {
+    const { notes } = await emitCrud("flow-crust", body({ subnetId: UNREADABLE }, ["subnetId"]));
+    expect(notes.join("\n")).toContain(
+      "crust's own value for 'subnetId' (pattern) does not satisfy the schema, so the create " +
+        "step would 400",
+    );
+  });
+
+  test("the result counts operations left with no negative cases at all", async () => {
+    // Two unsatisfiable fields: the keep-rule needs the asserted field to be the ONLY bad one, so
+    // every 400 case for this operation goes. "40 cases dropped" and "this operation is uncovered"
+    // are different facts, and the notices get filtered by harnesses — the count is the aggregate
+    // that survives.
+    const dead = await emit(
+      "all-gone",
+      body({ vmSpecs: VM_SPECS, subnetId: UNREADABLE }, ["vmSpecs", "subnetId"]),
+    );
+    expect(dead.result.withNoCases).toBe(1);
+    expect(dead.text).not.toContain("wrong type for 'subnetId'");
+  });
+
+  test("control: the count is operations, not notices and not cases", async () => {
+    // The CRUD-shaped spec hits the same unsound body twice — create and update are two operations,
+    // so it says 2. Four cases go per operation, which is not the number being counted.
+    const both = await emitCrud(
+      "all-gone-crud",
+      body({ vmSpecs: VM_SPECS, subnetId: UNREADABLE }, ["vmSpecs", "subnetId"]),
+    );
+    expect(both.result.withNoCases).toBe(2);
+  });
+
+  test("control: an operation that keeps its own cases is not counted as uncovered", async () => {
+    // Cases ASSERTING the unsatisfiable field survive (that body cannot be wrong about anything
+    // else), so the operation keeps negative coverage even though its neighbour's cases went.
+    const partial = await emit(
+      "one-field",
+      body({ vmSpecs: VM_SPECS, name: INNOCENT }, ["vmSpecs", "name"]),
+    );
+    expect(partial.notes.join("\n")).toContain("case(s) skipped");
+    expect(partial.text).toContain("missing required 'vmSpecs'");
+    expect(partial.result.withNoCases).toBe(0);
+  });
+});

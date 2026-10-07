@@ -134,6 +134,12 @@ export interface GenerateResult {
   flowCount: number;
   /** Flow candidates that were derived and dropped (each one logged with its reason). */
   flowSkipped: number;
+  /**
+   * Operations whose body cases were ALL dropped because the base body cannot be made valid. A suite
+   * that lost 142 cases across 41 operations is a different fact from one that lost one case, and
+   * per-operation notices get filtered by harnesses — this number is the aggregate that survives.
+   */
+  withNoCases: number;
 }
 
 // Optional per-collection-template flow tuning from the setup module: some
@@ -455,6 +461,123 @@ function unsoundFields(body: Record<string, unknown>, schema: unknown): Map<stri
   return bad;
 }
 
+/**
+ * Why NO value satisfies this node, or null when it is merely hard for crust. The one shape that is
+ * certain is an `enum` whose members all fail the node's own constraints: the enum allows only its
+ * members, so if each is rejected nothing is allowed. The validator decides, so `nullable` and 3.1
+ * type arrays are already accounted for. Real corpus shapes: `type: integer` + `format: int32` with
+ * `enum: ["0 (StandardHDD)", …]` (visualstudio's `VMDiskType`, the enum written as YAML strings) and
+ * `type: string` with `enum: [true, false]` (apptigent). Both mean the SPEC has no legal value — and
+ * a notice blaming crust's value sends the reader to fix the wrong repo.
+ */
+function enumDeadEnd(node: Schema): string | null {
+  const en = node.enum as unknown[] | undefined;
+  if (!Array.isArray(en) || en.length === 0) return null;
+  const verdicts = en.map((m) => validateSchema(m, node, {} as OpenApiSpec, ""));
+  if (verdicts.some((v) => v.length === 0)) return null;
+  const shown =
+    en
+      .slice(0, 3)
+      .map((m) => JSON.stringify(m))
+      .join(", ") + (en.length > 3 ? ", …" : "");
+  const rules = [...new Set(verdicts.flat().map((v) => v.rule))].sort().join("/");
+  return `enum [${shown}] fails ${rules}`;
+}
+
+/** Does this node admit `null` by its own declaration (either spec version)? */
+function admitsNull(node: Schema): boolean {
+  if ((node as { nullable?: unknown }).nullable === true) return true;
+  const t = node.type as unknown;
+  return Array.isArray(t) && t.includes("null");
+}
+
+/**
+ * Walk to the point inside a schema where nothing can satisfy it, following only keywords that MUST
+ * hold — a `required` property, `items` when `minItems` demands one, every `allOf` branch — so a
+ * contradiction in something optional is not reported as one. A union is dead only when EVERY branch
+ * is dead. Returns a pointer-style path (`/vmSpecs/diskType`) and the reason, or null meaning crust
+ * could have filled it and did not. Depth-bounded: specs are user input.
+ */
+function specDeadEnd(node: unknown, path = "", depth = 0): string | null {
+  if (!node || typeof node !== "object" || Array.isArray(node) || depth > 8) return null;
+  const n = node as Schema;
+  const dead = enumDeadEnd(n);
+  if (dead) return path ? `${path}: ${dead}` : dead;
+  if (admitsNull(n)) return null;
+  const union =
+    (Array.isArray(n.anyOf) ? n.anyOf : null) ?? (Array.isArray(n.oneOf) ? n.oneOf : null);
+  if (union) {
+    return union.length > 0 && union.every((b) => specDeadEnd(b, path, depth + 1) !== null)
+      ? `every branch of its ${Array.isArray(n.anyOf) ? "anyOf" : "oneOf"} is unsatisfiable`
+      : null;
+  }
+  if (Array.isArray(n.allOf)) {
+    for (const b of n.allOf) {
+      const r = specDeadEnd(b, path, depth + 1);
+      if (r) return r;
+    }
+  }
+  const props = n.properties as Record<string, unknown> | undefined;
+  if (props) {
+    for (const name of Array.isArray(n.required) ? (n.required as string[]) : []) {
+      const r = specDeadEnd(props[name], `${path}/${name}`, depth + 1);
+      if (r) return r;
+    }
+  }
+  if (typeof n.minItems === "number" && n.minItems > 0) {
+    const r = specDeadEnd(n.items, `${path}/0`, depth + 1);
+    if (r) return r;
+  }
+  return null;
+}
+
+/**
+ * Split the fields an unsound body breaks into the spec's own contradiction and crust's value, so
+ * each half is named by whoever is responsible. `field === ""` means the body itself: the walk starts
+ * there too, and a hit along required paths proves the whole body unsatisfiable.
+ */
+function blameFields(
+  bodySchema: Schema,
+  bad: [string, string][],
+): { spec: [string, string][]; crust: [string, string][] } {
+  const props = composedObject(bodySchema).properties as Record<string, unknown> | undefined;
+  const spec: [string, string][] = [];
+  const crust: [string, string][] = [];
+  for (const entry of bad) {
+    const why = specDeadEnd(entry[0] === "" ? bodySchema : props?.[entry[0]]);
+    (why ? spec : crust).push(why ? [entry[0], why] : entry);
+  }
+  return { spec, crust };
+}
+
+/**
+ * One drop notice, blaming the right repo. A spec that allows no value is stated as the spec's
+ * contradiction (and does not repeat crust's rule for the same field); crust's own value keeps the
+ * old wording, since that is the half the reader can file against crust.
+ */
+function blameClause(
+  spec: [string, string][],
+  crust: [string, string][],
+  consequence: string,
+): string {
+  const parts: string[] = [];
+  if (spec.length > 0) {
+    parts.push(
+      `the SPEC contradicts itself: ${spec
+        .map(([field, why]) => (field ? `'${field}' — ${why}` : why))
+        .join("; ")}`,
+    );
+  }
+  if (crust.length > 0) {
+    const named = crust
+      .map(([field, rule]) => (field ? `'${field}' (${rule})` : `the body (${rule})`))
+      .join(", ");
+    parts.push(`crust's own value for ${named} does not satisfy the schema`);
+  }
+  if (parts.length === 0) return `crust's own value does not satisfy the schema, ${consequence}`;
+  return `${parts.join("; ")}, ${consequence}`;
+}
+
 // Minimal sampler for simple digit/dash regexes (^\d{6}$, ^\d{4,16}$,
 // ^\d{4}-\d{2}-\d{2}$). Anything fancier falls back to a generic string —
 // a failing case will point at the gap.
@@ -539,6 +662,15 @@ interface UnsoundOp {
   template: string;
   /** Field ("" = the object itself) and the schema rule crust's own value breaks. */
   fields: [string, string][];
+  /**
+   * The half of `fields` the SPEC cannot satisfy at all, with the contradiction. Not a subset by
+   * happenstance: a field is here when NO value would have passed, so crust's value is not the defect.
+   */
+  specFaults: [string, string][];
+  /** The complement: fields where crust's own value is what breaks the schema. */
+  crustFaults: [string, string][];
+  /** Cases that survived for this operation. Zero means it has no negative cases left at all. */
+  kept: number;
   dropped: number;
 }
 
@@ -748,9 +880,13 @@ function deriveCases(
       if (dropped > 0) {
         cases.length = 0;
         cases.push(...kept);
+        const blame = blameFields(bodySchema, [...baseBad]);
         unsound.push({
           template: `${method.toUpperCase()} ${path}`,
           fields: [...baseBad],
+          specFaults: blame.spec,
+          crustFaults: blame.crust,
+          kept: kept.length,
           dropped,
         });
       }
@@ -955,10 +1091,10 @@ function deriveFlows(
         ([field]) => field !== "",
       );
       if (bad.length > 0) {
-        const named = bad.map(([field, rule]) => `'${field}' (${rule})`).join(", ");
+        const blame = blameFields(bodySchema, bad);
         skipped.push({
           template,
-          reason: `crust's own value for ${named} does not satisfy the schema, so the create step would 400`,
+          reason: blameClause(blame.spec, blame.crust, "so the create step would 400"),
         });
         continue;
       }
@@ -1226,17 +1362,16 @@ export async function generateFixtures(opts: GenerateOpts): Promise<GenerateResu
     }
   }
 
-  // Cases dropped for an unfillable body are disclosed here, not left as a silently smaller suite.
+  // Cases dropped for an unfillable body are disclosed here, not left as a silently smaller suite —
+  // and each field is blamed on whoever is responsible. Where the spec allows no value at all the
+  // notice says the SPEC contradicts itself, because "crust's own value" points a reader at the
+  // wrong repo's issue tracker.
+  let withNoCases = 0;
   for (const u of unsound) {
-    const named =
-      u.fields.length > 0
-        ? u.fields
-            .map(([field, rule]) => (field ? `'${field}' (${rule})` : `the body (${rule})`))
-            .join(", ")
-        : "crust's own value";
     log(
-      `gen-fixtures: ${u.dropped} case(s) skipped for ${u.template} — crust's own value for ${named} does not satisfy the schema, so a 400 from that body would name the wrong field`,
+      `gen-fixtures: ${u.dropped} case(s) skipped for ${u.template} — ${blameClause(u.specFaults, u.crustFaults, "so a 400 from that body would name the wrong field")}`,
     );
+    if (u.kept === 0) withNoCases++;
   }
 
   await rm(outDir, { recursive: true, force: true });
@@ -1293,5 +1428,5 @@ ${fixtures}
     }
   }
 
-  return { outDir, files, totalCases, flowFile, flowCount, flowSkipped };
+  return { outDir, files, totalCases, flowFile, flowCount, flowSkipped, withNoCases };
 }
