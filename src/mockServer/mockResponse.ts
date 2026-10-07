@@ -153,6 +153,17 @@ const NODE_BUDGET = 20_000;
  * carries siblings that the tools of that era ignored. Applying azure's structural leftovers turned
  * seven correct bodies wrong. A narrowing sibling is unambiguous intent; a conflicting `type` is far
  * more likely to be conversion noise, and crust does not act on a guess about which.
+ *
+ * The `$ref` inliner in `src/genFixtures/generate.ts` uses THIS rule, not its own, because the two
+ * halves of crust have to read a schema the same way: `gen-fixtures` inlined EVERY sibling, so
+ * britbox's `{$ref: ItvDeleteAccountRequest, type: string}` (openapi 3.0.0) reached the generator as
+ * a string over a sound object schema, its base body failed the validator, and all four of that
+ * spec's JSON-body operations generated no cases at all. Measured across 4,138 specs: 2,274 carry a
+ * `$ref` with siblings, 180 of them a STRUCTURAL one (2,003 sites — azure 104 specs, twilio 32;
+ * `type` 157, `nullable` 43), of which 118 are Swagger 2.0, 56 are 3.0.x and only 6 are 3.1. Dialect
+ * is deliberately NOT part of this decision: honouring the siblings 3.1 legalises would put the
+ * generator and the mock back in disagreement over exactly those 6 specs, and 3.1 legalises siblings
+ * without making a conflicting `type` any less ambiguous.
  */
 const NARROWING_SIBLINGS = new Set([
   "enum",
@@ -172,7 +183,7 @@ const NARROWING_SIBLINGS = new Set([
   "default",
 ]);
 
-function withRefSiblings(node: Record<string, unknown>, resolved: unknown): unknown {
+export function withRefSiblings(node: Record<string, unknown>, resolved: unknown): unknown {
   if (!resolved || typeof resolved !== "object" || Array.isArray(resolved)) return resolved;
   const siblings: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(node))

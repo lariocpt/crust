@@ -65,7 +65,7 @@
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
 import { loadSpec, type OpenApiSpec } from "../mockServer/loadSpec";
-import { resolveRef } from "../mockServer/mockResponse";
+import { resolveRef, withRefSiblings } from "../mockServer/mockResponse";
 import {
   formatDefault,
   inferType,
@@ -1328,11 +1328,15 @@ export function derefSchemas(
       if (ctx.cuts === before) ctx.cache.set(ref, resolved);
     }
 
-    const { $ref: _drop, ...rawSiblings } = obj;
-    const siblings = derefSchemas(rawSiblings, spec, stack, ctx) as Record<string, unknown>;
-    // Shared when there is nothing to overlay; a shallow copy when there is. Consumers below read
-    // these nodes structurally and never mutate them, which is what makes sharing safe.
-    return Object.keys(siblings).length === 0 ? resolved : { ...resolved, ...siblings };
+    // Siblings are applied by the SAME rule the mock's synthesiser uses, and that is the whole fix:
+    // this line used to lay EVERY sibling over the resolved target, so britbox's
+    // `{$ref: ItvDeleteAccountRequest, type: string}` became a string carrying `required` and
+    // `properties` — a node nothing can satisfy. `baseBody` built the string, crust's own validator
+    // (`validateRequest.ts`, whose `$ref` rule resolves the ref and validates the resolved node
+    // alone) rejected it, and all four of that spec's JSON-body operations were dropped behind a
+    // notice blaming crust's value. See `withRefSiblings` for why a structural sibling is noise and
+    // a narrowing one is intent, and why dialect is not part of it.
+    return withRefSiblings(obj, resolved);
   }
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(obj)) out[k] = derefSchemas(v, spec, stack, ctx);

@@ -11,7 +11,7 @@ import {
   validValue,
   wrongTypeFor,
 } from "../src/genFixtures/generate";
-import type { OpenApiSpec } from "../src/mockServer/loadSpec";
+import { loadSpec, type OpenApiSpec } from "../src/mockServer/loadSpec";
 import { startServer } from "../src/mockServer/server";
 import { validateSchema } from "../src/mockServer/validateRequest";
 import { runPipes } from "../src/testPipes/runner";
@@ -1235,17 +1235,32 @@ describe("derefSchemas does not materialise an exponential tree", () => {
     expect((out.properties as Record<string, unknown>).self).toEqual({});
   });
 
-  // Control: $ref siblings still merge over the resolved target.
-  test("siblings still override the resolved target", () => {
+  // Control: `$ref` siblings are applied by the MOCK's rule, not by "everything wins" — the F44
+  // describe at the end of this file says why, and what the old blanket merge cost.
+  test("a narrowing sibling overlays the referenced schema; a structural one does not", () => {
     const spec = {
-      components: { schemas: { S: { type: "string", description: "base" } } },
+      components: { schemas: { S: { type: "string", enum: ["a"], description: "base" } } },
     } as never;
-    const out = derefSchemas(
+    const narrowed = derefSchemas(
+      { $ref: "#/components/schemas/S", pattern: "^a$" },
+      spec,
+    ) as Record<string, unknown>;
+    expect(narrowed.pattern).toBe("^a$");
+    expect(narrowed.enum).toEqual(["a"]); // the target's own narrowing survives
+    // A conflicting `type` is conversion noise in 118 of the 180 corpus specs that write one (they
+    // are Swagger 2.0 conversions), and crust does not guess which keyword the author meant.
+    const structural = derefSchemas(
+      { $ref: "#/components/schemas/S", type: "integer" },
+      spec,
+    ) as Record<string, unknown>;
+    expect(structural.type).toBe("string");
+    // Annotations are noise for both halves: the target's own survives, and no case ever depended
+    // on a description.
+    const annotated = derefSchemas(
       { $ref: "#/components/schemas/S", description: "mine" },
       spec,
     ) as Record<string, unknown>;
-    expect(out.type).toBe("string");
-    expect(out.description).toBe("mine");
+    expect(annotated.description).toBe("base");
   });
 });
 
@@ -2507,5 +2522,168 @@ describe("a union body whose branch carries the required (F43)", () => {
     expect(r.notes.join("\n")).not.toContain("case(s) skipped");
     expect(r.text).toContain("invalid enum for 'a'");
     expect(r.result.totalCases).toBeGreaterThan(0);
+  });
+});
+
+describe("a $ref with siblings reads the way the mock reads it (F44)", () => {
+  // britbox writes `schema: {$ref: "#/components/schemas/ItvDeleteAccountRequest", type: string}` in
+  // an openapi 3.0.0 document — a keyword beside a `$ref`, which 3.0 says is not part of the schema.
+  // crust's VALIDATOR agrees: its `$ref` rule resolves the ref and validates the resolved node alone.
+  // It was the GENERATOR's inliner that laid EVERY sibling over the target, so a sound object schema
+  // arrived as `type: string` with `required` and `properties` still attached — a node no value
+  // satisfies. `baseBody` built the string, the validator rejected it, and every negative case of all
+  // four of that spec's JSON-body operations went behind `crust's own value for the body (type) …`.
+  // 180 corpus specs carry a structural sibling (2,003 sites — azure 104 specs, twilio 32; `type`
+  // 157 of them), 56 in 3.0.x and 6 in 3.1.
+  //
+  // The fix is not a new rule. `withRefSiblings` in src/mockServer/mockResponse.ts had ALREADY
+  // decided this — a narrowing sibling (`enum`, `pattern`, the bounds) is intent, a structural one
+  // (`type`, `properties`, `items`, `required`) is conversion noise — with a corpus measurement
+  // (acting on azure's turned seven correct bodies wrong) and its own tests behind it. The generator
+  // now calls that function instead of holding a second answer to the same question. Dialect is
+  // deliberately not part of it: honouring the siblings 3.1 legalises would put the two halves back
+  // in disagreement over exactly the 6 specs that are 3.1, and 3.1 legalises siblings without making
+  // a conflicting `type` any less ambiguous.
+  let dir: string;
+  beforeAll(async () => {
+    dir = await mkdtemp(join(tmpdir(), "crust-gen-refsib-"));
+  });
+  afterAll(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  const REQ = {
+    type: "object",
+    additionalProperties: false,
+    required: ["profileToken"],
+    properties: { profileToken: { type: "string" } },
+  };
+
+  async function emit(name: string, openapi: string, schema: Record<string, unknown>) {
+    const specPath = join(dir, `${name}.json`);
+    await writeFile(
+      specPath,
+      JSON.stringify({
+        openapi,
+        paths: {
+          "/itv/deleteaccount": {
+            post: {
+              requestBody: { required: true, content: { "application/json": { schema } } },
+              responses: { "204": { description: "ok" }, "400": { description: "bad" } },
+            },
+          },
+        },
+        components: { schemas: { Req: REQ } },
+      }),
+    );
+    const setupPath = join(dir, `${name}.setup.ts`);
+    await writeFile(
+      setupPath,
+      "export const scopeParam = null;\nexport async function shared() { return {}; }\n" +
+        "export function headersFor() { return { 'content-type': 'application/json' }; }\n" +
+        "export function resolvePath(_c, t) { return 'http://127.0.0.1:1' + t; }\n",
+    );
+    const notes: string[] = [];
+    const result = await generateFixtures({
+      swagger: specPath,
+      out: join(dir, `out-${name}`),
+      setup: setupPath,
+      log: (line) => notes.push(line),
+    });
+    const text = (
+      await Promise.all(
+        result.files.map((f) =>
+          Bun.file(f)
+            .text()
+            .catch(() => ""),
+        ),
+      )
+    ).join("\n");
+    return { text, notes: notes.join("\n"), result };
+  }
+
+  const SIBLING = { $ref: "#/components/schemas/Req", type: "string" };
+
+  test("a structural sibling does not empty the operation (openapi 3.0)", async () => {
+    const { text, notes } = await emit("structural30", "3.0.0", SIBLING);
+    expect(text).toContain("missing required 'profileToken' -> 400");
+    expect(text).toContain("wrong type for 'profileToken' -> 400");
+    expect(text).toContain("unexpected extra property -> 400");
+    expect(notes).not.toContain("does not satisfy the schema");
+    expect(notes).not.toContain("no negative cases");
+  });
+
+  test("…and the same in openapi 3.1, where siblings are legal but no less ambiguous", async () => {
+    const { text, notes } = await emit("structural31", "3.1.0", SIBLING);
+    expect(text).toContain("missing required 'profileToken' -> 400");
+    expect(text).toContain("unexpected extra property -> 400");
+    expect(notes).not.toContain("does not satisfy the schema");
+    expect(notes).not.toContain("no negative cases");
+  });
+
+  // The invariant the two tests above only show through a count: whatever the generator builds for a
+  // node must be something crust's own validator accepts for it. This is that sentence, executable,
+  // for both dialects — before the fix it returned `expected object, got string`.
+  test("the value crust builds for the node satisfies the schema crust's mock applies", () => {
+    for (const openapi of ["3.0.0", "3.1.0"]) {
+      const spec = { openapi, components: { schemas: { Req: REQ } } } as never;
+      const node = { $ref: "#/components/schemas/Req", type: "string" };
+      const value = validValue(derefSchemas(node, spec) as never);
+      expect(validateSchema(value, node, spec)).toEqual([]);
+    }
+  });
+
+  // Control: narrowing is still intent. ideal-postcodes narrows a referenced string with a pattern,
+  // and the mock's own synthesiser honours that — dropping it here would generate a base body the
+  // spec does not describe.
+  test("a narrowing sibling still shapes the value", () => {
+    const spec = {
+      openapi: "3.0.0",
+      components: { schemas: { Code: { type: "string" } } },
+    } as never;
+    const inlined = derefSchemas(
+      { $ref: "#/components/schemas/Code", pattern: "^[0-9]{6}$" },
+      spec,
+    ) as Record<string, unknown>;
+    expect(inlined.pattern).toBe("^[0-9]{6}$");
+    expect(String(validValue(inlined as never))).toMatch(/^[0-9]{6}$/);
+  });
+
+  // Control: most of this population is Swagger 2.0 leftovers (118 of the 180 specs), and crust's
+  // converter rewrites the ref but leaves the sibling where it is — so the same restraint has to hold
+  // after conversion, and the agreement below is what makes it worth having.
+  test("a swagger-2 conversion is read the same way", async () => {
+    const path = join(dir, "swagger20.json");
+    await writeFile(
+      path,
+      JSON.stringify({
+        swagger: "2.0",
+        info: { title: "t", version: "1" },
+        paths: {
+          "/itv/deleteaccount": {
+            post: {
+              parameters: [
+                {
+                  name: "body",
+                  in: "body",
+                  required: true,
+                  schema: { $ref: "#/definitions/Req", type: "string" },
+                },
+              ],
+              responses: { "400": { description: "bad" } },
+            },
+          },
+        },
+        definitions: { Req: REQ },
+      }),
+    );
+    const { spec } = await loadSpec(path);
+    const node = (
+      spec.paths!["/itv/deleteaccount"].post.parameters as unknown as Array<Record<string, unknown>>
+    )[0].schema as Record<string, unknown>;
+    expect(node.$ref).toBe("#/components/schemas/Req"); // rewritten, sibling untouched
+    const inlined = derefSchemas(node, spec) as Record<string, unknown>;
+    expect(inlined.type).toBe("object");
+    expect(validateSchema(validValue(inlined as never), node, spec)).toEqual([]);
   });
 });
