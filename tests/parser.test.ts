@@ -20,6 +20,48 @@ describe("parser — sources", () => {
     const out = await p.collect();
     expect(out).toContain("hello");
   });
+
+  // Shell grouping (`{ …; }`) and the test bracket (`[ … ]`) are how a shell
+  // script feeds one stream to another and how it asks a question. Both start
+  // with a bracket, so both used to be swallowed by the JSON-literal rule —
+  // `{ echo hi; } | cat` said `JSON Parse error: Expected '}'`. They are shell
+  // stages now, which means sh gives them the meaning they have everywhere.
+  test("a brace group runs as shell, quoted or not", async () => {
+    expect(await parse("{ echo a; echo b; } | cat")().collect()).toEqual(["a", "b"]);
+    // a quoted brace group: the quotes are what made it look like JSON
+    expect(await parse('{ echo "hi"; }')().collect()).toEqual(["hi"]);
+  });
+
+  test("the shell test bracket answers true, and sh's own code answers false", async () => {
+    expect(await parse("[ -f package.json ] && echo found")().collect()).toEqual(["found"]);
+    // A false test is exit 1 from sh, and crust propagates a shell stage's
+    // nonzero exit rather than reporting a quiet pass. What matters here is
+    // *which* error: sh's status, never a JSON parse error for a line with no
+    // JSON in it.
+    let threw: unknown;
+    try {
+      await parse("[ -f no-such-file-here ] && echo found")().collect();
+    } catch (e) {
+      threw = e;
+    }
+    expect(threw).toBeInstanceOf(Error);
+    expect(String(threw)).not.toMatch(/JSON/i);
+  });
+
+  test("control: a brace group's output reaches crust's stages, not just sh", async () => {
+    expect(await parse("{ echo a; echo b; } | (s => s.toUpperCase())")().collect()).toEqual([
+      "A",
+      "B",
+    ]);
+  });
+
+  test("control: a JSON literal is still a one-item source", async () => {
+    expect(await parse('{"a":1}')().collect()).toEqual([{ a: 1 }]);
+    // one item, the parsed value — the array is the item, not two items
+    expect(await parse("[1,2]")().collect()).toEqual([[1, 2]]);
+    // and a half-typed one is still the JSON error, never a shell exec
+    expect(() => parse('{"a": }')()).toThrow(/JSON/);
+  });
 });
 
 describe("parser — transforms", () => {

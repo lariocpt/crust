@@ -119,6 +119,30 @@ export function rejectRedirect(text: string, where: string): void {
   if (tail) throw refusal(where, tail);
 }
 
+/**
+ * Whether a stage that starts with `{` or `[` is a JSON literal (or someone
+ * typing one) rather than shell text that merely begins with a bracket.
+ *
+ * Parsing it is the honest test, but the parser expands `$VAR` *before*
+ * parsing (`{"n":$N}` is a literal once the shell's variable is filled in), so
+ * a parse failure is not proof of shell. Shape decides the rest: text with no
+ * quote and no colon was never meant to be a literal (`[ -f f ] && echo ok`),
+ * and neither is text carrying a shell control operator (`{ echo a; echo b; }`),
+ * which no JSON literal contains outside a string. Anything else keeps the
+ * `json` classification so a half-typed body is reported as the JSON error it
+ * is, rather than exec'ing as a command.
+ */
+function looksJsonish(t: string): boolean {
+  try {
+    JSON.parse(t);
+    return true;
+  } catch {
+    // not literal as written — decide by shape
+  }
+  if (!t.includes('"') && !t.includes(":")) return false;
+  return !/[;&|`]|\$\(/.test(t);
+}
+
 export function classify(text: string): StageKind {
   const kind = classifyStage(text);
   // Checked after classification, not before: `grep ERROR > combined.log` is
@@ -184,9 +208,22 @@ function classifyStage(text: string): StageKind {
   }
 
   // JSON-literal source: the whole stage is a JSON object/array — the request
-  // body in shorthand fixtures. Never falls back to shell (a typo'd JSON
-  // stage exec'ing as a command would be baffling).
-  if (t.startsWith("{") || t.startsWith("[")) {
+  // body in shorthand fixtures. It must not claim shell text that merely
+  // *starts* with a bracket, which is what it used to do unconditionally. The
+  // two most common shell uses of a leading bracket were therefore impossible
+  // to write, and were answered with a complaint about JSON:
+  //   [ -f package.json ] && echo found  -> crust: JSON Parse error: Invalid number
+  //   { echo hi; } | cat                 -> crust: JSON Parse error: Expected '}'
+  //   echo x | [ -f f ]                  -> crust: json cannot appear as a non-first stage
+  // (the third one is what made this a capability gap, not just a bad message:
+  // no wording reached a shell test mid-pipeline at all).
+  //
+  // So the claim is conditional. An actual literal, and anything still shaped
+  // like someone attempting one, stays a `json` stage — a typo'd body that
+  // silently exec'd as a command would be baffling, and that is what this rule
+  // exists for. Shell text is left to fall through to `shell`, where sh gives
+  // it the meaning the user intended.
+  if ((t.startsWith("{") || t.startsWith("[")) && looksJsonish(t)) {
     return { kind: "json", source: t };
   }
 

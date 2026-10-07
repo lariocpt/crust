@@ -24,6 +24,16 @@ bundle(5)   →  sh: -c: line 1: syntax error near unexpected token `('   (exit 
 Parens are crust syntax only for **lexer sources** (`range(0,9)`,
 `read("…")`) — everything else in a stage is a shell word list.
 
+A stage that *starts* with `{` or `[` is a JSON literal only when it is one,
+or still looks like someone typing one (a quote or colon, no shell operator).
+Shell grouping and the shell's test bracket are therefore shell stages, in any
+position — and a mid-pipeline one works too, which it used not to:
+
+```crust
+{ echo a; echo b; } | cat
+[ -f package.json ] && echo there
+```
+
 ## What the item means, per function
 
 A registered function is called `fn(item, ...lineArgs)` mid-pipeline. So the

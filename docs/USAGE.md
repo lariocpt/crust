@@ -180,7 +180,7 @@ The shell parser classifies each `|`-separated stage by looking at its first tok
 | Contains `*` / `?` / `[…]` | Glob source |
 | Matches `range(a, b)` | Range source |
 | Matches `load <dur> <rate>[, …]` | Paced load source (malformed spec = hard error; bare `load` = shell) |
-| Starts with `{` or `[` | JSON-literal source (invalid JSON = hard error, never shell) |
+| Starts with `{` or `[` **and is JSON-shaped** | JSON-literal source (a half-typed literal = hard error, never shell). Bracket-headed *shell* — `{ echo a; echo b; } \| cat`, `[ -f f ] && echo ok` — is a shell stage |
 | Starts with `read <path\|glob>` | Whole-file source — one item per matched file |
 | Starts with `tail <path>` (with optional `-F` / `-n N`) | Native `tail` source |
 | Starts with `(` and contains `=>` | TypeScript lambda |
@@ -276,8 +276,13 @@ Matches are sorted; zero matches is a hard error. Note the plain glob source
 (`fixtures/*.json | …`) yields *paths* — `POST` would post the path strings.
 
 A stage starting with `{` or `[` is a **JSON-literal source**: one parsed
-item. `$VAR`/`${VAR}` inside it are env-expanded first. Invalid JSON is a
-hard error — it never falls back to a shell command.
+item. `$VAR`/`${VAR}` inside it are env-expanded first. The claim is
+conditional on being JSON: text that parses as JSON is a literal, and so is
+anything still shaped like an attempt at one (a quote or a colon, no shell
+operator), which keeps invalid JSON a hard error rather than a shell
+command. Shell text that merely starts with a bracket is left to sh —
+`{ echo a; echo b; } | cat` groups, `[ -f users.csv ] && echo there` tests —
+in any position, because a message about JSON tells a shell user nothing.
 
 `GET` has a dual role: as the **first** stage it's a source yielding one
 `Response` (fixture asserts); **mid-pipeline** it's a per-item timed request
@@ -788,10 +793,12 @@ GET :3000/api/buildings -H "authorization: Bearer $TOKEN" | (r => r.json()) | as
 
 The pieces:
 
-- **JSON-literal source** — a stage starting `{`/`[` parses as JSON and
-  yields one item: the request body. Invalid JSON is a **hard error**; it
-  never falls back to shell (a typo'd body exec'ing as a command would be
-  baffling).
+- **JSON-literal source** — a stage starting `{`/`[` that is JSON, or still
+  looks like someone typing one, parses as JSON and yields one item: the
+  request body. Invalid JSON is a **hard error**; it never falls back to
+  shell (a typo'd body exec'ing as a command would be baffling). Shell text
+  that only *starts* with a bracket — `{ echo a; echo b; } | cat`,
+  `[ -f f ] && echo ok` — is a shell stage, not a literal attempt.
 - **`-H "Key: value"`** — repeatable header flags on every http verb stage.
 - **`read <path|glob>`** — whole-file contents, one item per matched file
   (sorted; zero matches errors). Gotcha: this shadows POSIX `read <var>` at

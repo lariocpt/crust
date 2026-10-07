@@ -320,6 +320,33 @@ describe("review fixes — grammar", () => {
   });
 });
 
+// The lexer used to claim EVERY stage starting with `{` or `[` as a JSON
+// literal. That made the two ordinary shell uses of a leading bracket
+// unwritable at any position in a line, and answered both with a complaint
+// about JSON the user had not written.
+describe("bracket-headed stages: JSON literal or shell", () => {
+  test("a brace group and the test bracket are shell stages", () => {
+    expect(classify("{ echo a; echo b; }").kind).toBe("shell");
+    expect(classify('{ echo "hi"; }').kind).toBe("shell");
+    expect(classify("[ -f package.json ] && echo found").kind).toBe("shell");
+    expect(classify("[ -f f ]").kind).toBe("shell");
+    // mid-pipeline was the hard half: it used to say "json cannot appear as a
+    // non-first stage", so no wording reached a shell test after a `|` at all.
+    const stages = tokenize("echo x | [ -f package.json ]").map((t) => classify(t.text).kind);
+    expect(stages).toEqual(["shell", "shell"]);
+  });
+
+  test("control: real literals and half-typed ones stay json", () => {
+    expect(classify('{"a":1}').kind).toBe("json");
+    expect(classify("[1,2]").kind).toBe("json");
+    // a `;` inside a string is not a shell operator, and this parses
+    expect(classify('{"a":"b;c"}').kind).toBe("json");
+    // a half-typed body stays a JSON error rather than exec'ing as a command
+    expect(classify('{"a": }').kind).toBe("json");
+    expect(classify("{web: 'x'}").kind).toBe("json");
+  });
+});
+
 describe("http --timeout", () => {
   test("--timeout duration forms", () => {
     expect(classify("GET :3000/x --timeout 5s")).toEqual({
