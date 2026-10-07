@@ -50,8 +50,10 @@ wait :3001/health --timeout 30s
 bundle src/index.ts --outfile dist/app.js --minify
 ```
 
-`wait` failing to become ready exits 1 (and a `--timeout` that expires exits
-124), which is what makes it usable as a CI gate.
+`wait` failing to become ready exits **1** — measured for every target form
+(`:PORT`, `:PORT/path`, `port:PORT`) and for a `--timeout` that expires. crust
+has no exit **124**: that number is `timeout(1)` killing crust from outside, so
+wrapping a probe in `timeout` steals the code you were gating on.
 
 ## A lambda cannot call them
 
