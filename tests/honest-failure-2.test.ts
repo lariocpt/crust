@@ -8,7 +8,7 @@
 // globals the docs promised did not exist; and `jwt verify` mid-pipeline SIGNED
 // the token it was handed and exited 0.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { bundle } from "../src/builtinFns/bundle";
@@ -612,5 +612,104 @@ describe("wait says which probe it is running", () => {
     expect(r.code).toBe(1);
     expect(r.out).toContain("not ready after");
     expect(r.out).not.toContain("probes the root path");
+  });
+});
+
+describe("base64 means the text, and a file only when you say so", () => {
+  // crust's `base64` shadows /usr/bin/base64, and the two mean different things
+  // by their argument: coreutils encodes the FILE, crust encodes the TEXT. So
+  // `base64 in.ts` printed `aW4udHM=` — the characters of the path — exit 0, and
+  // there was no route to the file at all, because `read logo.png | base64`
+  // decodes the file as UTF-8 first and replaces every invalid byte. Deciding by
+  // "does this string exist on disk" is not the fix (it would make
+  // `read list.txt | base64` depend on the cwd), so the file is an explicit
+  // `--file`, the shadow is called out on stderr where it bites, and the options
+  // are only ever what was typed on the line.
+  const BIN = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0xff, 0xfe, 0x00, 0x42]);
+  let dir: string;
+  beforeAll(async () => {
+    dir = await mkdtemp(join(tmpdir(), "crust-b64-"));
+    await writeFile(join(dir, "in.ts"), "hello from the file\n");
+    await writeFile(join(dir, "tiny.png"), BIN);
+  });
+  afterAll(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  test("--file encodes the file's bytes, and is binary-safe", async () => {
+    const r = await cli(`base64 --file ${dir}/tiny.png`);
+    expect(r.code, r.out).toBe(0);
+    expect(r.stdout.trim()).toBe(BIN.toString("base64"));
+  });
+
+  test("CONTROL: the pipe is not binary-safe — which is why --file exists", async () => {
+    const r = await cli(`read ${dir}/tiny.png | base64`);
+    expect(r.code, r.out).toBe(0);
+    expect(r.stdout.trim()).not.toBe(BIN.toString("base64"));
+  });
+
+  test("a path still means text, and the shadow is said out loud", async () => {
+    const r = await cli(`base64 ${dir}/in.ts`);
+    expect(r.code, r.out).toBe(0);
+    expect(r.stdout.trim()).toBe(Buffer.from(`${dir}/in.ts`).toString("base64"));
+    expect(r.out).toContain(`--file ${dir}/in.ts`);
+  });
+
+  test("CONTROL: encoding anything else prints no note", async () => {
+    const r = await cli("base64 hello");
+    expect(r.code, r.out).toBe(0);
+    expect(r.stdout.trim()).toBe("aGVsbG8=");
+    expect(r.out).not.toContain("note:");
+  });
+
+  test("an unknown option is refused, not encoded", async () => {
+    // Used to print `LS1kZXNj` — the flag itself, with the real input dropped —
+    // and exit 0.
+    const r = await cli("base64 --desc hello");
+    expect(r.code, r.out).toBe(1);
+    expect(r.out).toMatch(/unknown option "--desc"/);
+    expect(r.out).toMatch(/--file/);
+  });
+
+  test("piped data is data: an item that says -d is encoded, not obeyed", async () => {
+    // `fn(item, ...args)` put the item in the option slot; the item WAS `-d`, so
+    // the mode flipped and the input vanished: `base64: missing input`, exit 1.
+    const r = await cli("printf '%s' -d | base64");
+    expect(r.code, r.out).toBe(0);
+    expect(r.stdout.trim()).toBe("LWQ=");
+  });
+
+  test("CONTROL: -d still decodes when it is the option you typed", async () => {
+    const r = await cli("printf '%s' aGVsbG8= | base64 -d");
+    expect(r.code, r.out).toBe(0);
+    expect(r.stdout.trim()).toBe("hello");
+  });
+
+  test("--file with piped input is refused instead of dropping the item", async () => {
+    const r = await cli(`echo hi | base64 --file ${dir}/in.ts`);
+    expect(r.code, r.out).toBe(1);
+    expect(r.out).toMatch(/does not consume piped input/);
+  });
+
+  test("--out round-trips a file through base64 without a terminal in the middle", async () => {
+    const b64 = join(dir, "tiny.b64");
+    const copy = join(dir, "copy.png");
+    expect((await cli(`base64 --file ${dir}/tiny.png --out ${b64}`)).code).toBe(0);
+    expect((await cli(`base64 --file ${b64} --decode --out ${copy}`)).code).toBe(0);
+    expect((await readFile(copy)).equals(BIN)).toBe(true);
+  });
+
+  test("decoding something that is not base64 fails, instead of printing mojibake", async () => {
+    // Node's decoder skips characters it does not know, so this exited 0 with
+    // three replacement characters on stdout.
+    const r = await cli("printf '%s' 'not base64!!!' | base64 -d");
+    expect(r.code, r.out).toBe(1);
+    expect(r.out).toMatch(/is not a base64 character/);
+  });
+
+  test("a missing --file is an error, not an empty answer", async () => {
+    const r = await cli("base64 --file /no-such-dir/nope.png");
+    expect(r.code, r.out).toBe(1);
+    expect(r.out).toMatch(/no such file/);
   });
 });

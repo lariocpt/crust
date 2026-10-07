@@ -1802,12 +1802,27 @@ Crust ships a small set of `crust.fn`-registered helpers. They work as both pipe
 
 | Function | Usage |
 |---|---|
-| `base64 [-d \| decode]` | Encode (default) or decode. `echo hi \| base64` → `aGk=`; `echo aGk= \| base64 -d` → `hi`. |
+| `base64 [-d \| decode] [-f \| --file <path>] [-o \| --out <path>] [--]` | Encode (default) or decode **text**. `echo hi \| base64` → `aGk=`; `echo aGk= \| base64 -d` → `hi`. Shadows `/usr/bin/base64`, which takes the same argument and encodes the **FILE** — see below. Options are only ever what you typed: `-d` arriving as a piped *item* is data. A dash you did not define is refused, never encoded. `-f`/`--file <path>` reads a file's bytes, `-o`/`--out <path>` writes the result to a file. Decoding checks its input: a character outside `A-Za-z0-9+/=`, `-`/`_`, and whitespace is an error, not mojibake. |
 | `salt [bytes] [hex\|base64\|base64url]` | Cryptographically random bytes. Defaults: 16 bytes, hex. `salt 32 base64`. Mid-pipeline it emits one salt per item and the byte count is the argument that *trails* the item — `lines users.csv \| salt 16` — because the item takes the first slot in any registered function; a bare `\| salt` refuses to guess. |
 | `jwt sign \| verify \| decode --secret <s>` | HS256 JWT. Reads `$JWT_SECRET` if `--secret` omitted. Item can be a JSON string (sign) or a token (verify/decode). |
 | `bundle <entry> [--outdir \| --outfile \| --minify \| --sourcemap \| --target=bun\|browser\|node]` | Wraps `Bun.build` for one-shot bundling. With `--outfile`, writes the first artifact and returns `{outfile, bytes}`. |
 | `sql "<query>" [params…]` | Runs a SQL query via Bun's SQL client using `$DATABASE_URL`. **Streams one item per row in both positions** — as a source and mid-pipeline. **The query is always the one you wrote on the line**, whatever the upstream item is; mid-pipeline that item **binds as the first parameter** when the line declares none, so `range(1,1) \| sql "SELECT … WHERE id = ?"` queries id 1 and `"beta" \| sql "SELECT … WHERE name = ?"` queries `'beta'`. An explicitly declared parameter still wins. |
 | `wait <target> [--timeout <dur>] [--interval <dur>] [--probe-timeout <dur>]` | Blocks until a target answers, then emits `{target, ready, ms, attempts}`. Target: `:3001/health` / `http(s)://…` (ready = any 2xx) or `port:5432` (TCP connect). **A bare `:3000` probes `/`** — a spec-driven server (mock-server, most APIs) has no root route, so it 404s forever and `wait` burns the whole timeout on a server that is already up: point it at a real path, or use `port:3000`. Durations like `300ms`/`30s`/`2m` (defaults 30s / 500ms). `--probe-timeout` caps each probe (default `min(interval*4, 2s)`) — raise it for slow-to-accept targets. Not ready in time → error, exit 1 — CI-friendly. |
+
+**`base64` shadows a real command, and the two disagree about its argument.**
+`/usr/bin/base64 in.ts` encodes the file; crust's `base64 in.ts` encodes the five
+characters of the path (`aW4udHM=`) — because every crust verb in this section takes a
+*value*, and the pipeline that puts a value in front of it (`echo … | base64`) has no
+filenames in it. That is not a bug to auto-detect away: deciding by "does this string
+exist on disk" would make `read list.txt | base64` encode text or a file depending on the
+caller's cwd. So the text stays the default, the file is an explicit `--file`, and when a
+typed operand *is* a file the shadow is called out on stderr (stdout is unchanged) with the
+`--file` that means what the reader wanted.
+
+`--file` is also the only binary-safe route. `read logo.png | base64` decodes the file as
+UTF-8 on its way through the pipeline, so every invalid byte becomes U+FFFD: measured on a
+26-byte PNG, `77+9UE5H…` where `base64 -w0 logo.png` gives `iVBORw0KGgo…`. `--file` reads
+bytes and `--out` writes them, which is what you want for an image, a zip, or a key:
 
 Examples:
 
@@ -1815,6 +1830,12 @@ Examples:
 echo hello | base64                                  # aGVsbG8=
 echo "QmVhcmVy" | base64 -d                          # Bearer
 salt 32 base64                                       # random 32-byte token
+
+# A FILE's bytes (coreutils' meaning) — the only binary-safe route
+base64 --file logo.png                               # bytes in, base64 out
+base64 --file logo.png --out logo.b64                # …to a file: a fn stage has no redirect
+base64 --file logo.b64 -d --out logo-copy.png        # …and back, byte for byte
+printf '%s' -d | base64                              # LWQ= — an item is data, never an option
 
 # Sign + verify a JWT
 jwt sign '{"sub":"42"}' --secret k                   # eyJhbGciOiJIUzI1Ni…

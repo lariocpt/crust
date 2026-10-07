@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { base64 } from "../src/builtinFns/base64";
+import { base64, base64Stage } from "../src/builtinFns/base64";
 import { jwt } from "../src/builtinFns/jwt";
 import { salt } from "../src/builtinFns/salt";
 import { wait } from "../src/builtinFns/wait";
@@ -26,6 +26,68 @@ describe("base64", () => {
 
   test("throws on missing input", () => {
     expect(() => base64()).toThrow();
+  });
+
+  test("an unknown option is refused, never encoded", () => {
+    // `base64 --desc hello` used to print LS1kZXNj — the flag, with the real
+    // input dropped — and exit 0.
+    expect(() => base64("--desc", "hello")).toThrow(/unknown option "--desc"/);
+    expect(() => base64("-x", "hello")).toThrow(/unknown option/);
+    // A negative number is data, not an option.
+    expect(base64("-1")).toBe(Buffer.from("-1").toString("base64"));
+    // `--` ends the options, the way every other crust CLI spells it.
+    expect(base64("--", "-d")).toBe("LWQ=");
+  });
+
+  test("one operand per line", () => {
+    expect(() => base64("a", "b")).toThrow(/more than one input/);
+  });
+
+  test("decoding checks its input", () => {
+    // Node's base64 decoder skips characters it does not know, so garbage used
+    // to decode into replacement characters with exit 0.
+    expect(() => base64("not base64!!!", "-d")).toThrow(/is not a base64 character/);
+    // The URL-safe alphabet decodes, because crust makes it: `salt 32 base64url`.
+    // A leading dash is an option slot, so the value goes after `--`.
+    expect(() => base64("-d", "--", "-_==")).not.toThrow();
+    expect(() => base64("-_==", "-d")).toThrow(/put it after --/);
+    // Whitespace is what a file of base64 has at the end.
+    expect(base64("aGVsbG8=\n", "-d")).toBe("hello");
+  });
+});
+
+describe("base64Stage — the item is data, the options are the line's", () => {
+  // fn(item, ...args) put the item in the same slot an option would, and this
+  // fn scanned every argument for `-d`. Data that says `-d` was then read as
+  // the mode, and `printf -d | crust -c 'stdin | base64'` died with
+  // `base64: missing input` where the obvious answer is LWQ=.
+  test("an item that says -d is encoded, not obeyed", () => {
+    expect(base64Stage([], "-d")).toBe("LWQ=");
+    expect(base64Stage([], "decode")).toBe("ZGVjb2Rl");
+  });
+
+  test("-d as a line option still decodes the item", () => {
+    expect(base64Stage(["-d"], "aGVsbG8=")).toBe("hello");
+    expect(base64Stage(["decode"], "aGVsbG8=")).toBe("hello");
+  });
+
+  test("objects are encoded as JSON, as every other stage does", () => {
+    expect(base64Stage([], { a: 1 })).toBe(Buffer.from('{"a":1}').toString("base64"));
+  });
+
+  test("binary items are encoded byte-exact", () => {
+    const bin = Buffer.from([0x89, 0x50, 0xff, 0x00]);
+    expect(base64Stage([], bin)).toBe(bin.toString("base64"));
+    expect(() => base64Stage(["-d"], bin)).toThrow(/cannot decode a binary input/);
+  });
+
+  test("--file mid-pipeline is refused, not silently preferred over the item", () => {
+    expect(() => base64Stage(["--file", "x.png"], "hi")).toThrow(/does not consume piped input/);
+  });
+
+  test("a stray operand mid-pipeline is refused, not dropped", () => {
+    // The item was the input and `x` was silently ignored.
+    expect(() => base64Stage(["x"], "hi")).toThrow(/is not an option/);
   });
 });
 

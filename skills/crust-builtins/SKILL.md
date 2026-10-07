@@ -42,7 +42,7 @@ first slot is **your data**, and each function decides what to do with it:
 
 | Function | As a source | Mid-pipeline |
 | --- | --- | --- |
-| `base64 [-d\|decode]` | encodes the literal argument | encodes (or decodes) **each item** |
+| `base64 [-d\|decode] [-f\|--file <path>] [-o\|--out <path>]` | encodes the literal argument, or a file's bytes with `--file` | encodes (or decodes) **each item**; the item is data, never an option |
 | `salt [bytes] [hex\|base64\|base64url]` | one salt, size = the argument | **one salt per item**; the size is the argument *trailing* the item |
 | `jwt sign\|verify\|decode --secret <s>` | payload/token = the argument | the item **is** the payload (sign) or token (verify/decode) |
 | `sql "<query>" [params…]` | streams rows | the query stays the one you wrote; the item **binds as the first parameter** when the line declares none |
@@ -60,6 +60,13 @@ range(2,2) | (n => "beta") | sql "SELECT name FROM t WHERE name = ?" | assert (r
 wait :3001/health --timeout 30s
 bundle src/index.ts --outfile dist/app.js --minify
 ```
+
+Options come from the line, never from the item: `printf '%s' -d | base64` is
+`LWQ=`, the two characters encoded, not a mode flip. A dash that is not one of
+that function's options is refused rather than encoded (`base64 --desc hello`
+used to print `LS1kZXNj` and exit 0), and decoding refuses a character outside
+the alphabet — Node's decoder skips unknown characters, which printed three
+replacement characters at exit 0 for `not base64!!!`.
 
 `wait` failing to become ready exits **1** — measured for every target form
 (`:PORT`, `:PORT/path`, `port:PORT`) and for a `--timeout` that expires. crust
@@ -94,6 +101,13 @@ a file), and sh's when it is not (`… | sort` is `/usr/bin/sort`). Neither one
 takes a redirect: crust refuses it and tells you what to write instead — with
 two different messages, because a function and a tool fail differently.
 
+`base64` is the shadow that bites: `/usr/bin/base64 in.ts` encodes the FILE,
+crust's encodes the five characters of the path (`aW4udHM=`) and now says so on
+stderr. A file's bytes are `base64 --file logo.png` — crust's only binary-safe
+route, because a pipeline decodes UTF-8 on the way (`read logo.png | base64`
+gives `77+9…` for a PNG whose real answer is `iVBORw0…`) — and `--out <path>` is
+how the answer reaches a file, since a function stage cannot be redirected.
+
 A **registered function** with a redirect is refused as a stage, and pointed at
 a shell tail:
 
@@ -106,6 +120,8 @@ sql "select 1" > one.txt
 
 ```crust
 base64 hello | cat > out.b64
+base64 --file logo.png --out logo.b64
+base64 --file logo.b64 -d --out logo-copy.png
 ```
 
 A **tool builtin** is refused as a program, and the message prints the exact

@@ -5,6 +5,7 @@
 // user typed. Not a code-injection risk; it's the design.
 
 import { expandEnv, splitArgs } from "./args";
+import { base64, base64Stage } from "./builtinFns/base64";
 import { sql, sqlSource, sqlStage } from "./builtinFns/sql";
 import { builtinInShellRefusal } from "./builtins";
 import { formatItem } from "./format";
@@ -438,11 +439,18 @@ function applyStage(
       if (!fn) throw new Error(`function "${kind.name}" not registered`);
       // `sql`'s query is DECLARED on the line, so it cannot be found by looking
       // at the arguments: fn(item, ...args) with a string item would put the
-      // item in the query's slot. Dispatch the builtin by identity instead of
-      // by argument type — a user who replaced `sql` through `crust.fn` keeps
-      // the general convention their own handler was written against.
+      // item in the query's slot. `base64` has the same shape in miniature — its
+      // OPTIONS are declared on the line, so scanning every argument for `-d`
+      // read data that says `-d` as the mode and left nothing to encode. Dispatch
+      // the builtin by identity instead of by argument type — a user who replaced
+      // `sql` or `base64` through `crust.fn` keeps the general convention their
+      // own handler was written against.
       const apply = (item: unknown) =>
-        fn === sql ? sqlStage(kind.args, item) : fn(item, ...kind.args);
+        fn === sql
+          ? sqlStage(kind.args, item)
+          : fn === base64
+            ? base64Stage(kind.args, item)
+            : fn(item, ...kind.args);
       const mapped =
         concurrency !== null && concurrency !== undefined
           ? (input.pipe(transforms.parallel(concurrency, apply) as never) as Pipeline<unknown>)
