@@ -1222,7 +1222,8 @@ Derived cases:
   enum violation — asserting the canonical
   `{ error, code: "validation", fieldErrors }` body. Perturbations are
   applied to a **schema-valid base body** (with format-aware synthesis:
-  emails, uuids, dates, simple digit-pattern sampling), so exactly one thing
+  emails, uuids, dates, and values built from the field's own `pattern` — classes, quantifiers and
+  groups, each verified against the regex before it is used), so exactly one thing
   is wrong per case.
 - **400 boundary violations**, for ALL body properties — required *and*
   optional — in fixed per-field order: too short (`minLength`), too long
