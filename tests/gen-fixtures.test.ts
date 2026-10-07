@@ -1871,3 +1871,157 @@ describe("gen-fixtures: a missing setup module explains itself", () => {
     expect(err).not.toContain("src/genFixtures/generate.ts");
   });
 });
+
+describe("an allOf-composed request body (F36)", () => {
+  // Measured on the corpus before this fix: 755 of 41,574 operations (65 specs — Microsoft Graph
+  // 112, graph-beta 72, bitbucket 46, digitalocean 27…) had a base body that failed crust's OWN
+  // validator, and 0 of them had chosen a bad value. The property was declared in one `allOf`
+  // branch and required in another; `baseBody` read `schema.required` / `schema.properties`
+  // directly, found a required name with no schema beside it, and `validValue(undefined)` answered
+  // `"x"`. F33's drop rule then did exactly what it is told: it removed the operation's cases and
+  // blamed crust's value. Same for the field LIST — a name required only by a branch got no
+  // `missing required` case at all.
+  //
+  // The rule the fix installs: the base body, the field list and `validValue`'s object case all
+  // read the body through ONE composed view, because a body is one object to the validator.
+  let dir: string;
+  beforeAll(async () => {
+    dir = await mkdtemp(join(tmpdir(), "crust-gen-allof-"));
+  });
+  afterAll(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  async function emit(name: string, schema: Record<string, unknown>) {
+    const specPath = join(dir, `${name}.json`);
+    await writeFile(
+      specPath,
+      JSON.stringify({
+        openapi: "3.0.0",
+        paths: {
+          "/things": {
+            post: {
+              requestBody: { required: true, content: { "application/json": { schema } } },
+              responses: { "200": { description: "ok" }, "400": { description: "bad" } },
+            },
+          },
+        },
+      }),
+    );
+    const setupPath = join(dir, `${name}.setup.ts`);
+    await writeFile(
+      setupPath,
+      "export const scopeParam = null;\nexport async function shared() { return {}; }\n" +
+        "export function headersFor() { return { 'content-type': 'application/json' }; }\n" +
+        "export function resolvePath(_c, t) { return 'http://127.0.0.1:1' + t; }\n",
+    );
+    const notes: string[] = [];
+    const result = await generateFixtures({
+      swagger: specPath,
+      out: join(dir, `out-${name}`),
+      setup: setupPath,
+      log: (line) => notes.push(line),
+    });
+    const text = (
+      await Promise.all(
+        result.files.map((f) =>
+          Bun.file(f)
+            .text()
+            .catch(() => ""),
+        ),
+      )
+    ).join("\n");
+    return { text, notes };
+  }
+
+  // The corpus shape: two branches, each declaring AND requiring its own property. 1Password
+  // Connect writes exactly this (`vault` + `category`); Graph writes it 112 times.
+  const TWO_BRANCHES = {
+    type: "object",
+    allOf: [
+      { required: ["vault"], properties: { vault: { type: "string" } } },
+      { required: ["category"], properties: { category: { type: "string" } } },
+    ],
+  };
+
+  test("a required name living in a branch gets its cases, not a placeholder", async () => {
+    const { text, notes } = await emit("branches", TWO_BRANCHES);
+    // Coverage the naive read never produced: these two cases did not exist before the fix.
+    expect(text).toContain("missing required 'vault'");
+    expect(text).toContain("missing required 'category'");
+    expect(text).toContain("wrong type for 'vault'");
+    // And the base body is sound, so the drop rule stays silent. This assertion IS the validator's
+    // verdict: the notice is printed by unsoundFields, from crust's own validateSchema.
+    expect(notes.join("\n")).not.toContain("skipped");
+  });
+
+  test('the base body carries a real value for a branch field, not "x"', async () => {
+    const { text } = await emit("branch-values", {
+      type: "object",
+      additionalProperties: false,
+      allOf: [
+        { required: ["code"], properties: { code: { type: "string", pattern: "^CN-[0-9]{4}$" } } },
+      ],
+    });
+    // The `unexpected extra property` case sends the base body plus one unknown key, so the emitted
+    // body is the base body in the flesh: the field must hold something its pattern accepts. Before
+    // the fix this line read "code":"x" — a value crust invented for a field it never looked up.
+    expect(text).toContain("crustUnexpectedProp");
+    expect(text).toMatch(/\\"code\\":\\"CN-\d{4}\\"/);
+    expect(text).not.toMatch(/\\"code\\":\\"x\\"/);
+  });
+
+  test("a name required twice is not a case twice", async () => {
+    const { text } = await emit("dupe", {
+      type: "object",
+      required: ["kind"],
+      allOf: [{ required: ["kind"], properties: { kind: { type: "string" } } }],
+    });
+    const hits = text.match(/missing required 'kind'/g) ?? [];
+    expect(hits.length).toBe(1);
+  });
+
+  test("a union body composes to its first branch, the convention everywhere else", async () => {
+    // ably.io writes request bodies as a top-level anyOf; the naive empty `{}` failed the union and
+    // the whole operation lost its body cases.
+    const { text, notes } = await emit("union", {
+      anyOf: [
+        { required: ["ruleType"], properties: { ruleType: { type: "string" } } },
+        { required: ["requestMode"], properties: { requestMode: { type: "string" } } },
+      ],
+    });
+    expect(text).toContain("missing required 'ruleType'");
+    expect(notes.join("\n")).not.toContain("skipped");
+  });
+
+  // Falsifier: composition is not a licence to call every body sound. An unsatisfiable field inside
+  // a branch must still drop the OTHER fields' cases and still be disclosed, naming that field.
+  test("control: an unsound field inside a branch still drops and still says so", async () => {
+    const { text, notes } = await emit("branch-unsound", {
+      type: "object",
+      allOf: [
+        {
+          required: ["subnetId"],
+          properties: {
+            subnetId: { type: "string", pattern: "^(subnet-[0-9a-f]{8})(?!z)$" },
+          },
+        },
+        { required: ["name"], properties: { name: { type: "string" } } },
+      ],
+    });
+    expect(text).toContain("missing required 'subnetId'");
+    expect(text).not.toContain("missing required 'name'");
+    expect(notes.join("\n")).toContain("'subnetId' (pattern)");
+  });
+
+  test("control: a flat body is untouched by the composed view", async () => {
+    const { text, notes } = await emit("flat", {
+      type: "object",
+      required: ["a"],
+      properties: { a: { type: "string" } },
+    });
+    expect(text).toContain("missing required 'a'");
+    expect(text).not.toContain("missing required 'vault'");
+    expect(notes.join("\n")).not.toContain("skipped");
+  });
+});

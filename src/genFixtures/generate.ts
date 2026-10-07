@@ -255,6 +255,9 @@ function composedObject(
       out.required.push(...sub.required);
     }
   }
+  // A name required both here and by a branch arrives twice. Harmless for a body (assignment is
+  // idempotent), not harmless for a CASE LIST: deriveCases would emit the same case name twice.
+  out.required = [...new Set(out.required)];
   return out;
 }
 
@@ -412,9 +415,18 @@ export function validValue(s: Schema | undefined, key = ""): unknown {
 }
 
 function baseBody(schema: Schema): Record<string, unknown> {
+  // Composed, not `schema.required` / `schema.properties`. A property can be declared by one
+  // `allOf` branch and required by another — Microsoft Graph, 1Password Connect and bitbucket
+  // write bodies this way — and the naive read then finds a required name with no schema beside
+  // it. `validValue(undefined)` answers `"x"`, which fails the validator for a field the base body
+  // never chose, and F33's drop rule correctly takes the operation's cases with it. Measured: 755
+  // of 41,574 corpus operations, 65 specs. This has to be the SAME view `validValue`'s object case
+  // uses and the one deriveCases lists fields from, or the base body and the cases built on it
+  // disagree about what the body is.
+  const { required, properties } = composedObject(schema);
   const body: Record<string, unknown> = {};
-  for (const k of schema.required ?? []) {
-    body[k] = validValue(schema.properties?.[k], k);
+  for (const k of required) {
+    body[k] = validValue(properties[k], k);
   }
   return body;
 }
@@ -601,8 +613,11 @@ function deriveCases(
   // must resolve to a caller inside the shared scope).
   if (bodySchema && has(400)) {
     const validAuth = requiresAuth ? "member" : "none";
-    const required = bodySchema.required ?? [];
-    const props = bodySchema.properties ?? {};
+    // Same composed view as baseBody, on purpose: the field list drives `missing required '<field>'`
+    // cases, so a name the spec requires through an `allOf` branch would otherwise get no case at
+    // all — and a property declared only in a branch would get a `wrong type` case built from
+    // `undefined`.
+    const { required, properties: props } = composedObject(bodySchema);
     const base = baseBody(bodySchema);
 
     for (const field of required) {
@@ -1006,7 +1021,13 @@ function emitFlow(f: FlowPlan): string {
       // PATCH is a partial update — a single perturbed field is the point.
       // First schema property with a valid value (the update op's own schema
       // when it has one, else the POST's).
-      const props = updateSchema?.properties ?? bodySchema.properties ?? {};
+      // Composed (an update schema can declare its properties only inside an `allOf` branch), while
+      // keeping the original rule: an update schema with nothing of its own still borrows the POST's.
+      const composedUpdate = updateSchema ? composedObject(updateSchema) : null;
+      const props =
+        composedUpdate && Object.keys(composedUpdate.properties).length > 0
+          ? composedUpdate.properties
+          : composedObject(bodySchema).properties;
       const firstKey = Object.keys(props)[0];
       body = firstKey ? { [firstKey]: validValue(props[firstKey], firstKey) } : {};
     } else {
