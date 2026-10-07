@@ -132,6 +132,40 @@ beforeAll(() => {
           `<head><title>Home</title><meta property="og:title" content="Home"></head><body>Welcome</body>`,
         );
       }
+      // --- pages the server mislabels (F13: a non-text/html content-type used
+      // to end the crawl there and the run still said "0 failures") ---
+      if (p === "/sitemap-mislabelled.xml") {
+        return xml(`<urlset><url><loc>${base}/xhtml-page</loc></url></urlset>`);
+      }
+      if (p === "/sitemap-sniffed.xml") {
+        return xml(`<urlset><url><loc>${base}/plain-page</loc></url></urlset>`);
+      }
+      if (p === "/sitemap-json.xml") {
+        return xml(`<urlset><url><loc>${base}/data.json</loc></url></urlset>`);
+      }
+      if (p === "/xhtml-page") {
+        // application/xhtml+xml IS an HTML document.
+        return new Response(
+          `<!doctype html><html><body><a href="/deep-dead">gone</a></body></html>`,
+          { headers: { "content-type": "application/xhtml+xml" } },
+        );
+      }
+      if (p === "/plain-page") {
+        // An HTML document that the server refuses to label as one.
+        return new Response(
+          `<!doctype html><html><body><a href="/deep-dead">gone</a></body></html>`,
+          { headers: { "content-type": "text/plain; charset=utf-8" } },
+        );
+      }
+      if (p === "/data.json") {
+        // A sitemap entry that is genuinely not a HTML document. The `<a href>`
+        // inside is data, not a link: crust must not crawl it, and must not
+        // call the run complete either.
+        return new Response(`{"link":"<a href=\\"/deep-dead\\"">"}`, {
+          headers: { "content-type": "application/json" },
+        });
+      }
+
       if (p === "/login") {
         return html(`<head><title>Login</title></head><body>Log in</body>`);
       }
@@ -453,5 +487,69 @@ describe("entity decoding in extracted URLs", () => {
     expect(hrefs).toContain("/wp-json/oembed?url=x&format=xml");
     expect(hrefs.some((h) => h.includes("#038;"))).toBe(false);
     expect(hrefs.some((h) => h.endsWith("&"))).toBe(false);
+  });
+});
+
+describe("a page whose content-type does not say HTML", () => {
+  test("application/xhtml+xml is an HTML document: its links are followed", async () => {
+    // Before: "0 page(s), 1 asset(s), 0 failure(s)" and exit 0, because a
+    // substring test for text/html filed the page under assets and the crawl
+    // ended there — /deep-dead was never fetched.
+    const r = await runCli(["--site-map-url", `${base}/sitemap-mislabelled.xml`]);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toContain("/deep-dead");
+    // Declared as a HTML media type, so nothing had to be guessed: no note.
+    expect(r.stdout).not.toContain("recognised from their body");
+  });
+
+  test("HTML served as text/plain is recognised from the body, followed, disclosed", async () => {
+    const r = await runCli(["--site-map-url", `${base}/sitemap-sniffed.xml`]);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toContain("/deep-dead");
+    expect(r.stdout).toContain("recognised from their body");
+
+    const j = JSON.parse(
+      (await runCli(["--site-map-url", `${base}/sitemap-sniffed.xml`, "--json"])).stdout,
+    );
+    expect(j.totals.sniffedPages).toBe(1);
+    expect(j.totals.pages).toBe(1);
+    // A mislabel is a fact about the server, not unchecked work on our side.
+    expect(j.totals.complete).toBe(true);
+  });
+
+  test("control: a JSON sitemap entry is not crawled as HTML, but the gap is printed", async () => {
+    // The falsifier for "just parse everything": a body that agrees with its
+    // content-type is left alone — its `<a href>` is data, not a link.
+    const r = await runCli(["--site-map-url", `${base}/sitemap-json.xml`]);
+    expect(r.code).toBe(0);
+    expect(r.stdout).not.toContain("/deep-dead");
+    expect(r.stdout).toContain("NOT read as HTML");
+
+    const j = JSON.parse(
+      (await runCli(["--site-map-url", `${base}/sitemap-json.xml`, "--json"])).stdout,
+    );
+    expect(j.totals.unparsedPages).toBe(1);
+    expect(j.totals.complete).toBe(false);
+  });
+
+  test("--strict makes a run that left work unchecked fail; a finished run still passes", async () => {
+    const rPage = await runCli(["--site-map-url", `${base}/sitemap-json.xml`, "--strict"]);
+    expect(rPage.code).toBe(1);
+    expect(rPage.stderr).toContain("--strict");
+
+    const rCap = await runCli([
+      "--site-map-url",
+      `${base}/sitemap-good.xml`,
+      "--max-pages",
+      "1",
+      "--strict",
+    ]);
+    expect(rCap.code).toBe(1);
+    expect(rCap.stderr).toContain("--max-pages reached");
+
+    // The control: --strict is not "always fail".
+    const clean = await runCli(["--site-map-url", `${base}/sitemap-good.xml`, "--strict"]);
+    expect(clean.code).toBe(0);
+    expect(clean.stdout).toContain("0 failure(s)");
   });
 });

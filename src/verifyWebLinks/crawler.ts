@@ -1,4 +1,4 @@
-import { extractFromHtml } from "./extractors";
+import { extractFromHtml, isHtmlType, looksLikeHtmlDocument } from "./extractors";
 import type { CrawlResult, LinkRef, VerifyOpts } from "./types";
 
 const MAX_REDIRECT_HOPS = 5;
@@ -87,6 +87,8 @@ function placeholder(url: string): CrawlResult {
     ids: [],
     links: [],
     parsed: false,
+    sniffedHtml: false,
+    unparsedPage: false,
     meta: { byKey: {} },
     durationMs: 0,
   };
@@ -110,18 +112,31 @@ async function process(
     result.contentType = fetched.contentType;
 
     const isInternal = sameOrigin(fetched.finalUrl, origin);
-    const isHtml = fetched.contentType.toLowerCase().includes("text/html");
-
-    if (
+    const declaredHtml = isHtmlType(fetched.contentType);
+    const response = fetched.response;
+    const okPage =
       item.asPage &&
       isInternal &&
-      isHtml &&
-      fetched.response &&
+      response !== null &&
       fetched.status >= 200 &&
-      fetched.status < 400
-    ) {
-      const ext = await extractFromHtml(fetched.response);
+      fetched.status < 400;
+
+    // A page-shaped document whose content-type does not say HTML still gets
+    // its body read — the asset path drains the body anyway, so this costs
+    // nothing. Otherwise a server that mislabels HTML ends the crawl there,
+    // and the run reports "0 failures" over a link graph it never followed.
+    let bodyText: string | null = null;
+    let parseAsHtml = declaredHtml;
+    if (okPage && response && !declaredHtml) {
+      bodyText = await response.text().catch(() => "");
+      parseAsHtml = looksLikeHtmlDocument(bodyText);
+      if (!parseAsHtml) result.unparsedPage = true;
+    }
+
+    if (okPage && response && parseAsHtml) {
+      const ext = await extractFromHtml(bodyText === null ? response : new Response(bodyText));
       result.parsed = true;
+      result.sniffedHtml = !declaredHtml;
       result.ids = [...ext.ids];
       result.meta = ext.meta;
       const refs: LinkRef[] = [];
@@ -156,9 +171,9 @@ async function process(
           }
         }
       }
-    } else if (fetched.response) {
-      // Drain stream so we don't leak
-      await fetched.response.arrayBuffer().catch(() => undefined);
+    } else if (response && bodyText === null) {
+      // Drain stream so we don't leak (the sniff path above already read it)
+      await response.arrayBuffer().catch(() => undefined);
     }
   } catch (err) {
     result.error = (err as Error).message;

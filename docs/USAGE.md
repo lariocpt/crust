@@ -1654,9 +1654,29 @@ verify-web-links --base-url https://example.com --fixtures meta/*.crust.ts
 verify-web-links --site-map-url ./public/sitemap.xml --no-recurse
 ```
 
-Flags: `--site-map-url <url-or-path>` or `--base-url <url>` (one required, mutually exclusive); `--fixtures <glob>` (optional `.crust.ts` meta fixtures); `--concurrency N` (default `4`); `--timeout ms` (default `10000`); `--user-agent <s>`; `--max-depth N` (default `5`); `--no-recurse` / `--no-anchors` / `--no-redirect-warnings` to opt out of those checks; `--include-external` to status-check off-origin links (never recursed); `--exclude <substring>` (repeatable) to skip URLs containing the substring — for subtrees that redirect by design, like a WooCommerce `/checkout/` or `/wp-admin/`; `--max-pages N` to stop after N URLs (the report counts what was left unchecked — a safety valve for crawls that explode into e.g. WooCommerce filter URLs; default `0` = unlimited); `--no-progress` to silence the 5-second progress heartbeat on stderr; `--json` for a machine-readable report.
+Flags: `--site-map-url <url-or-path>` or `--base-url <url>` (one required, mutually exclusive); `--fixtures <glob>` (optional `.crust.ts` meta fixtures); `--concurrency N` (default `4`); `--timeout ms` (default `10000`); `--user-agent <s>`; `--max-depth N` (default `5`); `--no-recurse` / `--no-anchors` / `--no-redirect-warnings` to opt out of those checks; `--include-external` to status-check off-origin links (never recursed); `--exclude <substring>` (repeatable) to skip URLs containing the substring — for subtrees that redirect by design, like a WooCommerce `/checkout/` or `/wp-admin/`; `--max-pages N` to stop after N URLs (the report counts what was left unchecked — a safety valve for crawls that explode into e.g. WooCommerce filter URLs; default `0` = unlimited); `--no-progress` to silence the 5-second progress heartbeat on stderr; `--json` for a machine-readable report; `--strict` to fail (exit 1) unless **every discovered link was checked** — see below.
 
 By default, all four verification behaviors are on: 2xx status, recurse into internal pages, validate `#fragment` targets against element ids on the destination page, and flag any 3xx redirect chain (often a sign of stale internal links). Each `og:image` URL is fetched and its content-type asserted to start with `image/`.
+
+A page is crawled when crust can read it as a HTML document: when the content-type says so
+(`text/html` or `application/xhtml+xml`), or when the declaration says otherwise but the document
+itself begins `<!doctype html>` / `<html`. That second case is printed — `N page(s) had to be
+recognised from their body or an xhtml content-type` — because the server is mislabelling its own
+pages, and crust following them anyway is not the same as the run being healthy. A page-shaped
+document that is *neither* (a JSON API response that ended up in a sitemap) is **not** crawled: its
+`<a href>` strings are data, not links. It is counted in `totals.unparsedPages`, which makes
+`totals.complete` false — a link graph crust could not read is never reported as a clean one.
+
+`totals.complete` is the machine-readable version of "nothing was left unchecked": false when
+`--max-pages` cut the crawl short, when a `#fragment` link pointed at a page crust never parsed, or
+when `unparsedPages` is nonzero. **In CI, prefer `--strict`**, which turns that same fact into exit
+1 — you cannot wire the check up as a pipeline stage, because a builtin runs on its own line:
+`verify-web-links --json | assert (r => r.totals.complete)` is refused outright. Reading the JSON
+from a shell instead works, but only ever checks what you remembered to look at:
+
+```bash
+verify-web-links --base-url https://example.com --strict --max-pages 500
+```
 
 Meta fixtures use the same `.crust.ts` default-export pattern as `test-fixture`. Predicates (single-arg functions) work on any value:
 
@@ -1680,7 +1700,7 @@ verify-web-links --base-url https://example.com --fixtures site/*.meta.crust.ts
 
 Fixture `url`s are matched **URL-normalized**, not byte-for-byte: `https://example.com` and `https://example.com/` are the same page, host case and default ports don't matter. A trailing slash on a non-root path stays significant — `/login/` and `/login` are different pages.
 
-Exit codes: `0` all clear, `1` verification failures (broken links, missing anchors, redirect chains, OG image issues, meta mismatches), `2` bad args / unreachable sitemap.
+Exit codes: `0` all clear, `1` verification failures (broken links, missing anchors, redirect chains, OG image issues, meta mismatches) — or, with `--strict`, a run that finished having left discovered links unchecked, `2` bad args / unreachable sitemap.
 
 ### logs — interactive log searching
 

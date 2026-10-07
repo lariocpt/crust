@@ -22,6 +22,34 @@ function decodeEntities(s: string): string {
     .replace(/&apos;/g, "'");
 }
 
+/**
+ * Media types that mean "this is an HTML document". `application/xhtml+xml`
+ * belongs here: it is HTML's own XML-serialised media type, and a substring
+ * test for `text/html` alone used to treat those pages as opaque assets —
+ * crust counted them, never followed a link in them, and still said
+ * "0 failures" (a dead link two hops away was simply never seen).
+ */
+export function isHtmlType(contentType: string): boolean {
+  const t = contentType.toLowerCase();
+  return t.includes("text/html") || t.includes("application/xhtml+xml");
+}
+
+/**
+ * Does the body begin with an HTML document, whatever the server declared?
+ * Deliberately strict about position: the marker must be the first thing in
+ * the document (after a BOM and whitespace). A `text/plain` file that merely
+ * quotes a HTML snippet somewhere in its middle must not be mistaken for a
+ * page, or every string inside it becomes a URL to check.
+ */
+export function looksLikeHtmlDocument(body: string): boolean {
+  const head = body
+    .replace(/^\uFEFF/, "")
+    .replace(/^\s+/, "")
+    .slice(0, 512)
+    .toLowerCase();
+  return /^<!doctype\s+html/.test(head) || /^<html(?:[\s/>]|$)/.test(head);
+}
+
 export async function extractFromHtml(response: Response): Promise<ExtractResult> {
   const links: Array<{ href: string; tag: LinkRef["kind"] }> = [];
   const meta: MetaTags = { byKey: {} };
