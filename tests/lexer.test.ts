@@ -345,6 +345,37 @@ describe("bracket-headed stages: JSON literal or shell", () => {
     expect(classify('{"a": }').kind).toBe("json");
     expect(classify("{web: 'x'}").kind).toBe("json");
   });
+
+  // The shell shapes are the *spaced* ones — `[ … ]` and `{ …; }` — so a quote
+  // inside a test is not evidence of a literal, and an operator inside a
+  // literal is not evidence of shell. Both directions were wrong at once in the
+  // first cut of the rule, and the second is a request body nobody could write.
+  test("a spaced bracket head is shell whatever it contains", () => {
+    expect(classify('[ -n "$X" ]').kind).toBe("shell");
+    expect(classify("[ -f $CFG ]").kind).toBe("shell");
+    expect(classify('[ "$a" = "$b" ] && echo eq').kind).toBe("shell");
+  });
+
+  test("control: operators inside a real literal do not make it shell", () => {
+    expect(classify('{"a":"b|c"}').kind).toBe("json");
+    expect(classify('{"cmd":"a && b"}').kind).toBe("json");
+    expect(classify('{"q":"`id`"}').kind).toBe("json");
+  });
+
+  // `$VAR` is expanded *after* classification, so a literal with a variable in
+  // it does not parse yet and has to be recognized by shape. Getting this wrong
+  // does not produce a message: the stage falls through to the glob rule, and a
+  // glob that matches nothing is an empty stream and exit 0. These three lines
+  // are the reason that rule is a claim rather than a parse.
+  test("a literal with a variable in it is still a literal", () => {
+    expect(classify("[1,$N]").kind).toBe("json");
+    expect(classify("[$N]").kind).toBe("json");
+    expect(classify('{"n":$N}').kind).toBe("json");
+    // the tight bracket with no evidence at all is the glob it looks like
+    expect(classify("[abc]*").kind).toBe("glob");
+    // and the spaced one is the shell's test — the documented gap for arrays
+    expect(classify("[ $N ]").kind).toBe("shell");
+  });
 });
 
 describe("http --timeout", () => {

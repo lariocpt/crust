@@ -123,14 +123,28 @@ export function rejectRedirect(text: string, where: string): void {
  * Whether a stage that starts with `{` or `[` is a JSON literal (or someone
  * typing one) rather than shell text that merely begins with a bracket.
  *
- * Parsing it is the honest test, but the parser expands `$VAR` *before*
- * parsing (`{"n":$N}` is a literal once the shell's variable is filled in), so
- * a parse failure is not proof of shell. Shape decides the rest: text with no
- * quote and no colon was never meant to be a literal (`[ -f f ] && echo ok`),
- * and neither is text carrying a shell control operator (`{ echo a; echo b; }`),
- * which no JSON literal contains outside a string. Anything else keeps the
- * `json` classification so a half-typed body is reported as the JSON error it
- * is, rather than exec'ing as a command.
+ * Parsing it is the honest test, and valid JSON needs nothing else: `{"a":1}`
+ * and `{"cmd":"a && b"}` are literals whatever they contain, because the parse
+ * succeeds before any shape rule is consulted. What needs a rule is text that
+ * does NOT parse, and the two facts that settle it are:
+ *
+ *  - the shell's own shapes are always spaced — a test command is `[ … ]`, a
+ *    brace group `{ …; }`, both with a space after the bracket. A JSON literal
+ *    that needs none (`{"n":$N}`, `[1,$N]`) is typed tight, so a spaced head is
+ *    shell and nothing else.
+ *  - a parse failure is not proof of shell either, because the parser expands
+ *    `$VAR` *after* classification: `{"n":$N}` is a literal once the variable
+ *    is filled in. So tight text carrying a quote, colon, comma or `$` is a
+ *    literal attempt.
+ *
+ * That ordering is deliberate and it fixes a false pass. A rejected stage is
+ * tried as a GLOB before it is tried as shell, and a glob matching nothing
+ * yields an empty stream and exit 0 — so a wrong "not a literal" verdict on
+ * `[1,$N]` is not a confusing message, it is silence, the one outcome worse
+ * than the JSON error this replaced. Residual gaps, both honest and both loud
+ * or both rare: a bracketed command substitution (`[$(date +%s)]`) is a literal
+ * attempt crust never expanded, and a *spaced* array with a variable in it
+ * (`[ $N ]`) reads as the shell's test — write arrays tight, as `[1,$N]`.
  */
 function looksJsonish(t: string): boolean {
   try {
@@ -139,8 +153,9 @@ function looksJsonish(t: string): boolean {
   } catch {
     // not literal as written — decide by shape
   }
-  if (!t.includes('"') && !t.includes(":")) return false;
-  return !/[;&|`]|\$\(/.test(t);
+  if (/^[[{]\s/.test(t)) return false; // `[ … ]` tests, `{ …; }` groups
+  if (/[",:]|^\[[^\s]*[$(]/.test(t)) return true;
+  return false;
 }
 
 export function classify(text: string): StageKind {

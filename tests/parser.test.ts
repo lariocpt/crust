@@ -62,6 +62,36 @@ describe("parser — sources", () => {
     // and a half-typed one is still the JSON error, never a shell exec
     expect(() => parse('{"a": }')()).toThrow(/JSON/);
   });
+
+  // `$VAR` is expanded after the stage is classified, so these lines are
+  // literals by shape, not by parse. The first cut of the bracket rule decided
+  // by parse alone and all three fell through to the glob source — which with
+  // nothing to match is an empty stream and exit 0. Silent, not an error, and
+  // the shipped binary had answered `[1,5]`, `[5]` and `{"n":5}`.
+  test("control: a literal with a variable in it still runs as a literal", async () => {
+    process.env.CRUST_TEST_N = "5";
+    try {
+      expect(await parse("[1,$CRUST_TEST_N]")().collect()).toEqual([[1, 5]]);
+      expect(await parse("[$CRUST_TEST_N]")().collect()).toEqual([[5]]);
+      expect(await parse('{"n":$CRUST_TEST_N}')().collect()).toEqual([{ n: 5 }]);
+    } finally {
+      delete process.env.CRUST_TEST_N;
+    }
+    // unset, the same line is the loud thing it was before: a JSON error
+    expect(() => parse("[1,$CRUST_TEST_N]")()).toThrow(/JSON/);
+  });
+
+  test("the documented gap: a spaced array reads as the shell's test", async () => {
+    // `[ $N ]` is indistinguishable from `[ -n "$N" ]`, which is shell and the
+    // point of the bracket rule. Writing arrays tight (`[1,$N]`) is the fix, so
+    // pin the reading rather than leave it discovered as an empty run.
+    process.env.CRUST_TEST_N = "5";
+    try {
+      expect(await parse("[ $CRUST_TEST_N ]")().collect()).toEqual([]);
+    } finally {
+      delete process.env.CRUST_TEST_N;
+    }
+  });
 });
 
 describe("parser — transforms", () => {

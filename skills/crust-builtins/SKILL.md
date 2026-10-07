@@ -24,10 +24,11 @@ bundle(5)   →  sh: -c: line 1: syntax error near unexpected token `('   (exit 
 Parens are crust syntax only for **lexer sources** (`range(0,9)`,
 `read("…")`) — everything else in a stage is a shell word list.
 
-A stage that *starts* with `{` or `[` is a JSON literal only when it is one,
-or still looks like someone typing one (a quote or colon, no shell operator).
-Shell grouping and the shell's test bracket are therefore shell stages, in any
-position — and a mid-pipeline one works too, which it used not to:
+A stage that *starts* with `{` or `[` is a JSON literal when it parses, or when
+tight text still looks like someone typing one — a quote, colon, comma or a `$`
+inside the brackets (`{"n":$N}`, `[1,$N]`). The shell's own bracket shapes are
+always spaced, so `[ … ]` and `{ …; }` are shell stages, in any position — and a
+mid-pipeline one works too, which it used not to:
 
 ```crust
 { echo a; echo b; } | cat
