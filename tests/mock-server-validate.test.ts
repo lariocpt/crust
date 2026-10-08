@@ -1177,7 +1177,8 @@ describe("pattern compilation", () => {
 // Swagger 2.0 has no requestBody: an operation's body is a parameter with `in: body`. The
 // conversion used to drop that parameter, so --validate on a 2.0 spec had NO body to validate —
 // measured before the fix: POST {"size":"nope"} against a schema requiring `name` was answered
-// with the documented 201, and {} likewise. 1,443 specs of the APIs-guru corpus, silently. F47.
+// with the documented 201, and {} likewise. 1,528 specs and 10,870 operations of the APIs-guru
+// corpus, silently. F47.
 describe("a Swagger 2.0 body parameter is validated (F47)", () => {
   test("violating body -> 422, absent required body -> 422, valid body -> the documented 201", async () => {
     const dir = await mkdtemp(join(tmpdir(), "crust-v2body-"));
@@ -1211,6 +1212,22 @@ describe("a Swagger 2.0 body parameter is validated (F47)", () => {
                 consumes: ["application/x-www-form-urlencoded"],
                 parameters: [{ name: "caption", in: "formData", required: true, type: "string" }],
                 responses: { "201": { description: "ok" } },
+              },
+            },
+            // 9 corpus specs declare a body here (12 of them required). fetch refuses a body
+            // on GET outright, so advertising one would make the mock reject a request no
+            // client can lawfully send.
+            "/search": {
+              get: {
+                parameters: [
+                  {
+                    name: "body",
+                    in: "body",
+                    required: true,
+                    schema: { $ref: "#/definitions/Widget" },
+                  },
+                ],
+                responses: { "200": { description: "ok" } },
               },
             },
           },
@@ -1267,6 +1284,11 @@ describe("a Swagger 2.0 body parameter is validated (F47)", () => {
           body: "other=1",
         });
         expect(form.status).toBe(201);
+
+        // Control for the guard: a GET that declares a REQUIRED body still answers its
+        // documented status. The alternative is 422 on every request to it, forever.
+        const search = await fetch(`${base}/search`);
+        expect(search.status).toBe(200);
       } finally {
         await server.stop();
       }

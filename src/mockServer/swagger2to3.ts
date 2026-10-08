@@ -68,11 +68,13 @@ function isBodyParam(node: unknown, spec: OpenApiSpec): boolean {
 /**
  * Swagger 2.0 has no `requestBody`: the body of an operation is a parameter with
  * `in: body`. Until now the conversion dropped it, so both halves of crust were
- * blind to it at once — measured on the current tree: `mock-server --validate`
- * answered **201** to `{"size":"nope"}` against a schema that requires `name`, and
- * gen-fixtures emitted **0 cases** for the spec, with only its generic hint to say
- * why. That is 1,443 specs and 10,083 operations of the APIs-guru corpus — a third
- * of it, every one a Swagger 2.0 document (`body-params-2026-10-08.txt`).
+ * blind to it at once — measured on the prior tree: `mock-server --validate`
+ * answered **201** to `{"size":"nope"}` against a schema that requires `name`, and to
+ * `"a string"`, and to `{}`, while gen-fixtures emitted **0 cases** for the spec with
+ * only its generic hint to say why. That is 1,528 specs and 10,870 operations of the
+ * APIs-guru corpus — a third of it, every one a Swagger 2.0 document: 10,083 declare
+ * the parameter on the operation, 775 reach it through `$ref: #/parameters/…`, and 12
+ * declare it once on the path item.
  *
  * Move the body parameter into the 3.x shape instead, once, here, so the mock
  * validates it and gen-fixtures writes its 400 matrix from the same schema. 2.0
@@ -82,8 +84,17 @@ function isBodyParam(node: unknown, spec: OpenApiSpec): boolean {
  * `in: formData` is deliberately NOT converted: it becomes a form body, and crust
  * does not validate non-JSON request bodies at all (docs/USAGE.md "Non-JSON request
  * bodies"), so a conversion would advertise a body nothing reads.
+ *
+ * Nor is a body moved onto `GET` or `HEAD`, though 9 corpus specs declare one (16 GET
+ * operations, 12 of them required, in azure botservice/mariadb/mysql, hetras, n-auth,
+ * ticketmaster, illumidesk). A generated fixture fetches, and `fetch` refuses a body
+ * on those two methods outright, so the case would error rather than fail; and a
+ * REQUIRED body there is worse — the mock would answer every GET `422 request body is
+ * required but absent`, rejecting a request no client can lawfully satisfy. Leaving
+ * the parameter where it was keeps those operations exactly as they are today.
  */
 function moveBodyParams(
+  method: string,
   op: Record<string, unknown>,
   pathParams: unknown[],
   specConsumes: unknown,
@@ -91,6 +102,7 @@ function moveBodyParams(
 ): void {
   // A document that mixes both dialects already says what it means — do not overwrite it.
   if (op.requestBody) return;
+  if (method === "get" || method === "head") return; // see above: no client sends that body
   const params = Array.isArray(op.parameters) ? (op.parameters as unknown[]) : [];
   // Operation-level parameters override path-level ones by (name, in), and only ONE
   // body parameter is legal per operation, so the first at op level wins.
@@ -140,7 +152,8 @@ export function swagger2to3(spec: OpenApiSpec): OpenApiSpec {
     for (const [method, opUnknown] of Object.entries(pathItem)) {
       if (!HTTP_METHODS.has(method.toLowerCase())) continue;
       const op = opUnknown as Record<string, unknown> | undefined;
-      if (op && typeof op === "object") moveBodyParams(op, pathParams, specConsumes, spec);
+      if (op && typeof op === "object")
+        moveBodyParams(method.toLowerCase(), op, pathParams, specConsumes, spec);
       const responses = op?.responses as Record<string, Record<string, unknown>> | undefined;
       if (!responses || typeof responses !== "object") continue;
       const media = pickMediaType((op as Record<string, unknown>)?.produces ?? specProduces);

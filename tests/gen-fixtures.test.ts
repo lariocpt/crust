@@ -2698,6 +2698,7 @@ describe("a Swagger 2.0 `in: body` parameter gets the 400 matrix (F47)", () => {
     name: string,
     op: Record<string, unknown>,
     extra?: Record<string, unknown>,
+    method: string = "post",
   ) {
     const specPath = join(dir, `${name}.json`);
     await writeFile(
@@ -2707,7 +2708,7 @@ describe("a Swagger 2.0 `in: body` parameter gets the 400 matrix (F47)", () => {
         info: { title: "t", version: "1" },
         consumes: ["application/json"],
         produces: ["application/json"],
-        paths: { "/widgets": { post: op } },
+        paths: { "/widgets": { [method]: op } },
         definitions: {
           Widget: {
             type: "object",
@@ -2765,5 +2766,27 @@ describe("a Swagger 2.0 `in: body` parameter gets the 400 matrix (F47)", () => {
       consumes: ["application/x-www-form-urlencoded"],
     });
     expect(text).not.toContain("-> 400");
+  });
+
+  // The other half of the guard. 9 corpus specs declare a body on GET or HEAD, 12 of them
+  // required; a generated fixture fetches, and fetch refuses a body on those methods, so the
+  // case would ERROR rather than fail — measured, running the pre-guard output through
+  // crust's own test-fixture: `error: fetch() request with GET/HEAD/OPTIONS method cannot have
+  // body.` on hetras-certification.net's `GET /api/booking/v0/blocks/{blockCode} -> 404`. This
+  // spec's only operation is the GET, so any `body:` in its output would be a GET carrying one.
+  test("a GET body parameter generates no request that carries one", async () => {
+    const { text } = await emit20(
+      "getbody",
+      {
+        parameters: [
+          { name: "body", in: "body", required: true, schema: { $ref: "#/definitions/Widget" } },
+        ],
+        responses: { "200": { description: "ok" }, "400": { description: "bad" } },
+      },
+      undefined,
+      "get",
+    );
+    expect(text).not.toContain("GET /widgets missing required");
+    expect(text).not.toContain('body: "');
   });
 });

@@ -205,4 +205,79 @@ describe("an `in: body` parameter becomes a requestBody (F47)", () => {
     // and the query parameter of /widgets did not become a body
     expect(paths["/widgets"]!.post!.requestBody).toBeDefined();
   });
+
+  // 9 corpus specs do this (16 GET operations, 12 of them required — azure botservice/
+  // mariadb/mysql, hetras, n-auth, ticketmaster; illumidesk on HEAD). A REQUIRED body on
+  // GET would make the mock answer every GET `422 request body is required but absent`,
+  // rejecting a request no client can lawfully send; and a generated fixture would ERROR,
+  // because fetch refuses a body on GET and HEAD outright. Measured, both halves: without
+  // the guard the fix emitted `GET /api/booking/v0/blocks/{blockCode} ... -> 404` for
+  // hetras-certification.net with `body: "{}"`, and crust's own test-fixture reported
+  // `error: fetch() request with GET/HEAD/OPTIONS method cannot have body.` — an error about
+  // crust, not about the API under test.
+  test("a GET or HEAD body parameter stays where it was", () => {
+    const spec = swagger2to3(
+      bodyV2({
+        "/search": {
+          get: {
+            parameters: [
+              {
+                name: "body",
+                in: "body",
+                required: true,
+                schema: { $ref: "#/definitions/Widget" },
+              },
+            ],
+            responses: { "200": { description: "ok" } },
+          },
+          head: {
+            parameters: [
+              {
+                name: "body",
+                in: "body",
+                required: true,
+                schema: { $ref: "#/definitions/Widget" },
+              },
+            ],
+            responses: { "200": { description: "ok" } },
+          },
+          // the POST on the same path is unaffected by the guard
+          post: {
+            parameters: [
+              {
+                name: "body",
+                in: "body",
+                required: true,
+                schema: { $ref: "#/definitions/Widget" },
+              },
+            ],
+            responses: { "201": { description: "ok" } },
+          },
+        },
+      }),
+    );
+    const item = spec.paths!["/search"]!;
+    expect(item.get!.requestBody).toBeUndefined();
+    expect(item.head!.requestBody).toBeUndefined();
+    expect(item.post!.requestBody).toBeDefined();
+    // and its parameter was not consumed by the guard
+    expect((item.get!.parameters as unknown[]).length).toBe(1);
+  });
+
+  // A path-item body is shared, so the guard has to be per-operation, not per-path.
+  test("a path-level body reaches its POST but not its GET", () => {
+    const spec = swagger2to3({
+      swagger: "2.0",
+      paths: {
+        "/things": {
+          parameters: [{ name: "body", in: "body", required: true, schema: { type: "object" } }],
+          get: { responses: { "200": { description: "ok" } } },
+          post: { responses: { "201": { description: "ok" } } },
+        },
+      },
+    } as unknown as OpenApiSpec);
+    const item = spec.paths!["/things"]!;
+    expect(item.get!.requestBody).toBeUndefined();
+    expect(item.post!.requestBody).toBeDefined();
+  });
 });
