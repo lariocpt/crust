@@ -8,6 +8,7 @@ import { buildRoutes } from "../src/mockServer/router";
 import { startServer } from "../src/mockServer/server";
 import {
   type Violation,
+  validateRequest,
   validateResponse,
   validateSchema,
 } from "../src/mockServer/validateRequest";
@@ -1289,6 +1290,140 @@ describe("a Swagger 2.0 body parameter is validated (F47)", () => {
         // documented status. The alternative is 422 on every request to it, forever.
         const search = await fetch(`${base}/search`);
         expect(search.status).toBe(200);
+      } finally {
+        await server.stop();
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// The same rule on the dialect that needs no conversion, and it predates F47: 20 corpus specs /
+// 270 GET operations declare a request body. Bun discards a GET body before any handler sees one
+// — measured through Bun.serve, a GET with `content-length: 13` arrives and `arrayBuffer()` reads
+// 0 bytes — so `required: true` on a GET is not a constraint anyone can satisfy. Before the fix
+// the mock answered **422 request body is required but absent** to every GET on those operations,
+// including the well-formed ones: an invented violation of a request no client can lawfully send.
+describe("a required request body on GET is not enforceable (F52)", () => {
+  const specFor = (method: "get" | "post"): OpenApiSpec =>
+    ({
+      openapi: "3.0.0",
+      info: { title: "t", version: "1" },
+      paths: {
+        "/things": {
+          [method]: {
+            requestBody: {
+              required: true,
+              content: {
+                "application/json": { schema: { $ref: "#/components/schemas/Thing" } },
+              },
+            },
+            responses: {
+              "200": { description: "ok" },
+              "400": { description: "bad" },
+            },
+          },
+        },
+      },
+      components: {
+        schemas: {
+          Thing: {
+            type: "object",
+            required: ["name"],
+            properties: { name: { type: "string" }, size: { type: "integer" } },
+          },
+        },
+      },
+    }) as unknown as OpenApiSpec;
+
+  const routeFor = (spec: OpenApiSpec, method: string) => {
+    const route = buildRoutes(spec).find((r) => r.method === method.toUpperCase());
+    if (!route) throw new Error(`no ${method} route built`);
+    return route;
+  };
+
+  const input = (method: string, over: Record<string, unknown> = {}) =>
+    ({
+      method,
+      pathname: "/things",
+      params: {},
+      searchParams: new URLSearchParams(),
+      contentType: null,
+      bodyPresent: false,
+      body: undefined,
+      ...over,
+    }) as never;
+
+  test("a GET is not rejected for the body no client can deliver", () => {
+    const spec = specFor("get");
+    const v = validateRequest(input("GET"), routeFor(spec, "GET"), spec);
+    expect(v.map((x) => x.rule)).not.toContain("required-body");
+    expect(v).toEqual([]);
+  });
+
+  // The rule is "you cannot REQUIRE one", not "bodies on GET are ignored": a client that
+  // smuggles one past its own fetch still gets what the spec says.
+  test("a GET body that does arrive is still validated", () => {
+    const spec = specFor("get");
+    const v = validateRequest(
+      input("GET", {
+        contentType: "application/json",
+        bodyPresent: true,
+        body: { size: 1 },
+      }),
+      routeFor(spec, "GET"),
+      spec,
+    );
+    expect(v.map((x) => x.rule)).toContain("required");
+    expect(v[0]?.message).toContain("name");
+  });
+
+  // Control that the exemption is the METHOD, not the body: the identical POST still demands one.
+  test("control: a POST still requires the body", () => {
+    const spec = specFor("post");
+    const v = validateRequest(input("POST"), routeFor(spec, "POST"), spec);
+    expect(v.map((x) => x.rule)).toContain("required-body");
+  });
+
+  test("end to end: GET answers its documented 200 while POST keeps its 422", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "crust-getbody-"));
+    try {
+      const doc = specFor("get");
+      // The POST is its OWN operation with its own documented 201: reusing the GET's
+      // responses would leave the mock answering 200 and the assertion would be about
+      // nothing.
+      (doc.paths as Record<string, unknown>)["/widgets"] = {
+        post: {
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: { $ref: "#/components/schemas/Thing" } } },
+          },
+          responses: { "201": { description: "created" }, "400": { description: "bad" } },
+        },
+      };
+      await writeFile(join(dir, "spec.json"), JSON.stringify(doc));
+      // through the loader, because that is where a 2.0 document would be converted
+      const { spec } = await loadSpec(join(dir, "spec.json"));
+      const server = await startServer({
+        port: 0,
+        hostname: "127.0.0.1",
+        spec,
+        validate: true,
+        log: () => {},
+      });
+      const base = `http://127.0.0.1:${server.port}`;
+      try {
+        const get = await fetch(`${base}/things`);
+        expect(get.status).toBe(200);
+        const noBody = await fetch(`${base}/widgets`, { method: "POST" });
+        expect(noBody.status).toBe(422);
+        const good = await fetch(`${base}/widgets`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ name: "Thingy" }),
+        });
+        expect(good.status).toBe(201);
       } finally {
         await server.stop();
       }

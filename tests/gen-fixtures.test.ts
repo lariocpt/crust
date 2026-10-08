@@ -2790,3 +2790,112 @@ describe("a Swagger 2.0 `in: body` parameter gets the 400 matrix (F47)", () => {
     expect(text).not.toContain('body: "');
   });
 });
+
+// A requestBody on GET is the same mistake in the other dialect, and it was here before F47: 20
+// corpus specs / 270 GET operations do it. crust read the body and built cases that fetch refuses
+// to construct (`fetch() request with GET/HEAD/OPTIONS method cannot have body.`), so the generated
+// suite ERRORED on them — 15 such cases across the 29-spec F52 population, and 6 in
+// brainbi.net's `GET /api/v1/utils/test_telstra` alone. The mock's half of the rule lives in
+// validateRequest; swagger2to3 applies it a third time on the 2.0 conversion path.
+describe("a request body on GET generates no request that carries one (F52)", () => {
+  async function emit30(
+    name: string,
+    op: Record<string, unknown>,
+    method: string = "get",
+  ): Promise<{ text: string; log: string[] }> {
+    const specPath = join(dir, `${name}.json`);
+    await writeFile(
+      specPath,
+      JSON.stringify({
+        openapi: "3.0.0",
+        info: { title: "t", version: "1" },
+        paths: {
+          "/widgets": {
+            [method]: {
+              ...op,
+              responses: {
+                "200": { description: "ok" },
+                "400": { description: "bad" },
+                ...(op.responses as Record<string, unknown> | undefined),
+              },
+            },
+          },
+        },
+        components: {
+          schemas: {
+            Widget: {
+              type: "object",
+              required: ["name"],
+              properties: { name: { type: "string" }, size: { type: "integer" } },
+            },
+          },
+        },
+      }),
+    );
+    const log: string[] = [];
+    const result = await generateFixtures({
+      swagger: specPath,
+      out: join(dir, `out30-${name}`),
+      setup: join(dir, "setup.ts"),
+      log: (line: string) => log.push(line),
+    });
+    const text = (
+      await Promise.all(
+        result.files.map((f) =>
+          Bun.file(f)
+            .text()
+            .catch(() => ""),
+        ),
+      )
+    ).join("\n");
+    return { text, log };
+  }
+
+  const JSON_BODY = {
+    requestBody: {
+      required: true,
+      content: { "application/json": { schema: { $ref: "#/components/schemas/Widget" } } },
+    },
+  };
+
+  // The bug, in one line each: no body in the emitted request, and no matrix asserting a 400
+  // crust could never ask for.
+  test("no case carries a body, and the 400 matrix is not claimed", async () => {
+    const { text } = await emit30("getbody", JSON_BODY);
+    expect(text).not.toContain("GET /widgets missing required");
+    expect(text).not.toContain('body: "');
+  });
+
+  // The disclosure is the load-bearing half: a silently smaller suite is the failure mode this
+  // project ranks worst, and here the reader has to know the operations exist at all.
+  test("the skipped matrix is named, with the operations it leaves empty", async () => {
+    const { log } = await emit30("getnotice", JSON_BODY);
+    const line = log.find((l) => l.includes("GET or HEAD"));
+    expect(line).toBeDefined();
+    expect(line).toContain("1 operation(s)");
+    expect(line).toContain("no negative cases at all");
+  });
+
+  // Control in the other direction: what crust CAN send on a GET it must still send. The 401
+  // case was carrying a body before (authzBody) and asserts a gate that answers before any body
+  // is read, so dropping the body must not drop the case.
+  test("a GET's own cases survive, bodyless", async () => {
+    const { text, log } = await emit30("getauthz", {
+      ...JSON_BODY,
+      responses: { "401": { description: "not authenticated" } },
+    });
+    expect(text).toContain("GET /widgets without credentials -> 401");
+    expect(text).not.toContain('body: "');
+    // kept > 0, so the notice must not claim the operation was left empty.
+    expect(log.find((l) => l.includes("GET or HEAD"))).not.toContain("no negative cases");
+  });
+
+  // Control that the rule is the METHOD and not the body: an identical POST keeps its whole
+  // matrix, bodies included. Without this the fix could pass by dropping every body everywhere.
+  test("the same operation on POST keeps its body and its matrix", async () => {
+    const { text, log } = await emit30("postcontrol", JSON_BODY, "post");
+    expect(text).toContain("POST /widgets missing required 'name' -> 400");
+    expect(text).toContain('body: "');
+    expect(log.find((l) => l.includes("GET or HEAD"))).toBeUndefined();
+  });
+});

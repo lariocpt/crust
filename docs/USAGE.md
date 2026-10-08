@@ -1241,7 +1241,7 @@ Derived cases:
 - **A drop notice says whose fault it is.** Some specs allow no value at all: `VMDiskType: {type: integer, format: int32, enum: ["0 (StandardHDD)", "1 (StandardSSD)", "2 (PremiumSSD)"]}` (visualstudio.com/v1 — the enum members are YAML strings beside an int32), or `{type: string, enum: [true, false]}` (apptigent). No generator fills those fields, so blaming crust's value for one sends the reader to the wrong repo. The notice asks the validator the only question that settles it — does *any* member of that enum satisfy the node holding it — and when none does it names the contradiction and where it sits: `gen-fixtures: 3 case(s) skipped for PATCH /api/v1/tenant/{tenantId}/Pool/{poolName} — the SPEC contradicts itself: 'vmSpecs' — /diskType: enum ["0 (StandardHDD)", "1 (StandardSSD)", "2 (PremiumSSD)"] fails type, so a 400 from that body would name the wrong field` (that one is real, from visualstudio.com/v1; dracoon.team puts an `enum` of strings on a `type: array` node, and apptigent writes `{type: string, enum: [true, false]}`). Fields where crust's own value is what breaks keep the old wording, since that is the half you can file against crust, and a body with both says both. Only keywords that MUST hold are followed, so a contradiction in an optional field is not reported (the base body omits optional fields) and a union is the spec's only when *every* branch is unsatisfiable. Across the 39 APIs-guru specs that emit these notices the mentions naming crust's value went 68, then 24 once a body declared across `allOf` branches was read as one body (above), then 7. What those 7 name: a lookahead, `\A`/`\Z` anchors, an enum, and two `pattern`s written as JavaScript regex literals (`/^[a-z0-9._]+$/`), which cannot match as written — the leading `/` is a literal, so the `^` behind it asserts a start the string has already left. The summary ends with `note: N operation(s) left with no negative cases` (32 of them across those specs) — "40 cases dropped" and "this operation is uncovered" are different facts, and per-operation notices are the first thing a harness greps away.
 - Every `$ref` is inlined once and **shared**, and inlining stops after 200,000 nodes. azure's `network-applicationGateway` is a DAG of a few schemas referenced from many places: copying at each occurrence turned a few-MB spec into a 2.03 GB structure — 17s where it survived and OUT OF MEMORY on five of nine versions, so `gen-fixtures` there did not run slowly, it did not run. Past the budget a `$ref` inlines as `{}`, exactly as a cyclic one does, and gen-fixtures says so on stderr: fewer generated cases, none of them wrong.
 - A keyword written **beside a `$ref`** is read by the rule the mock reads it with, not by "everything wins". Narrowing ones apply — `enum`, `const`, `format`, `pattern`, the bounds, `example`, `examples`, `default`: that is how a spec restricts one use of a shared type (ideal-postcodes narrows a referenced string with a `pattern`). Structural ones do not — `type`, `properties`, `items`, `required`, `additionalProperties`, `allOf`/`oneOf`/`anyOf`, `nullable`, `discriminator` — for the same reason the mock ignores them (see its `oneOf`/`$ref` rule: sibling keywords were illegal beside `$ref` before 3.1, so Swagger-2 conversions are full of leftovers), and because a generated case asserts against **crust's own validator**, which resolves a `$ref` and validates the resolved node alone. Both directions follow from that. britbox writes `{$ref: ItvDeleteAccountRequest, type: string}` in an openapi 3.0.0 document, and that used to inline as a string carrying the target's `required` and `properties` — a node no value satisfies — so crust's own base body failed crust's own validator and **all four of that spec's JSON-body operations were dropped** behind `crust's own value for the body (type)`; they now generate 16 cases, `missing required 'profileToken'` among them. digitalocean writes `{$ref: …, required: [droplet_ids]}`, and crust no longer fills that field in a body — because the validator would not 400 without it either, so a case built from the sibling would assert a 400 that crust's mock answers 200. Measured across 4,138 specs: 2,274 put a keyword beside a `$ref`, 180 of them a structural one (2,003 sites — azure 104 specs, twilio 32; `type` 157, `nullable` 43), of which 118 are Swagger 2.0, 56 openapi 3.0.x and only 6 are 3.1. Dialect is deliberately not part of the rule: 3.1 legalises siblings without making a conflicting `type` any less ambiguous, and honouring them there would put the two halves of crust back in disagreement over exactly those 6 specs. Annotations (`description`, `title`) go the same way as the structural siblings, so a generated `output.schema` can carry one less description than it used to; nothing ever validated on it.
-- A **Swagger 2.0 `in: body` parameter is the operation's request body.** 2.0 has no `requestBody` — the body is a parameter — and the conversion dropped it, so a Swagger 2.0 spec could get no 400 matrix at all, however carefully it documented its 400s: `aiception.com` emitted 5 cases and `adafruit.com` 68, none of them about a body. Measured over the corpus with references resolved, **1,528 specs and 10,870 operations** declare their bodies this way — 10,083 on the operation, 775 through `$ref: #/parameters/…`, 12 on the path item. (My first two scans said 1,443 and 10,083: they matched `in == "body"` and so never saw a body arriving by `$ref`. The control caught it — a "body-less" control spec whose output tree changed.) The conversion now moves the parameter where both halves read it, so cases went **1,818 → 3,711** across that population, qualifying collections went **0 → 68** (a 2.0 spec could never produce a CRUD flow before), 38 specs moved off absolute zero, and **no spec lost a case**. The control is 120 Swagger-2 specs with no body parameter: **0 of 120** differ in their generated tree, hashed rather than counted. `consumes` picks the media type, operation-level first, JSON preferred, and a non-JSON one is carried as declared — crust does not validate form bodies, so a case built from one would assert a 400 its own mock never returns. One consequence to expect: the 401/403/404 cases of a 2.0 operation now send the body the spec declares instead of nothing, since a route may validate the body before it checks who is calling.
+- A **Swagger 2.0 `in: body` parameter is the operation's request body.** 2.0 has no `requestBody` — the body is a parameter — and the conversion dropped it, so a Swagger 2.0 spec could get no 400 matrix at all, however carefully it documented its 400s: `aiception.com` emitted 5 cases and `adafruit.com` 68, none of them about a body. Measured over the corpus with references resolved, **1,528 specs and 10,870 operations** declare their bodies this way — 10,083 on the operation, 775 through `$ref: #/parameters/…`, 12 on the path item. (My first two scans said 1,443 and 10,083: they matched `in == "body"` and so never saw a body arriving by `$ref`. The control caught it — a "body-less" control spec whose output tree changed.) The conversion now moves the parameter where both halves read it, so cases went **1,818 → 3,711** across that population, qualifying collections went **0 → 68** (a 2.0 spec could never produce a CRUD flow before), 38 specs moved off absolute zero, and **no spec lost a case**. The control is 120 Swagger-2 specs with no body parameter: **0 of 120** differ in their generated tree, hashed rather than counted. `consumes` picks the media type, operation-level first, JSON preferred, and a non-JSON one is carried as declared — crust does not validate form bodies, so a case built from one would assert a 400 its own mock never returns. One consequence to expect: the 401/403/404 cases of a 2.0 operation now send the body the spec declares instead of nothing, since a route may validate the body before it checks who is calling — on a method that can carry one, `GET` and `HEAD` excepted (see the rule below).
   below minimum / above maximum (`maximum: Number.MAX_SAFE_INTEGER` is
   treated as an "unbounded" sentinel and skipped), and pattern violation
   (deduped when the required-field wrong-type case already sends an
@@ -1257,6 +1257,24 @@ Derived cases:
   server). Regenerating a spec that predates the boundary matrix yields a
   purely additive diff — existing case names, order and bodies are
   untouched.
+- **A body on `GET` or `HEAD` generates no request that carries one.** No client can send that
+  request: `fetch` refuses to build it (`fetch() request with GET/HEAD/OPTIONS method cannot have
+  body.`), so the generated case did not *fail*, it ERRORED — running a pre-fix generated suite
+  through `test-fixture` reads `error: fetch() request with GET/HEAD/OPTIONS method cannot have
+  body.` And Bun discards a `GET` body even when a raw client sends one (see the mock's
+  `--validate` rule), so there is no request crust could emit that the API would ever see. The
+  body is therefore read only for a method that can carry one: the operation's 401/403/404 cases
+  survive, minus the body they used to carry, and the 400 matrix is not derived at all. Across
+  the 29 corpus specs that declare a body on `GET` (270 operations; openapi 3.x — the 9 Swagger
+  2.0 ones never get a body in the first place, see above) GET cases carrying a body went
+  **15 → 0**, 408 of the 414 GET cases remain, and the 6 that went were the 400-matrix cases that
+  could never run — what crust *can* send on a `GET` it still sends. The loss is disclosed, not
+  shipped as silence: `gen-fixtures: 1 operation(s) document a request body on GET or HEAD —
+  crust sends no body with those methods (fetch refuses the request), so their 400 matrix is not
+  generated; 1 of them now have no negative cases at all`, and those operations count toward the
+  `note: N operation(s) left with no negative cases` aggregate (261 of the 270 across that
+  population). Control: 120 corpus specs with a body on POST/PUT/PATCH and none on GET/HEAD —
+  **0 of 120** generated trees differ, hashed rather than counted.
 
 #### Generated CRUD flows
 
@@ -1537,10 +1555,23 @@ and its synthesised response. The media type comes from `consumes`, operation-le
 first and JSON preferred; a declared non-JSON type is carried as declared, so a
 form body stays a form body and is still not validated (below). That is 1,528 specs
 of the APIs-guru corpus and 10,870 operations — a third of it, every one Swagger 2.0.
-The exception is `GET` and `HEAD`: 9 specs declare a body there, 12 of them required,
-and no client can send one, so a mock that answered those requests `422 request body
-is required but absent` would be inventing a violation. Those parameters stay exactly
-where they were.
+The exception is `GET` and `HEAD`, where a body is not something a request can carry (just
+below): 9 specs declare one there, 12 of them required. Those parameters stay exactly where
+they were.
+
+A **`requestBody` on `GET` or `HEAD` is never enforced**, in any dialect. No client can deliver
+that body: `fetch` refuses to build the request (`fetch() request with GET/HEAD/OPTIONS method
+cannot have body.`), and Bun discards one a raw client sends anyway — measured through
+`Bun.serve`, a `GET` arrives with `content-length: 13` and `arrayBuffer()` reads 0 bytes. So
+`required: true` on a `GET` is a constraint nobody can satisfy, and crust does not report it.
+What that cost, on a corpus spec: `trakt.tv`'s `GET /shows/{id}/progress/collection` documents a
+required body and a `200`, and `--validate` answered every GET to it `422 request body is
+required but absent` — the well-formed ones included, since no client can satisfy that
+requirement. It answers the documented `200` now. The corpus does this 20 specs and **270
+operations** deep (openapi 3.0.0: 245 ops / 12 specs; 3.0.3: 23 / 6; 3.0.1 and 3.1.0: 1 each),
+and 10 of those operations are `required`, across 7 specs — those 7 are the ones that had been
+refusing every GET. The rule is "you cannot *require* a body on these two methods", not "bodies
+on `GET` are ignored": a body that does arrive is still validated against its schema.
 
 What is checked: path/query parameters (string values are coerced to the
 declared `integer`/`number`/`boolean` type first; path params are

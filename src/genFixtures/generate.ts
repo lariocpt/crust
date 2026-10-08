@@ -691,6 +691,36 @@ interface UnsoundOp {
   dropped: number;
 }
 
+/**
+ * An operation that documents a request body on a method which cannot carry one (GET, HEAD).
+ * Reported so the missing 400 matrix is DISCLOSED rather than silently absent: crust cannot
+ * generate those cases, because no client can send the request they describe.
+ */
+interface BodylessOp {
+  template: string;
+  /** Cases that still exist for this operation. Zero means it has no negative cases at all. */
+  kept: number;
+}
+
+/**
+ * The operation's request body, when the method can actually carry one.
+ *
+ * A body on GET or HEAD is a body nobody can send: fetch refuses to build the request at all
+ * (`fetch() request with GET/HEAD/OPTIONS method cannot have body.`), and Bun discards one that
+ * a raw client sends anyway — measured through Bun.serve, a GET with `content-length: 13`
+ * arrives and `arrayBuffer()` reads 0 bytes. Reading such a body would make crust generate a
+ * case that errors before it connects, so the body is treated as absent for those methods and
+ * the operation is disclosed by name instead.
+ */
+function canCarryBody(
+  body: Operation["requestBody"],
+  method: string,
+): Operation["requestBody"] | undefined {
+  const m = method.toLowerCase();
+  if (m === "get" || m === "head") return undefined;
+  return body ?? undefined;
+}
+
 function isScopeGated(path: string, firstParam: string | null, scope: ScopeConfig): boolean {
   if (firstParam === null || scope.scopeParam === null) return false;
   if (firstParam === scope.scopeParam) return true;
@@ -705,6 +735,7 @@ function deriveCases(
   op: Operation,
   scope: ScopeConfig,
   unsound: UnsoundOp[],
+  bodyless: BodylessOp[],
 ): GenCase[] {
   const cases: GenCase[] = [];
   const responses = op.responses ?? {};
@@ -720,9 +751,13 @@ function deriveCases(
 
   // Authz cases carry a schema-valid body: routes may validate before the
   // authz middleware, so an empty body could 400 ahead of the 401/403 under
-  // test.
-  const bodySchema = op.requestBody?.content?.["application/json"]?.schema;
-  const authzBody = op.requestBody ? (bodySchema ? baseBody(bodySchema) : {}) : undefined;
+  // test. Except on GET/HEAD, where no client can send one at all — see
+  // `canCarryBody`. The 400 matrix below is derived from the same view, so the
+  // rule is decided once, here.
+  const sendableBody = canCarryBody(op.requestBody, method);
+  const bodySchema = sendableBody?.content?.["application/json"]?.schema;
+  const authzBody = sendableBody ? (bodySchema ? baseBody(bodySchema) : {}) : undefined;
+  const bodylessOp = sendableBody === undefined && op.requestBody !== undefined;
 
   if (requiresAuth) {
     cases.push({
@@ -916,6 +951,10 @@ function deriveCases(
     const media = responses[String(c.expectStatus)]?.content?.["application/json"];
     if (media?.schema !== undefined) c.responseSchema = media.schema;
   }
+
+  // Disclosed, not silently absent: the operation asked for a body crust cannot send.
+  if (bodylessOp)
+    bodyless.push({ template: `${method.toUpperCase()} ${path}`, kept: cases.length });
 
   return cases;
 }
@@ -1372,13 +1411,14 @@ export async function generateFixtures(opts: GenerateOpts): Promise<GenerateResu
 
   const log = opts.log ?? ((line: string) => process.stdout.write(`${line}\n`));
   const unsound: UnsoundOp[] = [];
+  const bodyless: BodylessOp[] = [];
   const byTag = new Map<string, GenCase[]>();
   for (const [path, methods] of Object.entries(spec.paths ?? {})) {
     for (const [method, op] of Object.entries(methods as Record<string, Operation>)) {
       if (!["get", "post", "patch", "put", "delete"].includes(method)) continue;
       const tag = op.tags?.[0] ?? "untagged";
       const arr = byTag.get(tag) ?? [];
-      arr.push(...deriveCases(path, method, op, scope, unsound));
+      arr.push(...deriveCases(path, method, op, scope, unsound, bodyless));
       byTag.set(tag, arr);
     }
   }
@@ -1393,6 +1433,18 @@ export async function generateFixtures(opts: GenerateOpts): Promise<GenerateResu
       `gen-fixtures: ${u.dropped} case(s) skipped for ${u.template} — ${blameClause(u.specFaults, u.crustFaults, "so a 400 from that body would name the wrong field")}`,
     );
     if (u.kept === 0) withNoCases++;
+  }
+
+  // The other way an operation can be left with no negative cases: it documents a body on a
+  // method no client can send one with, so its 400 matrix cannot be built at all. Same
+  // accounting as an unsound body — name the operations, and count the ones left empty. A
+  // silently smaller suite is the failure mode this project ranks worst.
+  if (bodyless.length > 0) {
+    const none = bodyless.filter((b) => b.kept === 0).length;
+    log(
+      `gen-fixtures: ${bodyless.length} operation(s) document a request body on GET or HEAD — crust sends no body with those methods (fetch refuses the request), so their 400 matrix is not generated${none > 0 ? `; ${none} of them now have no negative cases at all` : ""}`,
+    );
+    withNoCases += none;
   }
 
   await rm(outDir, { recursive: true, force: true });

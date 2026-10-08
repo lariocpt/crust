@@ -102,7 +102,10 @@ function moveBodyParams(
 ): void {
   // A document that mixes both dialects already says what it means — do not overwrite it.
   if (op.requestBody) return;
-  if (method === "get" || method === "head") return; // see above: no client sends that body
+  // See above: no client sends that body. The same rule is applied to a native 3.x
+  // requestBody in validateRequest (never required) and generate (never sent), so this
+  // guard is the third layer, keeping the converted document honest.
+  if (method === "get" || method === "head") return;
   const params = Array.isArray(op.parameters) ? (op.parameters as unknown[]) : [];
   // Operation-level parameters override path-level ones by (name, in), and only ONE
   // body parameter is legal per operation, so the first at op level wins.
