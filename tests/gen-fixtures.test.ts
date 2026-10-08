@@ -2678,12 +2678,92 @@ describe("a $ref with siblings reads the way the mock reads it (F44)", () => {
       }),
     );
     const { spec } = await loadSpec(path);
-    const node = (
-      spec.paths!["/itv/deleteaccount"].post.parameters as unknown as Array<Record<string, unknown>>
-    )[0].schema as Record<string, unknown>;
+    // F47 moved a 2.0 body parameter into `requestBody`, and the sibling rides along with it.
+    const op = spec.paths!["/itv/deleteaccount"].post!;
+    expect(op.parameters).toEqual([]); // the body moved; the list is what's left of it
+    const node = op.requestBody!.content!["application/json"]!.schema as Record<string, unknown>;
     expect(node.$ref).toBe("#/components/schemas/Req"); // rewritten, sibling untouched
     const inlined = derefSchemas(node, spec) as Record<string, unknown>;
     expect(inlined.type).toBe("object");
     expect(validateSchema(validValue(inlined as never), node, spec)).toEqual([]);
+  });
+});
+
+// Swagger 2.0 declares a body as a parameter with `in: body`. The conversion used to drop it, so
+// gen-fixtures wrote nothing for 1,443 specs / 10,083 operations and its hint — "the 400 matrix
+// needs a JSON request-body schema plus a documented 400" — was precisely true and useless: the
+// spec had one, in the other dialect.
+describe("a Swagger 2.0 `in: body` parameter gets the 400 matrix (F47)", () => {
+  async function emit20(
+    name: string,
+    op: Record<string, unknown>,
+    extra?: Record<string, unknown>,
+  ) {
+    const specPath = join(dir, `${name}.json`);
+    await writeFile(
+      specPath,
+      JSON.stringify({
+        swagger: "2.0",
+        info: { title: "t", version: "1" },
+        consumes: ["application/json"],
+        produces: ["application/json"],
+        paths: { "/widgets": { post: op } },
+        definitions: {
+          Widget: {
+            type: "object",
+            required: ["name"],
+            properties: { name: { type: "string" }, size: { type: "integer" } },
+          },
+        },
+        ...extra,
+      }),
+    );
+    const result = await generateFixtures({
+      swagger: specPath,
+      out: join(dir, `out20-${name}`),
+      setup: join(dir, "setup.ts"),
+      log: () => {},
+    });
+    const text = (
+      await Promise.all(
+        result.files.map((f) =>
+          Bun.file(f)
+            .text()
+            .catch(() => ""),
+        ),
+      )
+    ).join("\n");
+    return { text };
+  }
+
+  const BODY = {
+    parameters: [
+      { name: "body", in: "body", required: true, schema: { $ref: "#/definitions/Widget" } },
+    ],
+    responses: { "201": { description: "created" }, "400": { description: "bad" } },
+  };
+
+  test("the matrix that was silently missing", async () => {
+    const { text } = await emit20("body", BODY);
+    expect(text).toContain("POST /widgets missing required 'name' -> 400");
+    expect(text).toContain("POST /widgets wrong type for 'name' -> 400");
+  });
+
+  test("the body it sends is the one the spec describes", async () => {
+    const { text } = await emit20("bodyvalue", BODY);
+    // base body from the resolved definition: name present, optional size omitted
+    expect(text).toContain('"name"');
+    expect(text).not.toContain('"size"');
+  });
+
+  // Control, and it is the load-bearing one: a form body is documented as NOT validated, so a case
+  // built from it would assert a 400 crust's own mock never returns — a false test. Carrying the
+  // declared media type instead keeps the generator and the mock in agreement.
+  test("a non-JSON `consumes` generates nothing, exactly as the mock validates nothing", async () => {
+    const { text } = await emit20("form", {
+      ...BODY,
+      consumes: ["application/x-www-form-urlencoded"],
+    });
+    expect(text).not.toContain("-> 400");
   });
 });

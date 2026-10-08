@@ -1,8 +1,8 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, realpath, rm } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { OpenApiSpec } from "../src/mockServer/loadSpec";
+import { loadSpec, type OpenApiSpec } from "../src/mockServer/loadSpec";
 import { joinUpstreamUrl } from "../src/mockServer/proxy";
 import { buildRoutes } from "../src/mockServer/router";
 import { startServer } from "../src/mockServer/server";
@@ -1171,5 +1171,107 @@ describe("pattern compilation", () => {
 
   test("an uncompilable pattern still passes (governing rule)", () => {
     expect(check("([unclosed", "anything")).toEqual([]);
+  });
+});
+
+// Swagger 2.0 has no requestBody: an operation's body is a parameter with `in: body`. The
+// conversion used to drop that parameter, so --validate on a 2.0 spec had NO body to validate —
+// measured before the fix: POST {"size":"nope"} against a schema requiring `name` was answered
+// with the documented 201, and {} likewise. 1,443 specs of the APIs-guru corpus, silently. F47.
+describe("a Swagger 2.0 body parameter is validated (F47)", () => {
+  test("violating body -> 422, absent required body -> 422, valid body -> the documented 201", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "crust-v2body-"));
+    try {
+      await writeFile(
+        join(dir, "spec.json"),
+        JSON.stringify({
+          swagger: "2.0",
+          info: { title: "t", version: "1" },
+          consumes: ["application/json"],
+          produces: ["application/json"],
+          paths: {
+            "/widgets": {
+              post: {
+                parameters: [
+                  {
+                    name: "body",
+                    in: "body",
+                    required: true,
+                    schema: { $ref: "#/definitions/Widget" },
+                  },
+                ],
+                responses: {
+                  "201": { description: "created", schema: { $ref: "#/definitions/Widget" } },
+                  "400": { description: "bad" },
+                },
+              },
+            },
+            "/upload": {
+              post: {
+                consumes: ["application/x-www-form-urlencoded"],
+                parameters: [{ name: "caption", in: "formData", required: true, type: "string" }],
+                responses: { "201": { description: "ok" } },
+              },
+            },
+          },
+          definitions: {
+            Widget: {
+              type: "object",
+              required: ["name"],
+              properties: { name: { type: "string" }, size: { type: "integer" } },
+            },
+          },
+        }),
+      );
+      // through the loader, because that is where mock-server converts
+      const { spec } = await loadSpec(join(dir, "spec.json"));
+      const server = await startServer({
+        port: 0,
+        hostname: "127.0.0.1",
+        spec,
+        validate: true,
+        log: () => {},
+      });
+      const base = `http://127.0.0.1:${server.port}`;
+      const json = { "content-type": "application/json" };
+      try {
+        const bad = await fetch(`${base}/widgets`, {
+          method: "POST",
+          headers: json,
+          body: JSON.stringify({ size: "nope" }),
+        });
+        expect(bad.status).toBe(422);
+        const report = (await bad.json()) as {
+          violations: Array<{ pointer: string; rule: string; location: string }>;
+        };
+        const byPointer = Object.fromEntries(report.violations.map((v) => [v.pointer, v.rule]));
+        expect(byPointer["/name"]).toBe("required");
+        expect(byPointer["/size"]).toBe("type");
+        expect(report.violations.every((v) => v.location === "body")).toBe(true);
+
+        const absent = await fetch(`${base}/widgets`, { method: "POST" });
+        expect(absent.status).toBe(422);
+
+        const good = await fetch(`${base}/widgets`, {
+          method: "POST",
+          headers: json,
+          body: JSON.stringify({ name: "Widgy" }),
+        });
+        expect(good.status).toBe(201);
+
+        // Control, and documented behaviour, not this bug: crust does not validate non-JSON
+        // request bodies at all, so a form parameter stays a form parameter.
+        const form = await fetch(`${base}/upload`, {
+          method: "POST",
+          headers: { "content-type": "application/x-www-form-urlencoded" },
+          body: "other=1",
+        });
+        expect(form.status).toBe(201);
+      } finally {
+        await server.stop();
+      }
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
