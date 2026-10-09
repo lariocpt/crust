@@ -140,6 +140,14 @@ crust --check 'range(1,3) | head -('
 # crust: shell stage does not parse (stage: head -(): sh: -c: line 1: syntax error near unexpected token `(`
 ```
 
+The runtime runs the same preflight before any stage of a **mixed** line: a
+shell stage whose text does not parse exits **2**, naming the stage, and nothing
+has run. Before this, the error in stage N surfaced only when stage N's own
+`sh -c` child exited — after stages 1..N-1 had already run theirs
+(`touch f | base64 | head -(` exited 2 and left `f` behind). A pure-shell line
+is one `sh -c`, which sh parses atomically, so its own stderr is the answer
+there; and 127 (command not found) is a runtime error the preflight cannot see.
+
 That makes it the linter for documented examples: blank lines and `#` comments
 are skipped and `\` continuations are joined — the same splitting the runtime
 does — so a whole fenced block can be piped in as one argument. crust's own
@@ -1852,6 +1860,8 @@ gap the buffer while looking live, which is exactly the false picture
 
 Crust ships a small set of `crust.fn`-registered helpers. They work as both pipeline stages (`echo … | base64`) and one-shot sources (`base64 hello`). User-defined `crust.fn(...)` calls in `init.ts` override these by name.
 
+Each builtin answers `-h`/`--help` with its usage screen and exit 0 — **at parse time, before any stage runs**, so `http … | sql --help` prints usage without making the request. The scan stops at `--`, so `base64 -- --help` encodes the flag, and a value that arrives through the pipe is never an option (`echo --help | base64` encodes it). A `crust.fn` override of the name keeps its handler's own argument handling — `--help` is just another argument to it.
+
 | Function | Usage |
 |---|---|
 | `base64 [-d \| decode] [-f \| --file <path>] [-o \| --out <path>] [--]` | Encode (default) or decode **text**. `echo hi \| base64` → `aGk=`; `echo aGk= \| base64 -d` → `hi`. Shadows `/usr/bin/base64`, which takes the same argument and encodes the **FILE** — see below. Options are only ever what you typed: `-d` arriving as a piped *item* is data. A dash you did not define is refused, never encoded. `-f`/`--file <path>` reads a file's bytes, `-o`/`--out <path>` writes the result to a file. Decoding checks its input: a character outside `A-Za-z0-9+/=`, `-`/`_`, and whitespace is an error, not mojibake. |
@@ -1906,6 +1916,9 @@ wait :3001/health --timeout 30s
 
 # Bundle in one shot
 bundle src/index.ts --outfile dist/app.js --minify
+
+# Per-function usage — answered at parse time: exit 0, nothing runs
+base64 --help
 ```
 
 Note: function-as-source now **flattens Array return values** — `fn` returning `[a, b, c]` emits three items, not one array. This makes `sql "..."` and similar row-yielding sources compose naturally with downstream lambdas.

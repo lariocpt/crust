@@ -5,6 +5,7 @@
 // user typed. Not a code-injection risk; it's the design.
 
 import { expandEnv, splitArgs } from "./args";
+import { BUILTIN_FN_USAGE, isBuiltinFn } from "./builtinFns";
 import { base64, base64Stage } from "./builtinFns/base64";
 import { sql, sqlSource, sqlStage } from "./builtinFns/sql";
 import { builtinInShellRefusal } from "./builtins";
@@ -295,6 +296,7 @@ export function buildSource(kind: StageKind, ctx?: Context): Pipeline<unknown> {
     case "function": {
       const fn = ctx?.functions.get(kind.name);
       if (!fn) throw new Error(`function "${kind.name}" not registered`);
+      builtinHelp(kind.name, kind.args, ctx);
       // Function-as-source: invoke fn(...staticArgs). If it returns (or resolves
       // to) an Array, stream each element as its own item — this is what makes
       // `sql "..."` behave as a row-streaming source. Anything else is yielded
@@ -437,6 +439,7 @@ function applyStage(
     case "function": {
       const fn = ctx?.functions.get(kind.name);
       if (!fn) throw new Error(`function "${kind.name}" not registered`);
+      builtinHelp(kind.name, kind.args, ctx);
       // `sql`'s query is DECLARED on the line, so it cannot be found by looking
       // at the arguments: fn(item, ...args) with a string item would put the
       // item in the query's slot. `base64` has the same shape in miniature — its
@@ -592,6 +595,32 @@ export class ShellExitError extends Error {
   ) {
     super(`shell stage exited ${code}: ${cmd}`);
     this.name = "ShellExitError";
+  }
+}
+
+// `-h`/`--help` on a registered BUILTIN is a request for its usage screen,
+// answered at parse time — before any stage runs, so `http … | sql --help`
+// prints usage without making the request. Carries the screen; runLine writes
+// it and exits 0. Thrown only for builtins (see builtinHelp), so a user's
+// `crust.fn` handler keeps `--help` as an ordinary argument.
+export class HelpExit extends Error {
+  constructor(readonly usage: string) {
+    super("crust: --help");
+    this.name = "HelpExit";
+  }
+}
+
+function builtinHelp(name: string, args: unknown[], ctx?: Context): void {
+  if (!ctx || !isBuiltinFn(ctx, name)) return;
+  for (const a of args) {
+    if (typeof a !== "string") continue;
+    if (a === "--") return;
+    if (a === "-h" || a === "--help") {
+      // The scan stops at `--`: everything after it is an operand, so
+      // `base64 -- --help` encodes the flag. The piped item is never in args,
+      // so `echo "--help" | base64` still encodes.
+      throw new HelpExit(BUILTIN_FN_USAGE[name]!);
+    }
   }
 }
 

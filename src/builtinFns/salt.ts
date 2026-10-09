@@ -10,6 +10,12 @@ import { randomBytes } from "node:crypto";
  * therefore taken from the LAST positional, which is the only slot a line
  * argument can occupy when an item is also present.
  */
+/** The screen `salt --help` prints at parse time (F42). */
+export const saltUsage =
+  "usage: salt [bytes] [hex|base64|base64url]\n" +
+  "  bytes   how many random bytes to print (default 16)\n" +
+  "  the encoding may come first or last: `salt 32 base64url` = `salt base64url 32`";
+
 export function salt(...args: unknown[]): string {
   let encoding: "hex" | "base64" | "base64url" = "hex";
   const positionals: string[] = [];

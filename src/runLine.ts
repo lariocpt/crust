@@ -2,8 +2,8 @@ import { hasUnquotedShellMeta, stripTrailingComment } from "./args";
 import { builtinInShellRefusal, builtins, isBuiltin, isToolBuiltin } from "./builtins";
 import { formatItem } from "./format";
 import * as interrupt from "./interrupt";
-import { classify, redirectTail, tokenize } from "./lexer";
-import { parse, ShellExitError } from "./parser";
+import { classify, redirectTail, shellSyntaxPreflight, tokenize } from "./lexer";
+import { HelpExit, parse, ShellExitError } from "./parser";
 import { shellEnv } from "./shellPath";
 import type { Context } from "./types";
 
@@ -167,6 +167,24 @@ export async function runLine(line: string, ctx: Context, tty?: ReplTty): Promis
       return !ctx.functions.has(h);
     });
 
+    if (!isPureShell) {
+      // A pure-shell line above is one `sh -c` that parses the WHOLE line
+      // before executing anything, so its syntax errors are already atomic.
+      // This line is a MIXED pipeline: each shell stage becomes its own
+      // `sh -c` child, so without a preflight a syntax error in stage N would
+      // surface only when that child exits — after stages 1..N-1 have run.
+      // Ask sh, in NOEXEC mode, about every shell stage first: a bad line
+      // dies here with the stage named, and nothing has run. (F19)
+      const problem = await shellSyntaxPreflight(tokens);
+      if (problem) {
+        const where = problem.stage === expanded.trim() ? "" : ` (stage: ${problem.stage})`;
+        process.stderr.write(
+          `crust: shell stage does not parse${where}: ${problem.first}\n  in: ${line}\n`,
+        );
+        return 2;
+      }
+    }
+
     if (isPureShell) {
       // One crust builtin among the stages and sh reports `command not found`
       // for a tool crust runs in-process. Check every stage, not just the head:
@@ -245,6 +263,14 @@ export async function runLine(line: string, ctx: Context, tty?: ReplTty): Promis
       return 0;
     }
   } catch (err) {
+    // `-h`/`--help` on a registered builtin is the usage screen, not a
+    // failure: the line never ran (no request, no connection, no item
+    // consumed), so the answer is the screen on stdout and exit 0 — the same
+    // contract as every tool builtin's `--help`.
+    if (err instanceof HelpExit) {
+      process.stdout.write(`${err.usage}\n`);
+      return 0;
+    }
     // A shell stage that exited nonzero is reported by sh itself on the
     // inherited stderr ("command not found", tee's ENOENT, …). Adding a
     // `crust:` line on top would be noise; the child's code IS the answer.

@@ -2,7 +2,9 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parse } from "../src/parser";
+import { registerBuiltinFns } from "../src/builtinFns";
+import { HelpExit, parse } from "../src/parser";
+import type { Context } from "../src/types";
 
 describe("parser — sources", () => {
   test("range produces correct items", async () => {
@@ -340,5 +342,78 @@ describe("lambda — await in a body", () => {
     await expect(run("range(0, 0) | (x => x +)")).rejects.toThrow(/Unexpected/);
     // head is not a parameter list -> no async rewrite, same original message
     await expect(run("range(0, 0) | (f(x) => await x)")).rejects.toThrow(/Unexpected/s);
+  });
+});
+
+describe("parser — registered fn --help (F42)", () => {
+  // The tool builtins got uniform --help through parseFlags; the registered
+  // fns are dispatched in the parser with no flag parsing at all, so --help
+  // arrived as DATA and each handler did whatever it does with data (sql: a
+  // SQL complaint, base64 on 0.2.4: the flag encoded). The fix answers it at
+  // parse time — in the builder, before any stage exists to run — so
+  // `http … | sql --help` prints usage without making the request and
+  // `touch f | sql --help` leaves no file behind (both measured).
+  function builtinCtx(overrides = new Map<string, (...a: unknown[]) => unknown>()): Context {
+    const ctx: Context = {
+      aliases: new Map<string, string>(),
+      functions: new Map<string, (...args: unknown[]) => unknown>(),
+      history: [],
+      exit: (() => {}) as never,
+      dotenv: { history: [], snapshot: null },
+      signalHandlers: new Map(),
+    };
+    registerBuiltinFns(ctx);
+    for (const [name, fn] of overrides) ctx.functions.set(name, fn);
+    return ctx;
+  }
+
+  const BUILTIN_NAMES = ["base64", "salt", "jwt", "bundle", "sql", "wait"] as const;
+
+  test("every builtin answers --help in the source position", () => {
+    for (const name of BUILTIN_NAMES) {
+      expect(() => parse(`${name} --help`)(builtinCtx()), `${name} --help`).toThrow(HelpExit);
+    }
+  });
+
+  test("every builtin answers --help mid-pipeline, and -h is the same request", () => {
+    for (const name of BUILTIN_NAMES) {
+      expect(() => parse(`range(1, 1) | ${name} --help`)(builtinCtx()), `${name} mid`).toThrow(
+        HelpExit,
+      );
+      expect(() => parse(`${name} -h`)(builtinCtx()), `${name} -h`).toThrow(HelpExit);
+    }
+  });
+
+  test("sql --help is a HelpExit, not a SQL or connection error", () => {
+    // Pre-fix: `Query contained no valid SQL statement` (rc 1) with a database,
+    // `no connection` without — the flag was a query, not a request for help.
+    expect(() => parse("sql --help")(builtinCtx())).toThrow(HelpExit);
+  });
+
+  test("after -- the flag is data again", async () => {
+    const out = await parse("base64 -- --help")(builtinCtx()).collect();
+    expect(out).toEqual(["LS1oZWxw"]);
+  });
+
+  test("a piped --help is data: only line arguments sit in an option slot", async () => {
+    const out = await parse("echo --help | base64")(builtinCtx()).collect();
+    expect(out).toEqual(["LS1oZWxw"]);
+  });
+
+  test("a crust.fn override keeps --help as an argument to ITS handler", async () => {
+    const seen: unknown[][] = [];
+    const handler = (...a: unknown[]): string => {
+      seen.push([...a]);
+      return "mine";
+    };
+    const ctx = builtinCtx(new Map([["base64", handler]]));
+    expect(await parse("base64 --help")(ctx).collect()).toEqual(["mine"]);
+    expect(await parse("range(7, 7) | base64 --help")(ctx).collect()).toEqual(["mine"]);
+    expect(seen).toEqual([["--help"], [7, "--help"]]);
+  });
+
+  test("a user fn that was never a builtin passes --help straight through", async () => {
+    const ctx = builtinCtx(new Map([["mine", (...a: unknown[]) => `args:${a.join(",")}`]]));
+    expect(await parse("mine --help")(ctx).collect()).toEqual(["args:--help"]);
   });
 });

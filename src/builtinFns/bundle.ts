@@ -16,6 +16,12 @@ const SPEC: FlagSpec = {
 const TARGETS = ["browser", "bun", "node"] as const;
 const SOURCEMAPS = ["none", "inline", "external", "linked"] as const;
 
+/** The screen `bundle --help` prints at parse time (F42). */
+export const bundleUsage =
+  "usage: bundle [--outdir <dir> | -o|--outfile <file>] [--target browser|bun|node]\n" +
+  "            [--sourcemap none|inline|external|linked] [-m|--minify] <entrypoint>…\n" +
+  "  a bare --sourcemap means linked; the defaults are target bun, no minify, no sourcemap";
+
 export async function bundle(...args: unknown[]): Promise<unknown> {
   // Called mid-pipeline the parser passes the upstream item first; a string
   // item is an entrypoint, anything else is not ours to interpret.

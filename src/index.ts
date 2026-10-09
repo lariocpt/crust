@@ -7,8 +7,8 @@ import { checkBuiltinLine } from "./checkBuiltin";
 import { type CrustGlobal, loadConfig } from "./config";
 import { onInterrupt, readLine, suspendEditor } from "./editor";
 import { appendHistory, loadHistory } from "./history";
-import { classify, tokenize } from "./lexer";
-import { parse } from "./parser";
+import { shellSyntaxPreflight, tokenize } from "./lexer";
+import { HelpExit, parse } from "./parser";
 import { defaultPrompt } from "./prompt";
 import { runLine, runLines, splitLines } from "./runLine";
 import { markStdinConsumed } from "./sources";
@@ -177,35 +177,30 @@ async function main(): Promise<void> {
         try {
           parse(line)(ctx);
         } catch (err) {
+          if (err instanceof HelpExit) {
+            // `fn --help` is a valid line — the usage prints when it RUNS,
+            // not when it is checked — so it checks clean like any other.
+            checked++;
+            continue;
+          }
           process.stderr.write(`crust: ${(err as Error).message}\n  in: ${line}\n`);
           process.exit(1);
         }
         // parse() proved crust's own grammar. A stage that fell through to
         // `shell` is opaque to it — the text is only ever read by sh — so ask
-        // sh, in NOEXEC mode: `-n` parses and reports syntax errors without
-        // executing anything (verified: `cat > f` under -n does not create f,
-        // `echo $(cmd)` does not run cmd). Without this, a line malformed
-        // enough to be classified as shell checked "ok" and then exited 2 at
-        // runtime — `range(1,` did — which is exactly how a broken documented
-        // example reaches the website: the fallback hides the mistake from the
-        // one tool meant to catch it.
-        for (const t of tokenize(line)) {
-          if (t.text === "" || classify(t.text).kind !== "shell") continue;
-          const proc = Bun.spawn(["sh", "-n", "-c", t.text], {
-            stdin: "ignore",
-            stdout: "pipe",
-            stderr: "pipe",
-          });
-          const shErr = await new Response(proc.stderr).text();
-          await proc.exited;
-          if ((proc.exitCode ?? 0) !== 0) {
-            const first = shErr.trim().split("\n")[0] || "syntax error";
-            const where = t.text === line ? "" : ` (stage: ${t.text})`;
-            process.stderr.write(
-              `crust: shell stage does not parse${where}: ${first}\n  in: ${line}\n`,
-            );
-            process.exit(1);
-          }
+        // sh, in NOEXEC mode. Without this, a line malformed enough to be
+        // classified as shell checked "ok" and then exited 2 at runtime —
+        // `range(1,` did — which is exactly how a broken documented example
+        // reaches the website: the fallback hides the mistake from the one
+        // tool meant to catch it. The same preflight now guards the exec path
+        // too (src/runLine.ts, F19); check mode keeps its exit 1.
+        const problem = await shellSyntaxPreflight(tokenize(line));
+        if (problem) {
+          const where = problem.stage === line ? "" : ` (stage: ${problem.stage})`;
+          process.stderr.write(
+            `crust: shell stage does not parse${where}: ${problem.first}\n  in: ${line}\n`,
+          );
+          process.exit(1);
         }
         checked++;
       }

@@ -166,6 +166,45 @@ export function classify(text: string): StageKind {
   return kind;
 }
 
+export type ShellSyntaxProblem = {
+  /** the stage text that does not parse */
+  stage: string;
+  /** sh's own first stderr line — its diagnosis is the diagnosis */
+  first: string;
+};
+
+/**
+ * The syntax preflight: sh is the only reader of a shell stage's text, so it
+ * is the only authority on whether that text parses — and `sh -n` asks it in
+ * NOEXEC mode, which reports syntax errors without executing anything
+ * (verified: `cat > f` under -n does not create f, `echo $(cmd)` does not run
+ * cmd). It walks the line's tokens and reports the FIRST shell-kind stage that
+ * fails, or null.
+ *
+ * `--check` has always run this. The exec path used to skip it, which mattered
+ * only for MIXED lines: a pure-shell line is one `sh -c` that parses the whole
+ * line before executing anything, but a mixed pipeline spawns each shell stage
+ * as its own child, so a syntax error in stage N used to surface only when
+ * that child exited — after stages 1..N-1 had already run their side effects.
+ * (F19.)
+ */
+export async function shellSyntaxPreflight(tokens: Token[]): Promise<ShellSyntaxProblem | null> {
+  for (const t of tokens) {
+    if (t.text === "" || classify(t.text).kind !== "shell") continue;
+    const proc = Bun.spawn(["sh", "-n", "-c", t.text], {
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const shErr = await new Response(proc.stderr).text();
+    await proc.exited;
+    if ((proc.exitCode ?? 0) !== 0) {
+      return { stage: t.text, first: shErr.trim().split("\n")[0] || "syntax error" };
+    }
+  }
+  return null;
+}
+
 function classifyStage(text: string): StageKind {
   const t = text.trim();
 

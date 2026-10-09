@@ -12,6 +12,14 @@ function b64urlDecode(s: string): Buffer {
   return Buffer.from(s.replace(/-/g, "+").replace(/_/g, "/") + pad, "base64");
 }
 
+/** The screen `jwt --help` prints at parse time (F42). */
+export const jwtUsage =
+  "usage: jwt [sign|verify|decode] [--secret <s> | -s <s> | --secret=<s>] [payload|token]\n" +
+  "  sign    (default) sign a JSON payload with HS256 and print the token\n" +
+  "  verify  check a token's signature against the secret, print its payload\n" +
+  "  decode  print a token's payload; no secret needed\n" +
+  "  secret  --secret <s>, or $JWT_SECRET when no flag is given";
+
 function pickSecret(args: unknown[]): string {
   for (let i = 0; i < args.length; i++) {
     const a = args[i];

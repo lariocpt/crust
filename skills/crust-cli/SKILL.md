@@ -23,7 +23,7 @@ description: How to invoke crust and read its answer — the run modes (`-c`, sc
 | --- | --- | --- |
 | 0 | Success. | `range(1,2)` |
 | 1 | **crust** failed. Every error crust itself raises. | `assert` mismatch, a lambda that throws, `expect 200` vs a 500, `wait: <target> not ready after Ns`, a `GET` that can't connect, `read` on a missing file, a refused empty stage (`echo a \|\| echo b`), a builtin name that reached sh. |
-| 2 | Invocation or syntax error — nothing ran. | `crust --nonsense`, `--check` with no line, `--env-file` on a missing file, `crust x.crust extra`, `-c` given two lines, `mock-server --bogus` (prints the valid flags), and sh's own parse errors on a pure-shell line (`bundle(5)`). |
+| 2 | Invocation or syntax error — nothing ran. | `crust --nonsense`, `--check` with no line, `--env-file` on a missing file, `crust x.crust extra`, `-c` given two lines, `mock-server --bogus` (prints the valid flags), sh's own parse errors on a pure-shell line (`bundle(5)`) — and the same parse error on any shell stage of a **mixed** line (named; before this a bad stage N surfaced only when its child exited, after stages 1..N-1 had run). |
 | the stage's own | A shell stage's exit code, propagated. | `range(1,3) \| sh -c "exit 9"` → 9 |
 | 127 | Command not found (shell stage), or an unreadable script file. | `nosuchbinary-xyz` |
 | 130 / 143 | crust killed by SIGINT / SIGTERM. | Ctrl-C during a long `-c` run |
@@ -86,6 +86,13 @@ crust --check 'read /nonexistent/*.json | POST :3000/x'   # ok — sources are l
 crust: shell stage does not parse (stage: head -(): sh: -c: line 1: syntax error near unexpected token `(`
   in: range(1,3) | head -(
 ```
+
+The runtime runs the same preflight before executing any stage of a **mixed**
+line, so a shell stage that does not parse exits 2 with this message and
+nothing has run (measured pre-fix: `touch f | base64 | head -(` exited 2 and
+`f` existed). A pure-shell line is one `sh -c`, which sh parses the whole line
+for before executing anything, so its own stderr stays the answer there — and
+127 (command not found) is a runtime error the preflight cannot see.
 
 What it does **not** check: anything needing I/O or a live process — a missing
 fixture path, an unreachable URL, a wrong `output` matcher key, a semantic

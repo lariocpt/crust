@@ -6,6 +6,12 @@ type BunSqlTemplate = ((
 };
 type BunSqlCtor = new (url: string) => BunSqlTemplate;
 
+/** The screen `sql --help` prints at parse time (F42). */
+export const sqlUsage =
+  'usage: sql "<query>" [params…]\n' +
+  "  query   a Bun.SQL query; $DATABASE_URL selects the database\n" +
+  "  params  bound positionally; a piped item with no declared params binds as the first";
+
 let cachedClient: BunSqlTemplate | null = null;
 
 function getClient(): BunSqlTemplate {

@@ -31,6 +31,14 @@ import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
  * replacement characters with exit 0. See `NOT_BASE64`.
  */
 
+/** The screen `base64 --help` prints at parse time (F42). */
+export const base64Usage =
+  "usage: base64 [text] [-d|--decode] [-f|--file <path>] [-o|--out <path>]\n" +
+  "  -d, --decode    decode instead of encode\n" +
+  "  -f, --file <p>  act on a file's bytes (crust's base64 encodes the TEXT of its argument)\n" +
+  "  -o, --out <p>   write the result to a file, print `wrote N bytes to <p>`\n" +
+  "  --              the rest is data: `base64 -- -d` encodes the two characters";
+
 interface Options {
   decode: boolean;
   file?: string;

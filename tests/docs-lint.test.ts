@@ -14,7 +14,7 @@ import { registerBuiltinFns } from "../src/builtinFns";
 import { isBuiltin } from "../src/builtins";
 import { checkBuiltinLine } from "../src/checkBuiltin";
 import { classify, tokenize } from "../src/lexer";
-import { parse } from "../src/parser";
+import { HelpExit, parse } from "../src/parser";
 import type { Context } from "../src/types";
 
 interface OpenState {
@@ -146,6 +146,7 @@ export async function brokenExamples(lines: string[]): Promise<string[]> {
     try {
       parse(line)(c);
     } catch (err) {
+      if (err instanceof HelpExit) continue; // `fn --help` answers at run time — a valid line
       broken.push(`${line}\n    ${(err as Error).message}`);
       continue;
     }

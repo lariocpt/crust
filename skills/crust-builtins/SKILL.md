@@ -68,6 +68,18 @@ used to print `LS1kZXNj` and exit 0), and decoding refuses a character outside
 the alphabet — Node's decoder skips unknown characters, which printed three
 replacement characters at exit 0 for `not base64!!!`.
 
+Each of the six also answers `-h`/`--help` with its own usage screen and exit
+**0** — at parse time, **before any stage runs**, so `… | sql --help` prints
+usage without making the request (the `touch` upstream of it never happens).
+The scan stops at `--`, so `base64 -- --help` encodes the flag, and a value
+that arrives through the pipe is data, never an option
+(`printf '%s' --help | base64` encodes it). A `crust.fn` override of the name
+keeps its own argument handling — `--help` is just another argument to it.
+
+```crust
+base64 --help
+```
+
 `wait` failing to become ready exits **1** — measured for every target form
 (`:PORT`, `:PORT/path`, `port:PORT`) and for a `--timeout` that expires. crust
 has no exit **124**: that number is `timeout(1)` killing crust from outside, so
