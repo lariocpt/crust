@@ -29,7 +29,10 @@ load 10s 20/s | (t => ({name: "user" + t.n})) | parallel 8 | POST :3000/users | 
 
 - `parallel` puts ANY http verb in load mode: output is `{status, ms, url}`
   timing records, bodies drained, network errors become `status: 0` records
-  (they show in the histogram instead of killing the run).
+  (they show in the histogram instead of killing the run). So a run whose
+  every request was refused prints `{"status":{"0":40}}` and still exits 0
+  unless a gate is present — `expect 200` over a dead port exits 1. `stats`
+  reports, it does not gate.
 - Rate (`load`) and concurrency (`parallel N`) are independent knobs.
   Little's law sizes the pool: `N ≥ rate × p99-in-seconds`.
 - Durations `ms|s|m`; rates `N/s` or `N/m`, decimals allowed.
@@ -48,8 +51,13 @@ load 10s 20/s | (t => ({name: "user" + t.n})) | parallel 8 | POST :3000/users | 
   `load: target 3000 ticks — emitted 2868, dropped 132 … achieved 95.6/s`.
   A drop report means the target rate was NOT sustained — raise `parallel N`
   or lower the rate before quoting percentiles.
-- Percentiles come only from timed records; they include body download.
-- With `--every`, a slow request lands in the window it FINISHED in.
+- Percentiles come only from timed records; they include body download (a
+  route that drips its body over 100ms reports p50 102, not 0.4).
+- With `--every`, a slow request lands in the window it FINISHED in — and
+  because stats waits for a completion before it can flush, a window's
+  `wallMs` can exceed N (measured: `--every 2` → window 1 `wallMs: 3006`).
+- `--out` takes `.json` only — any other extension is a loud error, never a
+  text file written under a json-looking name.
 
 ## CI gates — thresholds are assert composition
 
@@ -79,7 +87,10 @@ load 60s 25/s | parallel 25 | GET :3000/health | stats --every 5 | assert (s => 
 ```
 
 Guard `!s.window ||` scopes a threshold to window objects, `!s.final ||` to
-the final summary; both are also correct without `--every`.
+the final summary — and a guard needs the object it guards. Without `--every`
+the plain summary carries neither key, so `!s.window` is true and `||`
+short-circuits: the threshold never runs. `stats | assert (s => !s.window ||
+s.p95 < 0.1)` exits 0 with p95 at 4.2. Drop the guard when you drop `--every`.
 
 ## Warmup
 
@@ -91,6 +102,9 @@ load 30s 100/s | parallel 50 | GET :3000/health | stats | assert (s => s.p95 < 2
 ```
 
 ## TS API equivalent
+
+The same surface as globals inside `init.ts` (and crust-run config code) —
+`load`, `parallel`, `timedGet`, `timedHttpItem`, `statsStage`, `Pipeline`:
 
 ```ts
 const out = await load([{ durMs: 10_000, rps: 100 }])

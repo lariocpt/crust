@@ -1,9 +1,9 @@
 import { hasUnquotedShellMeta, stripTrailingComment } from "./args";
-import { builtins, isBuiltin } from "./builtins";
+import { builtinInShellRefusal, builtins, isBuiltin, isToolBuiltin } from "./builtins";
 import { formatItem } from "./format";
 import * as interrupt from "./interrupt";
-import { classify, tokenize } from "./lexer";
-import { parse, ShellExitError } from "./parser";
+import { classify, redirectTail, shellSyntaxPreflight, tokenize } from "./lexer";
+import { HelpExit, parse, ShellExitError } from "./parser";
 import { shellEnv } from "./shellPath";
 import type { Context } from "./types";
 
@@ -25,7 +25,43 @@ export interface ReplTty {
   suspend(): () => void;
 }
 
-// Run a block of lines — a script file, piped stdin, multi-line -c, or a
+// A line ending in a backslash continues on the next one.
+//
+// This is the shape every multi-line pipeline in this repo's docs and the
+// website is written in (`load … | stats \` / `  | assert (…)`), and crust did
+// not have it: a trailing backslash is a shell metacharacter, so the line was
+// classified `shell`, handed to `sh -c`, and answered `syntax error near
+// unexpected token` — while BOTH doc linters join `\`+newline before parsing,
+// which is exactly how the examples stayed green in CI and died in a terminal.
+//
+// Joined with a single space, mirroring the linters, and only after an ODD run
+// of trailing backslashes: `…\\` at end of line is an escaped backslash, not a
+// continuation, and stays its own line (a test pins this, because the naive
+// version passes every other case here). Continuation is never inferred from
+// indentation — a leading `|` is still crust's empty-stage refusal.
+//
+// Scripts, piped stdin, multi-line `-c` and `--check`. Not the REPL: there,
+// Enter means run.
+export function splitLines(source: string): string[] {
+  const lines: string[] = [];
+  let pending: string | null = null;
+  for (const raw of source.split("\n")) {
+    const line: string = pending === null ? raw : `${pending} ${raw.trim()}`;
+    pending = null;
+    const body: string = line.trimEnd();
+    let slashes = 0;
+    while (body.length > slashes && body[body.length - 1 - slashes] === "\\") slashes++;
+    if (slashes % 2 === 1 && body.length > slashes) {
+      pending = body.slice(0, -1);
+      continue;
+    }
+    lines.push(line);
+  }
+  if (pending !== null) lines.push(pending);
+  return lines;
+}
+
+// Run a block of lines — a script file, piped stdin, multi-line `-c`, or a
 // `source`d .crust file. Fail-fast: stop at the first failing line and
 // return ITS code. Blank lines and `#` comments are skipped, which also
 // covers a `#!/usr/bin/env crust` shebang on line 1.
@@ -33,7 +69,7 @@ export interface ReplTty {
 // cycle is call-time-only, so it's safe under ESM.)
 export async function runLines(source: string, ctx: Context): Promise<number> {
   let last = 0;
-  for (const l of source.split("\n")) {
+  for (const l of splitLines(source)) {
     const trimmed = l.trim();
     if (!trimmed || trimmed.startsWith("#")) continue;
     last = await runLine(l, ctx);
@@ -98,9 +134,30 @@ export async function runLine(line: string, ctx: Context, tty?: ReplTty): Promis
     }
   }
 
+  // The gate above steps aside for shell metacharacters so `export DB='…&b=2'`
+  // and friends still reach sh. A TOOL builtin NAME carrying a redirect is not
+  // one of those: `mock-server spec.json > out.log` fell through to `sh -c`,
+  // answered `sh: line 1: mock-server: command not found` and exited 127 — which
+  // reads as crust not having the builtin. Tools run in-process, so the redirect
+  // has to wrap the whole invocation. `Bun.which` keeps this from shadowing a
+  // real binary by one of these names (a user's `dotenv` stays theirs).
+  const redirect = isToolBuiltin(exHead) ? redirectTail(expanded) : null;
+  if (redirect !== null && !Bun.which(exHead)) {
+    const rest = expanded.slice(0, expanded.length - redirect.length).trim();
+    process.stderr.write(
+      `crust: ${exHead} is a crust builtin, it runs in-process and cannot redirect. ` +
+        `Redirect the whole invocation instead: crust -c '${rest}' ${redirect.trim()}\n`,
+    );
+    return 1;
+  }
+
   try {
     const tokens = tokenize(expanded);
     const isPureShell = tokens.every((t) => {
+      // An empty stage is not "pure shell": sh rejects it as a syntax error
+      // (`| head -3`), and crust's own message says which pipe is empty. Let it
+      // through to parse(), which refuses it.
+      if (t.text === "") return false;
       const kind = classify(t.text);
       // grep counts as shell here: a pure shell line (`ps aux | grep node`)
       // must keep inherit-stdio `sh -c` byte-for-byte. The native stage only
@@ -110,7 +167,35 @@ export async function runLine(line: string, ctx: Context, tty?: ReplTty): Promis
       return !ctx.functions.has(h);
     });
 
+    if (!isPureShell) {
+      // A pure-shell line above is one `sh -c` that parses the WHOLE line
+      // before executing anything, so its syntax errors are already atomic.
+      // This line is a MIXED pipeline: each shell stage becomes its own
+      // `sh -c` child, so without a preflight a syntax error in stage N would
+      // surface only when that child exits — after stages 1..N-1 have run.
+      // Ask sh, in NOEXEC mode, about every shell stage first: a bad line
+      // dies here with the stage named, and nothing has run. (F19)
+      const problem = await shellSyntaxPreflight(tokens);
+      if (problem) {
+        const where = problem.stage === expanded.trim() ? "" : ` (stage: ${problem.stage})`;
+        process.stderr.write(
+          `crust: shell stage does not parse${where}: ${problem.first}\n  in: ${line}\n`,
+        );
+        return 2;
+      }
+    }
+
     if (isPureShell) {
+      // One crust builtin among the stages and sh reports `command not found`
+      // for a tool crust runs in-process. Check every stage, not just the head:
+      // `echo hi | mock-server spec.json` is the common shape of this mistake.
+      for (const t of tokens) {
+        const refusal = builtinInShellRefusal(t.text);
+        if (refusal !== null) {
+          process.stderr.write(`crust: ${refusal}\n`);
+          return 1;
+        }
+      }
       // At the REPL, hand the child a real terminal: cooked mode so the tty
       // itself delivers Ctrl-C (SIGINT to the foreground process group — the
       // child AND crust; we ignore ours) and interactive children (less, vim)
@@ -178,6 +263,14 @@ export async function runLine(line: string, ctx: Context, tty?: ReplTty): Promis
       return 0;
     }
   } catch (err) {
+    // `-h`/`--help` on a registered builtin is the usage screen, not a
+    // failure: the line never ran (no request, no connection, no item
+    // consumed), so the answer is the screen on stdout and exit 0 — the same
+    // contract as every tool builtin's `--help`.
+    if (err instanceof HelpExit) {
+      process.stdout.write(`${err.usage}\n`);
+      return 0;
+    }
     // A shell stage that exited nonzero is reported by sh itself on the
     // inherited stderr ("command not found", tee's ENOENT, …). Adding a
     // `crust:` line on top would be noise; the child's code IS the answer.

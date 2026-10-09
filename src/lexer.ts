@@ -56,7 +56,156 @@ export function tokenize(line: string): Token[] {
   return stages.map((s) => ({ kind: "stage" as const, text: s.trim() }));
 }
 
+/**
+ * The unquoted, depth-0 `<` or `>` in a stage — a redirect. Only a SHELL stage
+ * has one: its text is handed to `sh -c` verbatim, so `cat > f` redirects for
+ * real. For every other stage kind the operator is just trailing text, and what
+ * it used to do varied, none of it a useful answer: an http stage dropped it
+ * (request ran, file never written, exit 0), a lambda compiled it into JS
+ * where `/tmp/f` opened a regex literal whose `f` were invalid flags, and a
+ * registered fn received `>` and the path as query parameters.
+ *
+ * Returns the operator and everything after it, or null.
+ */
+export function redirectTail(text: string): string | null {
+  let depth = 0;
+  let quote: string | null = null;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]!;
+    if (quote) {
+      // Same escape rule as tokenize: inside `"` a backslash takes the next
+      // char, so `{"note":"say \"hi\" > x"}` stays one quoted run.
+      if (quote === '"' && c === "\\" && i + 1 < text.length) {
+        i++;
+        continue;
+      }
+      if (c === quote) quote = null;
+      continue;
+    }
+    if (c === '"' || c === "'" || c === "`") {
+      quote = c;
+      continue;
+    }
+    if (c === "(" || c === "[") {
+      depth++;
+      continue;
+    }
+    if (c === ")" || c === "]") {
+      depth--;
+      continue;
+    }
+    if (depth === 0 && (c === "<" || c === ">")) return text.slice(i);
+  }
+  return null;
+}
+
+function refusal(where: string, tail: string): Error {
+  const target = tail.trim();
+  const hint = target.startsWith("<")
+    ? `to feed a file in, start the line from a file source instead: lines ${target.slice(1).trim()}`
+    : `to save a pipeline, end the line with a shell stage instead: | cat ${target}`;
+  return new Error(
+    `\`${target}\`: crust has no redirect except on a shell stage, whose text goes to sh as-is — a ${where} would read it as data. ${hint}`,
+  );
+}
+
+/**
+ * Refuse a redirect that the stage named by `where` would read as data.
+ * Exported because registered fns are demoted from shell stages in the parser
+ * (the lexer is ctx-free), so `sql "…" > f` is still `shell` at classify time.
+ */
+export function rejectRedirect(text: string, where: string): void {
+  const tail = redirectTail(text);
+  if (tail) throw refusal(where, tail);
+}
+
+/**
+ * Whether a stage that starts with `{` or `[` is a JSON literal (or someone
+ * typing one) rather than shell text that merely begins with a bracket.
+ *
+ * Parsing it is the honest test, and valid JSON needs nothing else: `{"a":1}`
+ * and `{"cmd":"a && b"}` are literals whatever they contain, because the parse
+ * succeeds before any shape rule is consulted. What needs a rule is text that
+ * does NOT parse, and the two facts that settle it are:
+ *
+ *  - the shell's own shapes are always spaced — a test command is `[ … ]`, a
+ *    brace group `{ …; }`, both with a space after the bracket. A JSON literal
+ *    that needs none (`{"n":$N}`, `[1,$N]`) is typed tight, so a spaced head is
+ *    shell and nothing else.
+ *  - a parse failure is not proof of shell either, because the parser expands
+ *    `$VAR` *after* classification: `{"n":$N}` is a literal once the variable
+ *    is filled in. So tight text carrying a quote, colon, comma or `$` is a
+ *    literal attempt.
+ *
+ * That ordering is deliberate and it fixes a false pass. A rejected stage is
+ * tried as a GLOB before it is tried as shell, and a glob matching nothing
+ * yields an empty stream and exit 0 — so a wrong "not a literal" verdict on
+ * `[1,$N]` is not a confusing message, it is silence, the one outcome worse
+ * than the JSON error this replaced. Residual gaps, both honest and both loud
+ * or both rare: a bracketed command substitution (`[$(date +%s)]`) is a literal
+ * attempt crust never expanded, and a *spaced* array with a variable in it
+ * (`[ $N ]`) reads as the shell's test — write arrays tight, as `[1,$N]`.
+ */
+function looksJsonish(t: string): boolean {
+  try {
+    JSON.parse(t);
+    return true;
+  } catch {
+    // not literal as written — decide by shape
+  }
+  if (/^[[{]\s/.test(t)) return false; // `[ … ]` tests, `{ …; }` groups
+  if (/[",:]|^\[[^\s]*[$(]/.test(t)) return true;
+  return false;
+}
+
 export function classify(text: string): StageKind {
+  const kind = classifyStage(text);
+  // Checked after classification, not before: `grep ERROR > combined.log` is
+  // a redirect that WORKS, precisely because it classifies as a shell stage.
+  if (kind.kind !== "shell") rejectRedirect(text, `${kind.kind} stage`);
+  return kind;
+}
+
+export type ShellSyntaxProblem = {
+  /** the stage text that does not parse */
+  stage: string;
+  /** sh's own first stderr line — its diagnosis is the diagnosis */
+  first: string;
+};
+
+/**
+ * The syntax preflight: sh is the only reader of a shell stage's text, so it
+ * is the only authority on whether that text parses — and `sh -n` asks it in
+ * NOEXEC mode, which reports syntax errors without executing anything
+ * (verified: `cat > f` under -n does not create f, `echo $(cmd)` does not run
+ * cmd). It walks the line's tokens and reports the FIRST shell-kind stage that
+ * fails, or null.
+ *
+ * `--check` has always run this. The exec path used to skip it, which mattered
+ * only for MIXED lines: a pure-shell line is one `sh -c` that parses the whole
+ * line before executing anything, but a mixed pipeline spawns each shell stage
+ * as its own child, so a syntax error in stage N used to surface only when
+ * that child exited — after stages 1..N-1 had already run their side effects.
+ * (F19.)
+ */
+export async function shellSyntaxPreflight(tokens: Token[]): Promise<ShellSyntaxProblem | null> {
+  for (const t of tokens) {
+    if (t.text === "" || classify(t.text).kind !== "shell") continue;
+    const proc = Bun.spawn(["sh", "-n", "-c", t.text], {
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const shErr = await new Response(proc.stderr).text();
+    await proc.exited;
+    if ((proc.exitCode ?? 0) !== 0) {
+      return { stage: t.text, first: shErr.trim().split("\n")[0] || "syntax error" };
+    }
+  }
+  return null;
+}
+
+function classifyStage(text: string): StageKind {
   const t = text.trim();
 
   if (t.startsWith('"') || t.startsWith("'")) {
@@ -113,9 +262,22 @@ export function classify(text: string): StageKind {
   }
 
   // JSON-literal source: the whole stage is a JSON object/array — the request
-  // body in shorthand fixtures. Never falls back to shell (a typo'd JSON
-  // stage exec'ing as a command would be baffling).
-  if (t.startsWith("{") || t.startsWith("[")) {
+  // body in shorthand fixtures. It must not claim shell text that merely
+  // *starts* with a bracket, which is what it used to do unconditionally. The
+  // two most common shell uses of a leading bracket were therefore impossible
+  // to write, and were answered with a complaint about JSON:
+  //   [ -f package.json ] && echo found  -> crust: JSON Parse error: Invalid number
+  //   { echo hi; } | cat                 -> crust: JSON Parse error: Expected '}'
+  //   echo x | [ -f f ]                  -> crust: json cannot appear as a non-first stage
+  // (the third one is what made this a capability gap, not just a bad message:
+  // no wording reached a shell test mid-pipeline at all).
+  //
+  // So the claim is conditional. An actual literal, and anything still shaped
+  // like someone attempting one, stays a `json` stage — a typo'd body that
+  // silently exec'd as a command would be baffling, and that is what this rule
+  // exists for. Shell text is left to fall through to `shell`, where sh gives
+  // it the meaning the user intended.
+  if ((t.startsWith("{") || t.startsWith("[")) && looksJsonish(t)) {
     return { kind: "json", source: t };
   }
 

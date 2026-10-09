@@ -362,3 +362,46 @@ export function renderBuiltinList(): string {
 export function isBuiltin(name: string): boolean {
   return name in builtins;
 }
+
+/**
+ * The builtins crust implements as SHELL words — sh has its own version of each,
+ * so `source .env > /dev/null` is a line where the redirect means what sh says
+ * it means. The tools (`mock-server`, `test-fixture`, `logs`…) have no shell
+ * counterpart, so a redirect on one of those can only be a mistake: it used to
+ * reach sh and answer `mock-server: command not found`.
+ */
+const SHELL_WORD_BUILTINS = new Set([
+  "cd",
+  "export",
+  "alias",
+  "unalias",
+  "source",
+  "exit",
+  "history",
+  "help",
+]);
+
+export function isToolBuiltin(name: string): boolean {
+  return isBuiltin(name) && !SHELL_WORD_BUILTINS.has(name);
+}
+
+/**
+ * The stage head that would reach `sh -c` — a whole shell line, or one stage of
+ * a mixed pipeline. A TOOL builtin landing there is a mistake crust used to let
+ * sh report: `sh: line 1: mock-server: command not found`, exit 127, a message
+ * that says the tool is missing when crust has it in-process. Naming the
+ * builtin is the whole fix — the tools run in-process, so no shell operator can
+ * wrap them. `Bun.which` keeps a user's real binary by one of these names theirs.
+ */
+export function builtinInShellRefusal(stageText: string): string | null {
+  const text = stageText.trimStart();
+  if (!text) return null;
+  const sp = text.search(/\s/);
+  const head = sp === -1 ? text : text.slice(0, sp);
+  if (!isToolBuiltin(head) || Bun.which(head)) return null;
+  const where = head === "logs" ? " A `logs` session takes its filters at the `logs>` prompt." : "";
+  return (
+    `${head} is a crust builtin — it runs in-process, so sh cannot run it. ` +
+    `Give it a line of its own.${where}`
+  );
+}

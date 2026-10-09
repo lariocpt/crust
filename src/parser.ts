@@ -5,9 +5,13 @@
 // user typed. Not a code-injection risk; it's the design.
 
 import { expandEnv, splitArgs } from "./args";
+import { BUILTIN_FN_USAGE, isBuiltinFn } from "./builtinFns";
+import { base64, base64Stage } from "./builtinFns/base64";
+import { sql, sqlSource, sqlStage } from "./builtinFns/sql";
+import { builtinInShellRefusal } from "./builtins";
 import { formatItem } from "./format";
 import { registerChild } from "./interrupt";
-import { classify, tokenize } from "./lexer";
+import { classify, rejectRedirect, tokenize } from "./lexer";
 import { Pipeline } from "./pipeline";
 import { shellEnv } from "./shellPath";
 import * as sources from "./sources";
@@ -16,6 +20,38 @@ import type { Context, StageKind } from "./types";
 
 export function parse(line: string): (ctx?: Context) => Pipeline<unknown> {
   const tokens = tokenize(line);
+  // An empty stage is never something crust should be quiet about. It classified
+  // as a shell stage with no command, so `sh -c ""` READ the pipeline and
+  // discarded it: `load 5s 100/s |` reported a clean run at exit 0 having thrown
+  // away every sample. `||` splits the same way, and the command on its right
+  // never ran at all (a shell transform with zero items never spawns) while the
+  // line still exited 0 — a fallback that silently doesn't fall back.
+  //
+  // A line that is entirely blank keeps its old no-op behaviour: scripts, piped
+  // stdin and --check all skip blank lines before parse(), so the only way to
+  // reach here with nothing is `crust -c ''`.
+  if (tokens.length > 1) {
+    for (let i = 0; i < tokens.length; i++) {
+      if (tokens[i]!.text !== "") continue;
+      if (i === 0) {
+        throw new Error(
+          "empty stage: a pipeline starts with a source — remove the leading `|`, or if this " +
+            "line belongs to the one above it, end that line with a trailing `\\`",
+        );
+      }
+      if (i === tokens.length - 1) {
+        throw new Error(
+          "trailing `|`: nothing follows the pipe — the pipeline's output goes nowhere. " +
+            "Remove it, or end with a real stage",
+        );
+      }
+      throw new Error(
+        "empty stage between pipes: crust splits on `|`, so `||` is an empty stage, " +
+          "not an or-operator (`&&` is fine — it contains no pipe). Put the whole shell " +
+          "command in one stage instead: sh -c 'a || b'",
+      );
+    }
+  }
   return (ctx) => {
     // `time "label"` is a prefix-only decorator: it doesn't participate in
     // the data flow, it just wraps the resulting pipeline with a timing
@@ -156,6 +192,10 @@ function resolveKind(text: string, ctx?: Context): StageKind {
     const parts = splitArgs(text.trim());
     const head = parts[0]!;
     if (ctx.functions.has(head)) {
+      // `sql "…" > out.json` would otherwise hand `>` and the path to the fn
+      // as query parameters. Same refusal the lexer raises, at the point where
+      // this stage stops being a shell stage.
+      rejectRedirect(text, `${head} stage`);
       // Env-expand fn args so `sql "..." "prefix $RUN_ID"` works in .pipes
       // files. SQL positional params ($1, $2) survive — a digit can't start
       // an env var name.
@@ -256,13 +296,14 @@ export function buildSource(kind: StageKind, ctx?: Context): Pipeline<unknown> {
     case "function": {
       const fn = ctx?.functions.get(kind.name);
       if (!fn) throw new Error(`function "${kind.name}" not registered`);
+      builtinHelp(kind.name, kind.args, ctx);
       // Function-as-source: invoke fn(...staticArgs). If it returns (or resolves
       // to) an Array, stream each element as its own item — this is what makes
       // `sql "..."` behave as a row-streaming source. Anything else is yielded
       // as a single item.
       return Pipeline.of(
         (async function* () {
-          const result = await fn(...kind.args);
+          const result = await (fn === sql ? sqlSource(kind.args) : fn(...kind.args));
           if (Array.isArray(result)) {
             for (const r of result) yield r;
           } else {
@@ -398,7 +439,21 @@ function applyStage(
     case "function": {
       const fn = ctx?.functions.get(kind.name);
       if (!fn) throw new Error(`function "${kind.name}" not registered`);
-      const apply = (item: unknown) => fn(item, ...kind.args);
+      builtinHelp(kind.name, kind.args, ctx);
+      // `sql`'s query is DECLARED on the line, so it cannot be found by looking
+      // at the arguments: fn(item, ...args) with a string item would put the
+      // item in the query's slot. `base64` has the same shape in miniature — its
+      // OPTIONS are declared on the line, so scanning every argument for `-d`
+      // read data that says `-d` as the mode and left nothing to encode. Dispatch
+      // the builtin by identity instead of by argument type — a user who replaced
+      // `sql` or `base64` through `crust.fn` keeps the general convention their
+      // own handler was written against.
+      const apply = (item: unknown) =>
+        fn === sql
+          ? sqlStage(kind.args, item)
+          : fn === base64
+            ? base64Stage(kind.args, item)
+            : fn(item, ...kind.args);
       const mapped =
         concurrency !== null && concurrency !== undefined
           ? (input.pipe(transforms.parallel(concurrency, apply) as never) as Pipeline<unknown>)
@@ -480,12 +535,49 @@ function describeItem(item: unknown): string {
   return JSON.stringify(item)?.slice(0, 200) ?? String(item);
 }
 
+// `await` in a lambda body is a syntax error in a SYNC arrow, and bodies are
+// compiled with `new Function`, so the documented
+// `ls *.json | (s => JSON.parse(await Bun.file(s).text()))` idiom was refused at
+// parse time. When a body mentions `await`, recompile it as an ASYNC arrow: the
+// pipeline already awaits every stage result (`yield await fn(item)` in
+// Pipeline.pipe, `U | Promise<U>` in parallel), so nothing downstream changes.
+// A body that is not actually an arrow, or whose async retry fails, keeps the
+// original diagnostic rather than a confusing second one.
 function compileLambda(source: string): (x: unknown) => unknown {
-  const fn = new Function(`return (${source});`)();
+  let fn: unknown;
+  try {
+    fn = new Function(`return (${source});`)();
+  } catch (err) {
+    const asyncBody = /\bawait\b/.test(source) ? asyncifiedArrow(source) : null;
+    if (asyncBody === null) throw err;
+    try {
+      fn = new Function(`return (${asyncBody});`)();
+    } catch {
+      throw err;
+    }
+  }
   if (typeof fn !== "function") {
     throw new Error(`expected a function, got ${typeof fn}: ${source}`);
   }
   return fn as (x: unknown) => unknown;
+}
+
+// `(x => …)` -> `async x => …`, `((a, b) => …)` -> `async (a, b) => …`,
+// `x => …` -> `async x => …`. Returns null for anything whose head is not a
+// parameter list (`async (x => x)` is not JavaScript), so the caller keeps the
+// original, precise diagnostic. Params may be bare, parenthesised (one level of
+// nesting, so a `(x = fetch(u))` default still counts), or destructured.
+function asyncifiedArrow(source: string): string | null {
+  const text = source.trim();
+  const inner = text.startsWith("(") && text.endsWith(")") ? text.slice(1, -1).trim() : text;
+  const arrow = inner.indexOf("=>");
+  if (arrow < 0) return null;
+  const params = inner.slice(0, arrow).trim();
+  const plausible =
+    /^\(.*\)$/s.test(params) || // `(a, b)`, `({ a }, b)`, `(x = (1))`
+    /^[A-Za-z_$][\w$]*$/.test(params) || // `x`
+    /^[{[]/s.test(params); // `({ a }) => …`, `([x]) => …`
+  return plausible ? `async ${inner}` : null;
 }
 
 const evalLambda = compileLambda;
@@ -506,6 +598,32 @@ export class ShellExitError extends Error {
   }
 }
 
+// `-h`/`--help` on a registered BUILTIN is a request for its usage screen,
+// answered at parse time — before any stage runs, so `http … | sql --help`
+// prints usage without making the request. Carries the screen; runLine writes
+// it and exits 0. Thrown only for builtins (see builtinHelp), so a user's
+// `crust.fn` handler keeps `--help` as an ordinary argument.
+export class HelpExit extends Error {
+  constructor(readonly usage: string) {
+    super("crust: --help");
+    this.name = "HelpExit";
+  }
+}
+
+function builtinHelp(name: string, args: unknown[], ctx?: Context): void {
+  if (!ctx || !isBuiltinFn(ctx, name)) return;
+  for (const a of args) {
+    if (typeof a !== "string") continue;
+    if (a === "--") return;
+    if (a === "-h" || a === "--help") {
+      // The scan stops at `--`: everything after it is an operand, so
+      // `base64 -- --help` encodes the flag. The piped item is never in args,
+      // so `echo "--help" | base64` still encodes.
+      throw new HelpExit(BUILTIN_FN_USAGE[name]!);
+    }
+  }
+}
+
 // Only a real nonzero exit counts. A null code means the child was signalled —
 // which is how BOTH Ctrl-C and our own teardown kill (downstream stopped early,
 // e.g. `| head -3`) end a child, and neither is a failure of the line.
@@ -515,6 +633,10 @@ function exitFailure(proc: { exitCode: number | null }, cmd: string): ShellExitE
 }
 
 function shellSource(cmd: string): Pipeline<unknown> {
+  // Refuse a crust builtin name BEFORE spawning: sh's `command not found` reads
+  // as "crust does not have that tool". See builtinInShellRefusal.
+  const refusal = builtinInShellRefusal(cmd);
+  if (refusal) throw new Error(refusal);
   return Pipeline.of(
     (async function* () {
       const proc = Bun.spawn(["sh", "-c", cmd], {
@@ -554,6 +676,10 @@ function shellSource(cmd: string): Pipeline<unknown> {
 }
 
 function shellTransform(input: Pipeline<unknown>, cmd: string): Pipeline<unknown> {
+  // Same refusal as shellSource — this is the mid-pipeline position, where a
+  // builtin name is by far the most likely mistake.
+  const refusal = builtinInShellRefusal(cmd);
+  if (refusal) throw new Error(refusal);
   return Pipeline.of(
     (async function* () {
       const proc = Bun.spawn(["sh", "-c", cmd], {

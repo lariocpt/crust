@@ -27,16 +27,25 @@ procs({ db: {cmd: "docker compose up pg", ready: "port:5432"}, api: {cmd: "bun a
   ready-timeout kill never does, and with `live:` uptime ends when a fatal
   probe streak BEGAN, so a proc that wedges right after ready still accrues
   strikes). `restart: {max: N}` gives up after N consecutive restarts.
-  Ctrl-C never respawns.
+  Ctrl-C never respawns. **Giving up is not a failure**: `giving up after N
+  restart(s)` is an `exit`-stream line and the line still exits 0 (same for a
+  child that exits nonzero with no `restart:` — its stream just ends). Gate it
+  in CI: `| (l => { if (/giving up|unhealthy/.test(l.line)) throw new Error(l.line); return null })`.
 - `ready:` — `":3001/health"` / `"http(s)://…"` (any 2xx) or `"port:5432"`
   (TCP connect). Long form `{url?, port?, timeoutMs?, intervalMs?,
   probeTimeoutMs?}` (defaults 30s / 250ms; each probe capped at
-  `min(intervalMs*4, 2s)` unless `probeTimeoutMs` raises it). Timeout: a
-  restartable proc is killed and respawned (readiness re-awaited each
-  spawn); a non-restartable one FAILS the whole pipeline — CI semantics.
+  `min(intervalMs*4, 2s)` unless `probeTimeoutMs` raises it). `timeoutMs`
+  belongs INSIDE the ready object: as a sibling of `cmd` it is ignored
+  silently — `{cmd: "sleep 40", ready: "port:4199", timeoutMs: 1200}` waits
+  the full default 30s. Timeout: a restartable proc is killed and respawned
+  (readiness re-awaited each spawn); a non-restartable one FAILS the whole
+  pipeline — CI semantics.
 - `live:` — liveness for the unhealthy-but-alive case. Same target forms;
   long form `{url?, port?, intervalMs?, probeTimeoutMs?, failures?,
-  graceMs?}` (defaults 5s / 3 failures / 0 grace). Arms once the proc is up
+  graceMs?}` (defaults 5s / 3 failures / 0 grace). Use `url:` here: a
+  `port:` probe is a TCP connect, so it cannot see a wedged listener — a
+  server answering 503 for four seconds with `live: {port, failures: 3}`
+  logged nothing and the run exited 0. Arms once the proc is up
   (after `ready:`, else at spawn); `live`-stream lines: `probe failed
   (k/N)`, `recovered after k failed probe(s)`, `unhealthy after N
   consecutive failed probe(s)`. Fatal streak: restartable → killed +
@@ -85,12 +94,15 @@ in CI), and `.pipes` files. Env-expanded args work:
 
 ## Traps
 
-- procs is source-only (first stage) and spec keys must be unique names.
+- procs is source-only (first stage). Spec keys are JS object-literal keys, so
+  a duplicate collapses BEFORE crust sees it (`{a: "x", a: "y"}` runs only
+  `y`) — nothing warns you.
 - The merged stream never ends while a `restart: true` child keeps
   respawning — consume it with `for await`/pipe, bound it with a downstream
   condition, or stop it with Ctrl-C: at the REPL that cancels the running
   line and tears the whole process group down (SIGTERM, then SIGKILL).
 - `FORCE_COLOR=0` is forced on children so lines stay parseable.
 - To capture the stream, END with a shell stage: `procs({…}) | cat > file`
-  writes each item as its JSON line. A bare `procs(...) > file` does NOT work —
-  the `>` lands inside the `procs(...)` expression and is evaluated as JS.
+  writes each item as its JSON line. A bare `procs(...) > file` is refused —
+  crust has no redirect on its own stages (the `>` would be read as data by a
+  pipeline stage); the outer shell can still wrap the whole invocation.

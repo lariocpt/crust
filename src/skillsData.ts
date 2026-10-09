@@ -2,10 +2,14 @@
 // (compiled-binary-safe: no runtime fs dependency on the repo checkout).
 // `skills install` writes them into a project's .claude/skills/ directory.
 import crustApiTesting from "../skills/crust-api-testing/SKILL.md" with { type: "text" };
+import crustBuiltins from "../skills/crust-builtins/SKILL.md" with { type: "text" };
+import crustCli from "../skills/crust-cli/SKILL.md" with { type: "text" };
 import crustLoadTesting from "../skills/crust-load-testing/SKILL.md" with { type: "text" };
+import crustLogs from "../skills/crust-logs/SKILL.md" with { type: "text" };
 import crustMockServer from "../skills/crust-mock-server/SKILL.md" with { type: "text" };
 import crustPipelines from "../skills/crust-pipelines/SKILL.md" with { type: "text" };
 import crustProcs from "../skills/crust-procs/SKILL.md" with { type: "text" };
+import crustVerifyWebLinks from "../skills/crust-verify-web-links/SKILL.md" with { type: "text" };
 
 export interface EmbeddedSkill {
   name: string;
@@ -14,10 +18,14 @@ export interface EmbeddedSkill {
 
 export const EMBEDDED_SKILLS: EmbeddedSkill[] = [
   { name: "crust-api-testing", content: crustApiTesting },
+  { name: "crust-builtins", content: crustBuiltins },
+  { name: "crust-cli", content: crustCli },
   { name: "crust-load-testing", content: crustLoadTesting },
+  { name: "crust-logs", content: crustLogs },
   { name: "crust-mock-server", content: crustMockServer },
   { name: "crust-pipelines", content: crustPipelines },
   { name: "crust-procs", content: crustProcs },
+  { name: "crust-verify-web-links", content: crustVerifyWebLinks },
 ];
 
 // One-line description from the SKILL.md frontmatter, for `skills list`.

@@ -4,10 +4,11 @@
 // requests reported success; a mistyped `-t 1ms` was silently ignored so the
 // request ran untimed; `sql` mid-pipeline threw away the piped item and
 // returned []; `bundle --outdir --minify` created a directory literally named
-// "--minify"; `procs` deleted blank lines from its children's output; and two
-// globals the docs promised did not exist.
+// "--minify"; `procs` deleted blank lines from its children's output; two
+// globals the docs promised did not exist; and `jwt verify` mid-pipeline SIGNED
+// the token it was handed and exited 0.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { bundle } from "../src/builtinFns/bundle";
@@ -143,6 +144,66 @@ describe("sql binds the piped item", () => {
     );
     expect(r.code).toBe(0);
   });
+
+  test("a string item binds as the parameter instead of becoming the query", async () => {
+    // The parser calls a mid-pipeline function as fn(item, ...declaredArgs),
+    // and `sql` decided which argument was the QUERY by testing whether the
+    // first one was a string. So a string item WON the argument slot: the
+    // declared query was thrown away and the item was executed instead.
+    const r = await cli('range(2,2) | (n => "beta") | sql "SELECT name FROM t WHERE name = ?"', {
+      DATABASE_URL: db,
+    });
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("beta");
+  });
+
+  test("the declared query is never replaced by upstream text", async () => {
+    // The same defect with a nastier shape: upstream data that happens to be
+    // valid SQL ran as the query, and the line exited 0 with rows the user
+    // never asked for — a false pass. `99`/`hijack` must never appear.
+    const r = await cli(
+      'range(1,1) | (n => "SELECT 99 AS hijack") | sql "SELECT name FROM t WHERE id = 1"',
+      { DATABASE_URL: db },
+    );
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("alpha");
+    expect(r.stdout).not.toMatch(/hijack|99/);
+  });
+
+  test("an empty upstream value is a parameter, not a missing query", async () => {
+    // A blank item used to reach the driver as the query ("SQL string mustn't
+    // be blank"), so a legitimately empty value looked like a malformed line.
+    const r = await cli('range(1,1) | (n => "") | sql "SELECT name FROM t WHERE name = ?"', {
+      DATABASE_URL: db,
+    });
+    expect(r.code).toBe(0);
+    expect(r.out).not.toMatch(/blank/i);
+    expect(r.stdout.trim()).toBe("");
+  });
+
+  test("a declared parameter still wins over a string item", async () => {
+    const r = await cli(
+      'range(2,2) | (n => "beta") | sql "SELECT name FROM t WHERE name = ?" "alpha"',
+      { DATABASE_URL: db },
+    );
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("alpha");
+    expect(r.stdout).not.toContain("beta");
+  });
+
+  test("CONTROL: every other registered fn still gets fn(item, ...args)", async () => {
+    // `sql` is special-cased in the parser, so pin the general convention it
+    // deliberately does NOT change: item first, then the line's declared args.
+    const c = ctx();
+    c.functions.set("join3", (item: unknown, ...args: unknown[]) =>
+      [item, ...args].map(String).join("/"),
+    );
+    const out: unknown[] = [];
+    for await (const item of parse('range(3,3) | (n => `s${n}`) | join3 "a" "b"')(c).lines()) {
+      out.push(item);
+    }
+    expect(out).toEqual(["s3/a/b"]);
+  });
 });
 
 describe("bundle uses the shared flag parser", () => {
@@ -255,5 +316,400 @@ describe("stats percentiles stay honest under the histogram", () => {
     const s = out[out.length - 1]!;
     expect(s.p99).toBeLessThan(100);
     expect(s.p99).toBeGreaterThanOrEqual(99);
+  });
+});
+
+describe("jwt verify mid-pipeline", () => {
+  // `fn(item, ...args)` puts the ITEM first, so the op sat in args[1] — and the
+  // op was read from args[0] only. The line the docs print,
+  // `echo <token> | jwt verify --secret k`, therefore missed the op, took the
+  // `sign` default, and printed a freshly SIGNED token with exit 0.
+  let token: string;
+  beforeAll(async () => {
+    const r = await cli(`jwt sign '{"sub":"42"}' --secret k`);
+    expect(r.code).toBe(0);
+    token = r.stdout.trim().split("\n").pop()!;
+  });
+
+  test("verifies the piped token instead of signing it", async () => {
+    const r = await cli(`echo ${token} | jwt verify --secret k`);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain('"sub":"42"');
+    // A signed token would be three dot-separated parts; the payload is not.
+    expect(r.stdout.trim().split(".")).toHaveLength(1);
+  });
+
+  test("a wrong secret fails loudly rather than passing", async () => {
+    const r = await cli(`echo ${token} | jwt verify --secret nope`);
+    expect(r.code).toBe(1);
+    expect(r.out).toContain("signature mismatch");
+  });
+
+  test("decode works mid-pipeline too", async () => {
+    const r = await cli(`echo ${token} | jwt decode`);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain('"sub":"42"');
+  });
+
+  test("the op-first forms are unchanged", async () => {
+    const verify = await cli(`jwt verify ${token} --secret k`);
+    expect(verify.code).toBe(0);
+    expect(verify.stdout).toContain('"sub":"42"');
+    // No op at all still means sign, with the item as payload.
+    const sign = await cli(`echo '{"sub":"7"}' | jwt --secret k`);
+    expect(sign.code).toBe(0);
+    expect(sign.stdout.trim().split(".")).toHaveLength(3);
+  });
+});
+
+describe("empty stages (a `|` with nothing on one side)", () => {
+  // Both shapes used to be silent successes. A trailing `|` classified as a
+  // shell stage with no command, so `sh -c ""` read the pipeline and dropped it
+  // at exit 0; `||` split the same way, and the command to its right never ran
+  // because a shell transform with zero items never spawns.
+  test("a trailing pipe fails instead of discarding the data at exit 0", async () => {
+    const r = await cli(`range(1,3) |`);
+    expect(r.code).toBe(1);
+    expect(r.out).toContain("trailing `|`");
+    expect(r.stdout).toBe("");
+  });
+
+  test("so does one on a line that produces a lot", async () => {
+    // The shape a load run would hit: the gate looks green, zero samples kept.
+    const r = await cli(`range(1,100) | (n => n * 2) |`);
+    expect(r.code).toBe(1);
+    expect(r.out).toContain("trailing `|`");
+  });
+
+  test("`||` is refused on every line, and the quoted escape works", async () => {
+    // `||` splits into an empty stage, so it cannot mean an or-operator here. It
+    // used to be accepted by the pure-shell fast path and reach sh — where it
+    // worked — while the same construct on a mixed line ran a crust pipeline and
+    // silently dropped the fallback. One answer now, and it names the escape.
+    const mixed = await cli(`range(1,3) | (n => n) || echo fallback`);
+    expect(mixed.code).toBe(1);
+    expect(mixed.out).toContain("empty stage between pipes");
+
+    const pure = await cli(`echo a || echo b`);
+    expect(pure.code).toBe(1);
+    expect(pure.out).toContain("sh -c 'a || b'");
+
+    const escaped = await cli(`sh -c 'echo a || echo b'`);
+    expect(escaped.code).toBe(0);
+    expect(escaped.stdout).toContain("a");
+
+    // `&&` contains no pipe, so it is an ordinary single shell stage.
+    const andThen = await cli(`echo a && echo b`);
+    expect(andThen.code).toBe(0);
+    expect(andThen.stdout).toContain("b");
+  });
+
+  test("a leading pipe is refused by crust, not by sh", async () => {
+    const r = await cli(`| head -3`);
+    expect(r.code).toBe(1);
+    expect(r.out).toContain("starts with a source");
+    // The hint matters because `\` continuation exists: this is exactly the
+    // shape a multi-line pipeline takes when the backslash is missing.
+    expect(r.out).toContain("trailing `\\`");
+    // Not sh's raw syntax error any more.
+    expect(r.out).not.toContain("syntax error");
+  });
+
+  test("--check catches all three", async () => {
+    // --check is how the website validates its examples; a hole here means a
+    // broken example publishes green.
+    for (const line of ["range(1,3) |", "echo a || echo b", "| head -3"]) {
+      const proc = Bun.spawn(["bun", ENTRY, "--check", line], {
+        stdin: "ignore",
+        stdout: "pipe",
+        stderr: "pipe",
+        env: { ...process.env, CRUST_CONFIG: "/dev/null" },
+      });
+      const [out, err] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+      ]);
+      await proc.exited;
+      expect(proc.exitCode, line).toBe(1);
+      expect(out + err, line).toContain("in: " + line);
+    }
+  });
+
+  test("a blank line stays a no-op, not an error", async () => {
+    const r = await cli("");
+    expect(r.code).toBe(0);
+    expect(r.out).toBe("");
+  });
+});
+
+describe("--check validates shell stages through sh -n", () => {
+  // --check is the website's ONLY grammar gate (crust-website cannot import the
+  // lexer). A stage crust classifies as `shell` is opaque to its parser, so a
+  // line malformed enough to fall through to shell checked "ok" and then exited
+  // 2 at runtime: `range(1,` did exactly that.
+  async function check(line: string) {
+    const proc = Bun.spawn(["bun", ENTRY, "--check", line], {
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+      env: { ...process.env, CRUST_CONFIG: "/dev/null" },
+    });
+    const [out, err] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ]);
+    await proc.exited;
+    return { code: proc.exitCode ?? 0, out: out + err };
+  }
+
+  test("a malformed stage that fell through to shell stops the check", async () => {
+    const r = await check("range(1,");
+    expect(r.code).toBe(1);
+    expect(r.out).toContain("shell stage does not parse");
+    expect(r.out).toContain("in: range(1,");
+  });
+
+  test("the offending stage is named when the line has several", async () => {
+    const r = await check("range(1,3) | head -(");
+    expect(r.code).toBe(1);
+    expect(r.out).toContain("(stage: head -()");
+  });
+
+  test("valid shell stages still check clean", async () => {
+    for (const line of ["ls -la", "ps aux | grep -c crust", `sh -c 'a || b'`]) {
+      const r = await check(line);
+      expect(r.code, line).toBe(0);
+      expect(r.out, line).toContain("line(s) parse");
+    }
+  });
+
+  test("noexec really means noexec: a checked redirect creates nothing", async () => {
+    const path = join(await mkdtemp(join(tmpdir(), "crust-noexec-")), "nope.txt");
+    const r = await check(`range(1,2) | cat > ${path}`);
+    expect(r.code).toBe(0);
+    expect(await Bun.file(path).exists()).toBe(false);
+  });
+});
+
+describe("a trailing backslash continues the line", () => {
+  // Every multi-line pipeline in crust's own docs and the website is written
+  // with a trailing `\` and the next line starting with `|` — and crust had no
+  // continuation: the line was classified shell (a trailing backslash is a
+  // metacharacter), handed to `sh -c`, and answered `syntax error near
+  // unexpected token`. Both doc linters JOIN `\`+newline before parsing, so the
+  // examples checked clean in CI and died the moment a human ran them.
+  async function run(script: string, args: string[] = []) {
+    const proc = Bun.spawn(["bun", ENTRY, script, ...args], {
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+      env: { ...process.env, CRUST_CONFIG: "/dev/null" },
+    });
+    const [stdout, stderr] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ]);
+    await proc.exited;
+    return { code: proc.exitCode ?? -1, out: stdout + stderr };
+  }
+  async function script(text: string) {
+    const dir = await mkdtemp(join(tmpdir(), "crust-cont-"));
+    const path = join(dir, "run.crust");
+    await writeFile(path, text);
+    return run(path);
+  }
+
+  test("a continued pipeline runs as one line", async () => {
+    const r = await script("range(1,3) \\\n  | (n => n * 2)\n");
+    expect(r.code).toBe(0);
+    expect(r.out.split(/\s+/).filter(Boolean)).toEqual(["2", "4", "6"]);
+  });
+
+  test("multi-line -c continues too", async () => {
+    const r = await cli("range(1,2) \\\n  | stats\n");
+    expect(r.code).toBe(0);
+    expect(r.out).toContain("count");
+  });
+
+  test("--check agrees with the runtime about a continued line", async () => {
+    const proc = Bun.spawn(["bun", ENTRY, "--check", "range(1,3) \\\n  | (n => n * 2)"], {
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+      env: { ...process.env, CRUST_CONFIG: "/dev/null" },
+    });
+    const [out, err] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ]);
+    await proc.exited;
+    expect((proc.exitCode ?? -1) + out + err, out + err).toBe(0 + "ok: 1 line(s) parse\n");
+  });
+
+  test("CONTROL: an escaped backslash is not a continuation", async () => {
+    // A line ending in `\\` (an escaped backslash) is two lines, both run. A
+    // naive "join anything ending in a backslash" merges them into
+    // `sh -c 'echo one' \ range(1,2)` — a shell syntax error.
+    const r = await script("sh -c 'echo one' \\\\\nrange(1,2)\n");
+    expect(r.code).toBe(0);
+    expect(r.out).toContain("one");
+    expect(r.out).toContain("2");
+  });
+
+  test("CONTROL: a comment line still ends the comment block, not the pipeline", async () => {
+    const r = await script("range(1,2)\n# a comment\n  | (n => n * 3)\n");
+    // Not joined (no backslash), so this is the refused-empty-stage case — the
+    // continuation must not be inferred from indentation.
+    expect(r.code).toBe(1);
+    expect(r.out).toContain("empty stage");
+  });
+});
+
+describe("wait says which probe it is running", () => {
+  // Measured against a real mock-server: `wait :4481` never became ready and
+  // exited 1 after the full timeout while `GET :4481/pets` answered 200 the
+  // whole time. An HTTP target is ready only on a 2xx, and a bare ":PORT"
+  // probes "/", which a spec-driven server has no route for — so the honest
+  // reading (the server is up, the path does not exist) was invisible and the
+  // run looked like a slow boot. `port:PORT` and a real path both pass.
+  let port = 0;
+  let server: ReturnType<typeof Bun.serve> | null = null;
+
+  beforeAll(() => {
+    server = Bun.serve({
+      port: 0,
+      fetch(req) {
+        return new Response(null, { status: new URL(req.url).pathname === "/health" ? 200 : 404 });
+      },
+    });
+    port = server.port ?? 0;
+  });
+  afterAll(() => server?.stop());
+
+  test("a 404 at / is not readiness — and the message says where it looked", async () => {
+    const r = await cli(`wait :${port} --timeout 2s --interval 200ms`);
+    expect(r.code).toBe(1);
+    expect(r.out).toContain("not ready after");
+    expect(r.out).toContain("root path");
+    expect(r.out).toContain("2xx");
+    expect(r.out).toContain(`port:${port}`);
+  });
+
+  test("CONTROL: a real health path still waits and returns", async () => {
+    const r = await cli(`wait :${port}/health --timeout 5s`);
+    expect(r.out + r.code, r.out).toContain('"ready":true');
+    expect(r.code).toBe(0);
+  });
+
+  test("CONTROL: port:PORT is readiness by TCP connect, not by status", async () => {
+    const r = await cli(`wait port:${port} --timeout 5s`);
+    expect(r.code, r.out).toBe(0);
+    expect(r.out).toContain(`port:${port}`);
+  });
+
+  test("CONTROL: a path target that never answers gets no misleading hint", async () => {
+    const r = await cli(`wait :${port}/nope --timeout 2s --interval 200ms`);
+    expect(r.code).toBe(1);
+    expect(r.out).toContain("not ready after");
+    expect(r.out).not.toContain("probes the root path");
+  });
+});
+
+describe("base64 means the text, and a file only when you say so", () => {
+  // crust's `base64` shadows /usr/bin/base64, and the two mean different things
+  // by their argument: coreutils encodes the FILE, crust encodes the TEXT. So
+  // `base64 in.ts` printed `aW4udHM=` — the characters of the path — exit 0, and
+  // there was no route to the file at all, because `read logo.png | base64`
+  // decodes the file as UTF-8 first and replaces every invalid byte. Deciding by
+  // "does this string exist on disk" is not the fix (it would make
+  // `read list.txt | base64` depend on the cwd), so the file is an explicit
+  // `--file`, the shadow is called out on stderr where it bites, and the options
+  // are only ever what was typed on the line.
+  const BIN = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0xff, 0xfe, 0x00, 0x42]);
+  let dir: string;
+  beforeAll(async () => {
+    dir = await mkdtemp(join(tmpdir(), "crust-b64-"));
+    await writeFile(join(dir, "in.ts"), "hello from the file\n");
+    await writeFile(join(dir, "tiny.png"), BIN);
+  });
+  afterAll(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  test("--file encodes the file's bytes, and is binary-safe", async () => {
+    const r = await cli(`base64 --file ${dir}/tiny.png`);
+    expect(r.code, r.out).toBe(0);
+    expect(r.stdout.trim()).toBe(BIN.toString("base64"));
+  });
+
+  test("CONTROL: the pipe is not binary-safe — which is why --file exists", async () => {
+    const r = await cli(`read ${dir}/tiny.png | base64`);
+    expect(r.code, r.out).toBe(0);
+    expect(r.stdout.trim()).not.toBe(BIN.toString("base64"));
+  });
+
+  test("a path still means text, and the shadow is said out loud", async () => {
+    const r = await cli(`base64 ${dir}/in.ts`);
+    expect(r.code, r.out).toBe(0);
+    expect(r.stdout.trim()).toBe(Buffer.from(`${dir}/in.ts`).toString("base64"));
+    expect(r.out).toContain(`--file ${dir}/in.ts`);
+  });
+
+  test("CONTROL: encoding anything else prints no note", async () => {
+    const r = await cli("base64 hello");
+    expect(r.code, r.out).toBe(0);
+    expect(r.stdout.trim()).toBe("aGVsbG8=");
+    expect(r.out).not.toContain("note:");
+  });
+
+  test("an unknown option is refused, not encoded", async () => {
+    // Used to print `LS1kZXNj` — the flag itself, with the real input dropped —
+    // and exit 0.
+    const r = await cli("base64 --desc hello");
+    expect(r.code, r.out).toBe(1);
+    expect(r.out).toMatch(/unknown option "--desc"/);
+    expect(r.out).toMatch(/--file/);
+  });
+
+  test("piped data is data: an item that says -d is encoded, not obeyed", async () => {
+    // `fn(item, ...args)` put the item in the option slot; the item WAS `-d`, so
+    // the mode flipped and the input vanished: `base64: missing input`, exit 1.
+    const r = await cli("printf '%s' -d | base64");
+    expect(r.code, r.out).toBe(0);
+    expect(r.stdout.trim()).toBe("LWQ=");
+  });
+
+  test("CONTROL: -d still decodes when it is the option you typed", async () => {
+    const r = await cli("printf '%s' aGVsbG8= | base64 -d");
+    expect(r.code, r.out).toBe(0);
+    expect(r.stdout.trim()).toBe("hello");
+  });
+
+  test("--file with piped input is refused instead of dropping the item", async () => {
+    const r = await cli(`echo hi | base64 --file ${dir}/in.ts`);
+    expect(r.code, r.out).toBe(1);
+    expect(r.out).toMatch(/does not consume piped input/);
+  });
+
+  test("--out round-trips a file through base64 without a terminal in the middle", async () => {
+    const b64 = join(dir, "tiny.b64");
+    const copy = join(dir, "copy.png");
+    expect((await cli(`base64 --file ${dir}/tiny.png --out ${b64}`)).code).toBe(0);
+    expect((await cli(`base64 --file ${b64} --decode --out ${copy}`)).code).toBe(0);
+    expect((await readFile(copy)).equals(BIN)).toBe(true);
+  });
+
+  test("decoding something that is not base64 fails, instead of printing mojibake", async () => {
+    // Node's decoder skips characters it does not know, so this exited 0 with
+    // three replacement characters on stdout.
+    const r = await cli("printf '%s' 'not base64!!!' | base64 -d");
+    expect(r.code, r.out).toBe(1);
+    expect(r.out).toMatch(/is not a base64 character/);
+  });
+
+  test("a missing --file is an error, not an empty answer", async () => {
+    const r = await cli("base64 --file /no-such-dir/nope.png");
+    expect(r.code, r.out).toBe(1);
+    expect(r.out).toMatch(/no such file/);
   });
 });

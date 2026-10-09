@@ -65,7 +65,7 @@
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
 import { loadSpec, type OpenApiSpec } from "../mockServer/loadSpec";
-import { resolveRef } from "../mockServer/mockResponse";
+import { resolveRef, withRefSiblings } from "../mockServer/mockResponse";
 import {
   formatDefault,
   inferType,
@@ -132,6 +132,14 @@ export interface GenerateResult {
   totalCases: number;
   flowFile: string | null;
   flowCount: number;
+  /** Flow candidates that were derived and dropped (each one logged with its reason). */
+  flowSkipped: number;
+  /**
+   * Operations whose body cases were ALL dropped because the base body cannot be made valid. A suite
+   * that lost 142 cases across 41 operations is a different fact from one that lost one case, and
+   * per-operation notices get filtered by harnesses — this number is the aggregate that survives.
+   */
+  withNoCases: number;
 }
 
 // Optional per-collection-template flow tuning from the setup module: some
@@ -245,14 +253,34 @@ function composedObject(
   // The FIRST branch is taken, the convention the combinator path and the mock both already use: a
   // union offers alternatives, not an intersection, so merging them all would invent a shape no
   // branch describes.
-  if (out.required.length === 0 && Object.keys(out.properties).length === 0) {
-    const branches = Array.isArray(s.oneOf) ? s.oneOf : Array.isArray(s.anyOf) ? s.anyOf : null;
-    if (branches && branches.length > 0) {
+  //
+  // The mirror shape was still broken: the node owns `properties` and each branch only says WHICH
+  // of them is mandatory — urlbox's `RenderRequest` is `oneOf: [{required:[url]},
+  // {required:[html]}]` over a shared `properties` block, which is how a two-form POST gets
+  // written. Reading a branch only when the node owned nothing at all left this one composing to
+  // `{}`: the body satisfied no branch, the validator said `anyOf`, and every negative case of the
+  // operation was dropped behind a notice naming crust.
+  //
+  // So read a branch when the view cannot satisfy one. A branch that declares no `required` is
+  // satisfied by any object — that is what keeps the whatsapp shape on the first branch instead of
+  // chasing it — and a branch already satisfied by the node's own `required` is NOT read: adding
+  // the OTHER alternative would make a `oneOf` match two branches and fail the very thing being
+  // composed for. When nothing satisfies the union the FIRST branch is the one, same convention as
+  // above; on the rare union where that branch's own requirements also satisfy a later one, the
+  // base body crust builds is invalid, F33's check says so, and the notice names it.
+  const branches = Array.isArray(s.oneOf) ? s.oneOf : Array.isArray(s.anyOf) ? s.anyOf : null;
+  if (branches && branches.length > 0) {
+    const satisfiedBy = (b: Schema): boolean =>
+      !Array.isArray(b.required) || b.required.every((r) => out.required.includes(r));
+    if (Object.keys(out.properties).length === 0 || !branches.some(satisfiedBy)) {
       const sub = composedObject(branches[0], depth + 1);
       Object.assign(out.properties, sub.properties);
       out.required.push(...sub.required);
     }
   }
+  // A name required both here and by a branch arrives twice. Harmless for a body (assignment is
+  // idempotent), not harmless for a CASE LIST: deriveCases would emit the same case name twice.
+  out.required = [...new Set(out.required)];
   return out;
 }
 
@@ -410,11 +438,161 @@ export function validValue(s: Schema | undefined, key = ""): unknown {
 }
 
 function baseBody(schema: Schema): Record<string, unknown> {
+  // Composed, not `schema.required` / `schema.properties`. A property can be declared by one
+  // `allOf` branch and required by another — Microsoft Graph, 1Password Connect and bitbucket
+  // write bodies this way — and the naive read then finds a required name with no schema beside
+  // it. `validValue(undefined)` answers `"x"`, which fails the validator for a field the base body
+  // never chose, and F33's drop rule correctly takes the operation's cases with it. Measured: 755
+  // of 41,574 corpus operations, 65 specs. This has to be the SAME view `validValue`'s object case
+  // uses and the one deriveCases lists fields from, or the base body and the cases built on it
+  // disagree about what the body is.
+  const { required, properties } = composedObject(schema);
   const body: Record<string, unknown> = {};
-  for (const k of schema.required ?? []) {
-    body[k] = validValue(schema.properties?.[k], k);
+  for (const k of required) {
+    body[k] = validValue(properties[k], k);
   }
   return body;
+}
+
+/**
+ * Which top-level body fields the generated base body does NOT satisfy, by crust's own validator.
+ *
+ * The sampler declines a pattern it cannot build and returns its placeholder, which is knowingly
+ * wrong for the MOCK and quietly wrong for a GENERATOR: the placeholder lands in the base body, so
+ * every case built on that body is invalid in a field it does not mention. The API then 400s for
+ * the placeholder, and a case asserting `fieldErrors has 'name'` either fails against a correct
+ * implementation or passes for a reason that has nothing to do with its own name. `wrongTypeFor`
+ * already refuses to emit a case for a value the API should accept; this is the same rule one level
+ * up, on the body the cases share.
+ *
+ * Pointers come back as `/field` for both a constraint violation and a missing required property,
+ * so an empty string here means a violation of the object itself (minProperties, dependentRequired)
+ * — which blocks every case, since no case is about it.
+ */
+function unsoundFields(body: Record<string, unknown>, schema: unknown): Map<string, string> {
+  const bad = new Map<string, string>();
+  for (const v of validateSchema(body, schema, {} as OpenApiSpec, "")) {
+    const field = v.pointer.replace(/^\//, "").split("/")[0];
+    if (!bad.has(field)) bad.set(field, v.rule);
+  }
+  return bad;
+}
+
+/**
+ * Why NO value satisfies this node, or null when it is merely hard for crust. The one shape that is
+ * certain is an `enum` whose members all fail the node's own constraints: the enum allows only its
+ * members, so if each is rejected nothing is allowed. The validator decides, so `nullable` and 3.1
+ * type arrays are already accounted for. Real corpus shapes: `type: integer` + `format: int32` with
+ * `enum: ["0 (StandardHDD)", …]` (visualstudio's `VMDiskType`, the enum written as YAML strings) and
+ * `type: string` with `enum: [true, false]` (apptigent). Both mean the SPEC has no legal value — and
+ * a notice blaming crust's value sends the reader to fix the wrong repo.
+ */
+function enumDeadEnd(node: Schema): string | null {
+  const en = node.enum as unknown[] | undefined;
+  if (!Array.isArray(en) || en.length === 0) return null;
+  const verdicts = en.map((m) => validateSchema(m, node, {} as OpenApiSpec, ""));
+  if (verdicts.some((v) => v.length === 0)) return null;
+  const shown =
+    en
+      .slice(0, 3)
+      .map((m) => JSON.stringify(m))
+      .join(", ") + (en.length > 3 ? ", …" : "");
+  const rules = [...new Set(verdicts.flat().map((v) => v.rule))].sort().join("/");
+  return `enum [${shown}] fails ${rules}`;
+}
+
+/** Does this node admit `null` by its own declaration (either spec version)? */
+function admitsNull(node: Schema): boolean {
+  if ((node as { nullable?: unknown }).nullable === true) return true;
+  const t = node.type as unknown;
+  return Array.isArray(t) && t.includes("null");
+}
+
+/**
+ * Walk to the point inside a schema where nothing can satisfy it, following only keywords that MUST
+ * hold — a `required` property, `items` when `minItems` demands one, every `allOf` branch — so a
+ * contradiction in something optional is not reported as one. A union is dead only when EVERY branch
+ * is dead. Returns a pointer-style path (`/vmSpecs/diskType`) and the reason, or null meaning crust
+ * could have filled it and did not. Depth-bounded: specs are user input.
+ */
+function specDeadEnd(node: unknown, path = "", depth = 0): string | null {
+  if (!node || typeof node !== "object" || Array.isArray(node) || depth > 8) return null;
+  const n = node as Schema;
+  const dead = enumDeadEnd(n);
+  if (dead) return path ? `${path}: ${dead}` : dead;
+  if (admitsNull(n)) return null;
+  const union =
+    (Array.isArray(n.anyOf) ? n.anyOf : null) ?? (Array.isArray(n.oneOf) ? n.oneOf : null);
+  if (union) {
+    return union.length > 0 && union.every((b) => specDeadEnd(b, path, depth + 1) !== null)
+      ? `every branch of its ${Array.isArray(n.anyOf) ? "anyOf" : "oneOf"} is unsatisfiable`
+      : null;
+  }
+  if (Array.isArray(n.allOf)) {
+    for (const b of n.allOf) {
+      const r = specDeadEnd(b, path, depth + 1);
+      if (r) return r;
+    }
+  }
+  const props = n.properties as Record<string, unknown> | undefined;
+  if (props) {
+    for (const name of Array.isArray(n.required) ? (n.required as string[]) : []) {
+      const r = specDeadEnd(props[name], `${path}/${name}`, depth + 1);
+      if (r) return r;
+    }
+  }
+  if (typeof n.minItems === "number" && n.minItems > 0) {
+    const r = specDeadEnd(n.items, `${path}/0`, depth + 1);
+    if (r) return r;
+  }
+  return null;
+}
+
+/**
+ * Split the fields an unsound body breaks into the spec's own contradiction and crust's value, so
+ * each half is named by whoever is responsible. `field === ""` means the body itself: the walk starts
+ * there too, and a hit along required paths proves the whole body unsatisfiable.
+ */
+function blameFields(
+  bodySchema: Schema,
+  bad: [string, string][],
+): { spec: [string, string][]; crust: [string, string][] } {
+  const props = composedObject(bodySchema).properties as Record<string, unknown> | undefined;
+  const spec: [string, string][] = [];
+  const crust: [string, string][] = [];
+  for (const entry of bad) {
+    const why = specDeadEnd(entry[0] === "" ? bodySchema : props?.[entry[0]]);
+    (why ? spec : crust).push(why ? [entry[0], why] : entry);
+  }
+  return { spec, crust };
+}
+
+/**
+ * One drop notice, blaming the right repo. A spec that allows no value is stated as the spec's
+ * contradiction (and does not repeat crust's rule for the same field); crust's own value keeps the
+ * old wording, since that is the half the reader can file against crust.
+ */
+function blameClause(
+  spec: [string, string][],
+  crust: [string, string][],
+  consequence: string,
+): string {
+  const parts: string[] = [];
+  if (spec.length > 0) {
+    parts.push(
+      `the SPEC contradicts itself: ${spec
+        .map(([field, why]) => (field ? `'${field}' — ${why}` : why))
+        .join("; ")}`,
+    );
+  }
+  if (crust.length > 0) {
+    const named = crust
+      .map(([field, rule]) => (field ? `'${field}' (${rule})` : `the body (${rule})`))
+      .join(", ");
+    parts.push(`crust's own value for ${named} does not satisfy the schema`);
+  }
+  if (parts.length === 0) return `crust's own value does not satisfy the schema, ${consequence}`;
+  return `${parts.join("; ")}, ${consequence}`;
 }
 
 // Minimal sampler for simple digit/dash regexes (^\d{6}$, ^\d{4,16}$,
@@ -491,6 +669,58 @@ interface GenCase {
   responseSchema?: unknown;
 }
 
+/**
+ * An operation whose body cases were dropped because the base body is not schema-valid. Reported to
+ * the caller so a shrunken suite is DISCLOSED rather than silently shipped — the same accounting a
+ * skipped flow gets. Dropping is the honest half: the alternative is a case that 400s for the wrong
+ * reason and passes.
+ */
+interface UnsoundOp {
+  template: string;
+  /** Field ("" = the object itself) and the schema rule crust's own value breaks. */
+  fields: [string, string][];
+  /**
+   * The half of `fields` the SPEC cannot satisfy at all, with the contradiction. Not a subset by
+   * happenstance: a field is here when NO value would have passed, so crust's value is not the defect.
+   */
+  specFaults: [string, string][];
+  /** The complement: fields where crust's own value is what breaks the schema. */
+  crustFaults: [string, string][];
+  /** Cases that survived for this operation. Zero means it has no negative cases left at all. */
+  kept: number;
+  dropped: number;
+}
+
+/**
+ * An operation that documents a request body on a method which cannot carry one (GET, HEAD).
+ * Reported so the missing 400 matrix is DISCLOSED rather than silently absent: crust cannot
+ * generate those cases, because no client can send the request they describe.
+ */
+interface BodylessOp {
+  template: string;
+  /** Cases that still exist for this operation. Zero means it has no negative cases at all. */
+  kept: number;
+}
+
+/**
+ * The operation's request body, when the method can actually carry one.
+ *
+ * A body on GET or HEAD is a body nobody can send: fetch refuses to build the request at all
+ * (`fetch() request with GET/HEAD/OPTIONS method cannot have body.`), and Bun discards one that
+ * a raw client sends anyway — measured through Bun.serve, a GET with `content-length: 13`
+ * arrives and `arrayBuffer()` reads 0 bytes. Reading such a body would make crust generate a
+ * case that errors before it connects, so the body is treated as absent for those methods and
+ * the operation is disclosed by name instead.
+ */
+function canCarryBody(
+  body: Operation["requestBody"],
+  method: string,
+): Operation["requestBody"] | undefined {
+  const m = method.toLowerCase();
+  if (m === "get" || m === "head") return undefined;
+  return body ?? undefined;
+}
+
 function isScopeGated(path: string, firstParam: string | null, scope: ScopeConfig): boolean {
   if (firstParam === null || scope.scopeParam === null) return false;
   if (firstParam === scope.scopeParam) return true;
@@ -499,7 +729,14 @@ function isScopeGated(path: string, firstParam: string | null, scope: ScopeConfi
   return scope.scopeRoots.some((root) => path.startsWith(`${root.replace(/\/+$/, "")}/{`));
 }
 
-function deriveCases(path: string, method: string, op: Operation, scope: ScopeConfig): GenCase[] {
+function deriveCases(
+  path: string,
+  method: string,
+  op: Operation,
+  scope: ScopeConfig,
+  unsound: UnsoundOp[],
+  bodyless: BodylessOp[],
+): GenCase[] {
   const cases: GenCase[] = [];
   const responses = op.responses ?? {};
   const has = (code: number) => String(code) in responses;
@@ -514,9 +751,13 @@ function deriveCases(path: string, method: string, op: Operation, scope: ScopeCo
 
   // Authz cases carry a schema-valid body: routes may validate before the
   // authz middleware, so an empty body could 400 ahead of the 401/403 under
-  // test.
-  const bodySchema = op.requestBody?.content?.["application/json"]?.schema;
-  const authzBody = op.requestBody ? (bodySchema ? baseBody(bodySchema) : {}) : undefined;
+  // test. Except on GET/HEAD, where no client can send one at all — see
+  // `canCarryBody`. The 400 matrix below is derived from the same view, so the
+  // rule is decided once, here.
+  const sendableBody = canCarryBody(op.requestBody, method);
+  const bodySchema = sendableBody?.content?.["application/json"]?.schema;
+  const authzBody = sendableBody ? (bodySchema ? baseBody(bodySchema) : {}) : undefined;
+  const bodylessOp = sendableBody === undefined && op.requestBody !== undefined;
 
   if (requiresAuth) {
     cases.push({
@@ -556,8 +797,11 @@ function deriveCases(path: string, method: string, op: Operation, scope: ScopeCo
   // must resolve to a caller inside the shared scope).
   if (bodySchema && has(400)) {
     const validAuth = requiresAuth ? "member" : "none";
-    const required = bodySchema.required ?? [];
-    const props = bodySchema.properties ?? {};
+    // Same composed view as baseBody, on purpose: the field list drives `missing required '<field>'`
+    // cases, so a name the spec requires through an `allOf` branch would otherwise get no case at
+    // all — and a property declared only in a branch would get a `wrong type` case built from
+    // `undefined`.
+    const { required, properties: props } = composedObject(bodySchema);
     const base = baseBody(bodySchema);
 
     for (const field of required) {
@@ -669,6 +913,36 @@ function deriveCases(path: string, method: string, op: Operation, scope: ScopeCo
         expectValidationCode: true,
       });
     }
+
+    // Attribution. Each case above names ONE field and expects the 400 to name that field back,
+    // which only holds if the rest of the body is valid. It is not when a required field's pattern
+    // could not be built: the placeholder invalidates a field the case never mentions, so the case
+    // passes on the wrong defect or fails against a correct API. Drop those, keep the ones about
+    // the very field that is invalid (whose body's only defect IS what they assert), and report it.
+    const baseBad = unsoundFields(base, bodySchema);
+    if (baseBad.size > 0) {
+      const kept = cases.filter((c) => {
+        // Authz and unknown-param cases carry a body but assert the GATE, which answers before the
+        // body is read — an unsound body cannot make those wrong.
+        if (c.expectValidationField === undefined && c.expectValidationCode !== true) return true;
+        const f = c.expectValidationField;
+        return f !== undefined && baseBad.size === 1 && baseBad.has(f);
+      });
+      const dropped = cases.length - kept.length;
+      if (dropped > 0) {
+        cases.length = 0;
+        cases.push(...kept);
+        const blame = blameFields(bodySchema, [...baseBad]);
+        unsound.push({
+          template: `${method.toUpperCase()} ${path}`,
+          fields: [...baseBad],
+          specFaults: blame.spec,
+          crustFaults: blame.crust,
+          kept: kept.length,
+          dropped,
+        });
+      }
+    }
   }
 
   // Attach the documented response schema (if any) for each case's expected
@@ -677,6 +951,10 @@ function deriveCases(path: string, method: string, op: Operation, scope: ScopeCo
     const media = responses[String(c.expectStatus)]?.content?.["application/json"];
     if (media?.schema !== undefined) c.responseSchema = media.schema;
   }
+
+  // Disclosed, not silently absent: the operation asked for a body crust cannot send.
+  if (bodylessOp)
+    bodyless.push({ template: `${method.toUpperCase()} ${path}`, kept: cases.length });
 
   return cases;
 }
@@ -860,6 +1138,24 @@ function deriveFlows(
       continue;
     }
 
+    // The create step posts a schema-valid body and asserts a 2xx. A body crust cannot fill — a
+    // required field whose pattern it cannot build — 400s against a correct implementation on the
+    // FIRST step, so the flow would fail for a reason nobody wrote. Unless the setup module supplies
+    // the body (the documented escape for exactly this), skip the flow and say why.
+    if (!override?.body) {
+      const bad = [...unsoundFields(baseBody(bodySchema), bodySchema)].filter(
+        ([field]) => field !== "",
+      );
+      if (bad.length > 0) {
+        const blame = blameFields(bodySchema, bad);
+        skipped.push({
+          template,
+          reason: blameClause(blame.spec, blame.crust, "so the create step would 400"),
+        });
+        continue;
+      }
+    }
+
     flows.push({ template, post, itemOps, idPath, envName: "", bodyOverride: override?.body });
   }
 
@@ -917,7 +1213,13 @@ function emitFlow(f: FlowPlan): string {
       // PATCH is a partial update — a single perturbed field is the point.
       // First schema property with a valid value (the update op's own schema
       // when it has one, else the POST's).
-      const props = updateSchema?.properties ?? bodySchema.properties ?? {};
+      // Composed (an update schema can declare its properties only inside an `allOf` branch), while
+      // keeping the original rule: an update schema with nothing of its own still borrows the POST's.
+      const composedUpdate = updateSchema ? composedObject(updateSchema) : null;
+      const props =
+        composedUpdate && Object.keys(composedUpdate.properties).length > 0
+          ? composedUpdate.properties
+          : composedObject(bodySchema).properties;
       const firstKey = Object.keys(props)[0];
       body = firstKey ? { [firstKey]: validValue(props[firstKey], firstKey) } : {};
     } else {
@@ -1065,11 +1367,15 @@ export function derefSchemas(
       if (ctx.cuts === before) ctx.cache.set(ref, resolved);
     }
 
-    const { $ref: _drop, ...rawSiblings } = obj;
-    const siblings = derefSchemas(rawSiblings, spec, stack, ctx) as Record<string, unknown>;
-    // Shared when there is nothing to overlay; a shallow copy when there is. Consumers below read
-    // these nodes structurally and never mutate them, which is what makes sharing safe.
-    return Object.keys(siblings).length === 0 ? resolved : { ...resolved, ...siblings };
+    // Siblings are applied by the SAME rule the mock's synthesiser uses, and that is the whole fix:
+    // this line used to lay EVERY sibling over the resolved target, so britbox's
+    // `{$ref: ItvDeleteAccountRequest, type: string}` became a string carrying `required` and
+    // `properties` — a node nothing can satisfy. `baseBody` built the string, crust's own validator
+    // (`validateRequest.ts`, whose `$ref` rule resolves the ref and validates the resolved node
+    // alone) rejected it, and all four of that spec's JSON-body operations were dropped behind a
+    // notice blaming crust's value. See `withRefSiblings` for why a structural sibling is noise and
+    // a narrowing one is intent, and why dialect is not part of it.
+    return withRefSiblings(obj, resolved);
   }
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(obj)) out[k] = derefSchemas(v, spec, stack, ctx);
@@ -1103,15 +1409,42 @@ export async function generateFixtures(opts: GenerateOpts): Promise<GenerateResu
       (setupMod as { flowOverrides?: Record<string, FlowOverride> }).flowOverrides ?? {},
   };
 
+  const log = opts.log ?? ((line: string) => process.stdout.write(`${line}\n`));
+  const unsound: UnsoundOp[] = [];
+  const bodyless: BodylessOp[] = [];
   const byTag = new Map<string, GenCase[]>();
   for (const [path, methods] of Object.entries(spec.paths ?? {})) {
     for (const [method, op] of Object.entries(methods as Record<string, Operation>)) {
       if (!["get", "post", "patch", "put", "delete"].includes(method)) continue;
       const tag = op.tags?.[0] ?? "untagged";
       const arr = byTag.get(tag) ?? [];
-      arr.push(...deriveCases(path, method, op, scope));
+      arr.push(...deriveCases(path, method, op, scope, unsound, bodyless));
       byTag.set(tag, arr);
     }
+  }
+
+  // Cases dropped for an unfillable body are disclosed here, not left as a silently smaller suite —
+  // and each field is blamed on whoever is responsible. Where the spec allows no value at all the
+  // notice says the SPEC contradicts itself, because "crust's own value" points a reader at the
+  // wrong repo's issue tracker.
+  let withNoCases = 0;
+  for (const u of unsound) {
+    log(
+      `gen-fixtures: ${u.dropped} case(s) skipped for ${u.template} — ${blameClause(u.specFaults, u.crustFaults, "so a 400 from that body would name the wrong field")}`,
+    );
+    if (u.kept === 0) withNoCases++;
+  }
+
+  // The other way an operation can be left with no negative cases: it documents a body on a
+  // method no client can send one with, so its 400 matrix cannot be built at all. Same
+  // accounting as an unsound body — name the operations, and count the ones left empty. A
+  // silently smaller suite is the failure mode this project ranks worst.
+  if (bodyless.length > 0) {
+    const none = bodyless.filter((b) => b.kept === 0).length;
+    log(
+      `gen-fixtures: ${bodyless.length} operation(s) document a request body on GET or HEAD — crust sends no body with those methods (fetch refuses the request), so their 400 matrix is not generated${none > 0 ? `; ${none} of them now have no negative cases at all` : ""}`,
+    );
+    withNoCases += none;
   }
 
   await rm(outDir, { recursive: true, force: true });
@@ -1145,8 +1478,8 @@ ${fixtures}
   // test-pipes with zero extra flags.
   let flowFile: string | null = null;
   let flowCount = 0;
+  let flowSkipped = 0;
   if (opts.flows !== false) {
-    const log = opts.log ?? ((line: string) => process.stdout.write(`${line}\n`));
     const { flows, skipped } = deriveFlows(
       (spec.paths ?? {}) as Record<string, Record<string, Operation>>,
       scope,
@@ -1154,6 +1487,7 @@ ${fixtures}
     for (const s of skipped) {
       log(`gen-fixtures: skipping flow for ${s.template} — ${s.reason}`);
     }
+    flowSkipped = skipped.length;
     if (flows.length > 0) {
       const flowsDir = resolve(outDir, "flows");
       await mkdir(flowsDir, { recursive: true });
@@ -1167,5 +1501,5 @@ ${fixtures}
     }
   }
 
-  return { outDir, files, totalCases, flowFile, flowCount };
+  return { outDir, files, totalCases, flowFile, flowCount, flowSkipped, withNoCases };
 }

@@ -579,7 +579,17 @@ export function validateRequest(
 
   const rb = resolveMaybeRef(route.operation.requestBody, spec) as RequestBodyObject | null;
   if (rb && isPlainObject(rb)) {
-    if (rb.required === true && !input.bodyPresent) {
+    // A required body on GET or HEAD is not enforceable, so crust must not report it: fetch
+    // refuses to build such a request (`fetch() request with GET/HEAD/OPTIONS method cannot
+    // have body.`), and Bun discards one that a raw client sends anyway — measured through
+    // Bun.serve, `content-length: 13` reaches the handler and `arrayBuffer()` reads 0 bytes.
+    // Rejecting every GET for a body no client can deliver invents a violation of a request
+    // nobody can lawfully send, which is the one thing --validate promises not to do. A body
+    // that DOES arrive is still validated below: this says "you cannot require one", not
+    // "bodies on GET are ignored".
+    const bodyIsRequired =
+      rb.required === true && route.method !== "GET" && route.method !== "HEAD";
+    if (bodyIsRequired && !input.bodyPresent) {
       out.push(
         toViolation(
           {

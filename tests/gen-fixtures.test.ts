@@ -11,7 +11,7 @@ import {
   validValue,
   wrongTypeFor,
 } from "../src/genFixtures/generate";
-import type { OpenApiSpec } from "../src/mockServer/loadSpec";
+import { loadSpec, type OpenApiSpec } from "../src/mockServer/loadSpec";
 import { startServer } from "../src/mockServer/server";
 import { validateSchema } from "../src/mockServer/validateRequest";
 import { runPipes } from "../src/testPipes/runner";
@@ -1235,17 +1235,32 @@ describe("derefSchemas does not materialise an exponential tree", () => {
     expect((out.properties as Record<string, unknown>).self).toEqual({});
   });
 
-  // Control: $ref siblings still merge over the resolved target.
-  test("siblings still override the resolved target", () => {
+  // Control: `$ref` siblings are applied by the MOCK's rule, not by "everything wins" — the F44
+  // describe at the end of this file says why, and what the old blanket merge cost.
+  test("a narrowing sibling overlays the referenced schema; a structural one does not", () => {
     const spec = {
-      components: { schemas: { S: { type: "string", description: "base" } } },
+      components: { schemas: { S: { type: "string", enum: ["a"], description: "base" } } },
     } as never;
-    const out = derefSchemas(
+    const narrowed = derefSchemas(
+      { $ref: "#/components/schemas/S", pattern: "^a$" },
+      spec,
+    ) as Record<string, unknown>;
+    expect(narrowed.pattern).toBe("^a$");
+    expect(narrowed.enum).toEqual(["a"]); // the target's own narrowing survives
+    // A conflicting `type` is conversion noise in 118 of the 180 corpus specs that write one (they
+    // are Swagger 2.0 conversions), and crust does not guess which keyword the author meant.
+    const structural = derefSchemas(
+      { $ref: "#/components/schemas/S", type: "integer" },
+      spec,
+    ) as Record<string, unknown>;
+    expect(structural.type).toBe("string");
+    // Annotations are noise for both halves: the target's own survives, and no case ever depended
+    // on a description.
+    const annotated = derefSchemas(
       { $ref: "#/components/schemas/S", description: "mine" },
       spec,
     ) as Record<string, unknown>;
-    expect(out.type).toBe("string");
-    expect(out.description).toBe("mine");
+    expect(annotated.description).toBe("base");
   });
 });
 
@@ -1348,6 +1363,189 @@ describe("no wrong-type case is generated that cannot fail", () => {
     ).join("\n");
     expect(written).toContain("wrong type for 'tight'");
     expect(written).not.toContain("wrong type for 'loose'");
+  });
+});
+
+describe("a base body crust cannot fill does not carry cases it cannot attribute", () => {
+  // The sampler declines a pattern it cannot read and returns `gen-value-x`, which is knowingly
+  // wrong for the MOCK and was silently wrong for the GENERATOR: the placeholder went into the base
+  // body that every 400-case perturbs, so a case about field `name` shipped a body invalid in
+  // `subnetId`. Against a real API that 400 names subnetId — the case fails a correct implementation
+  // or passes for a reason unrelated to its own name. The corpus: 1,799 fields, 1,077 of them an
+  // alternation pattern (measured field-by-field across all 4,138 specs).
+  //
+  // crust owns the validator, so the honest move is the one `wrongTypeFor` already takes: do not
+  // emit a case that cannot fail for the reason it names — and say what was dropped, so a smaller
+  // suite is disclosed rather than quietly shipped.
+  //
+  // Both halves matter, and the second one was missing. Dropping is only correct for a pattern that
+  // is genuinely unreadable; the alternation share of that number was the builder refusing `(?:…)`,
+  // `(a|b)` and `(…){n}` — which it reads now (see mock-server.test.ts), so the same rule drops far
+  // less. What remains is lookaheads, JS regex literals written into `pattern`, and `\A`/`\Z`.
+  let dir: string;
+  beforeAll(async () => {
+    dir = await mkdtemp(join(tmpdir(), "crust-gen-unsound-"));
+  });
+  afterAll(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  async function emit(name: string, spec: Record<string, unknown>) {
+    const specPath = join(dir, `${name}.json`);
+    await writeFile(specPath, JSON.stringify(spec));
+    const setupPath = join(dir, `${name}.setup.ts`);
+    await writeFile(
+      setupPath,
+      "export const scopeParam = null;\nexport async function shared() { return {}; }\n" +
+        "export function headersFor() { return { 'content-type': 'application/json' }; }\n" +
+        "export function resolvePath(_c, t) { return 'http://127.0.0.1:1' + t; }\n",
+    );
+    const notes: string[] = [];
+    const result = await generateFixtures({
+      swagger: specPath,
+      out: join(dir, `out-${name}`),
+      setup: setupPath,
+      log: (line) => notes.push(line),
+    });
+    const text =
+      (
+        await Promise.all(
+          result.files.map((f) =>
+            Bun.file(f)
+              .text()
+              .catch(() => ""),
+          ),
+        )
+      ).join("\n") + (result.flowFile ? await Bun.file(result.flowFile).text() : "");
+    return { text, notes, result };
+  }
+
+  /** A body with one pattern the sampler cannot read and one plain string. */
+  const withPattern = (pattern: string, extra: Record<string, unknown> = {}) => ({
+    openapi: "3.0.0",
+    paths: {
+      "/things": {
+        post: {
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["subnetId", "name"],
+                  properties: {
+                    subnetId: { type: "string", pattern },
+                    name: { type: "string" },
+                  },
+                },
+              },
+            },
+          },
+          responses: { "200": { description: "ok" }, "400": { description: "bad" }, ...extra },
+        },
+      },
+    },
+  });
+
+  // Moved 2026-10-07. The shape the corpus is full of — an AWS subnet id, an alternation inside a
+  // group — used to be unbuildable, and it is now BUILT (see the group tests in mock-server.test.ts).
+  // So the drop rule is pinned here with a pattern the wider builder still refuses: a lookahead
+  // bolted onto the same corpus shape, so the rule is tested against the field it was written for
+  // rather than a convenient one. `NOW_READ` is the flip side and is asserted below, because a drop
+  // rule that cannot tell these apart is how coverage quietly disappears.
+  const UNREADABLE = "^(subnet-[0-9a-f]{8}|subnet-[0-9a-f]{17})(?!z)$";
+  const NOW_READ = "^(subnet-[0-9a-f]{8}|subnet-[0-9a-f]{17})$";
+
+  test("cases about another field are dropped; cases about that field are kept", async () => {
+    const { text, notes } = await emit("gap", withPattern(UNREADABLE));
+    // Kept: the only defect in these bodies IS the field they assert.
+    expect(text).toContain("missing required 'subnetId'");
+    expect(text).toContain("wrong type for 'subnetId'");
+    // Dropped: their 400 would name subnetId, not name.
+    expect(text).not.toContain("missing required 'name'");
+    expect(text).not.toContain("wrong type for 'name'");
+    // And disclosed, naming the field and the rule it breaks.
+    expect(notes.join("\n")).toContain("case(s) skipped for POST /things");
+    expect(notes.join("\n")).toContain("'subnetId' (pattern)");
+  });
+
+  // The falsifier for the drop rule: it fires because the body is unsound, not because a pattern is
+  // present. Reading one more family of patterns must not turn the rule into a blanket refusal — that
+  // is how a generator loses coverage without anyone deciding to.
+  test("a pattern the builder reads is not dropped, whatever its shape", async () => {
+    const { text, notes } = await emit("gap-read", withPattern(NOW_READ));
+    expect(text).toContain("missing required 'name'");
+    expect(text).toContain("wrong type for 'name'");
+    expect(notes.join("\n")).not.toContain("skipped");
+  });
+
+  test("control: a pattern crust can fill emits every case and says nothing", async () => {
+    const { text, notes } = await emit("ok", withPattern("^[0-9]{6}$"));
+    expect(text).toContain("missing required 'subnetId'");
+    expect(text).toContain("missing required 'name'");
+    expect(text).toContain("wrong type for 'name'");
+    expect(notes.join("\n")).not.toContain("skipped");
+  });
+
+  test("control: the authz case survives, because the gate answers before the body is read", async () => {
+    const { text } = await emit(
+      "gap-auth",
+      withPattern(UNREADABLE, { "401": { description: "the caller is not authenticated" } }),
+    );
+    expect(text).toContain("without credentials -> 401");
+  });
+
+  test("a CRUD flow whose create body crust cannot fill is skipped, not shipped", async () => {
+    const flow = (pattern: string) => ({
+      openapi: "3.0.0",
+      paths: {
+        "/things": {
+          post: {
+            requestBody: {
+              required: true,
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    required: ["subnetId"],
+                    properties: { subnetId: { type: "string", pattern } },
+                  },
+                },
+              },
+            },
+            responses: {
+              "201": {
+                description: "created",
+                content: {
+                  "application/json": {
+                    schema: {
+                      type: "object",
+                      required: ["id"],
+                      properties: { id: { type: "string" } },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+        "/things/{id}": {
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          get: { responses: { "200": { description: "the thing" } } },
+          delete: { responses: { "204": { description: "gone" } } },
+        },
+      },
+    });
+    const bad = await emit("flow-gap", flow(UNREADABLE));
+    expect(bad.result.flowCount).toBe(0);
+    expect(bad.result.flowSkipped).toBe(1);
+    expect(bad.notes.join("\n")).toContain("skipping flow for /things");
+    expect(bad.text).not.toContain("POST http");
+
+    const good = await emit("flow-ok", flow("^[0-9]{6}$"));
+    expect(good.result.flowCount).toBe(1);
+    expect(good.result.flowSkipped).toBe(0);
+    expect(good.text).toContain("assert");
   });
 });
 
@@ -1686,5 +1884,1018 @@ describe("gen-fixtures: a missing setup module explains itself", () => {
     expect(err).toContain("examples/gen-setup.ts");
     // and it must not read as a crust crash: no internal source path
     expect(err).not.toContain("src/genFixtures/generate.ts");
+  });
+});
+
+describe("an allOf-composed request body (F36)", () => {
+  // Measured on the corpus before this fix: 755 of 41,574 operations (65 specs — Microsoft Graph
+  // 112, graph-beta 72, bitbucket 46, digitalocean 27…) had a base body that failed crust's OWN
+  // validator, and 0 of them had chosen a bad value. The property was declared in one `allOf`
+  // branch and required in another; `baseBody` read `schema.required` / `schema.properties`
+  // directly, found a required name with no schema beside it, and `validValue(undefined)` answered
+  // `"x"`. F33's drop rule then did exactly what it is told: it removed the operation's cases and
+  // blamed crust's value. Same for the field LIST — a name required only by a branch got no
+  // `missing required` case at all.
+  //
+  // The rule the fix installs: the base body, the field list and `validValue`'s object case all
+  // read the body through ONE composed view, because a body is one object to the validator.
+  let dir: string;
+  beforeAll(async () => {
+    dir = await mkdtemp(join(tmpdir(), "crust-gen-allof-"));
+  });
+  afterAll(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  async function emit(name: string, schema: Record<string, unknown>) {
+    const specPath = join(dir, `${name}.json`);
+    await writeFile(
+      specPath,
+      JSON.stringify({
+        openapi: "3.0.0",
+        paths: {
+          "/things": {
+            post: {
+              requestBody: { required: true, content: { "application/json": { schema } } },
+              responses: { "200": { description: "ok" }, "400": { description: "bad" } },
+            },
+          },
+        },
+      }),
+    );
+    const setupPath = join(dir, `${name}.setup.ts`);
+    await writeFile(
+      setupPath,
+      "export const scopeParam = null;\nexport async function shared() { return {}; }\n" +
+        "export function headersFor() { return { 'content-type': 'application/json' }; }\n" +
+        "export function resolvePath(_c, t) { return 'http://127.0.0.1:1' + t; }\n",
+    );
+    const notes: string[] = [];
+    const result = await generateFixtures({
+      swagger: specPath,
+      out: join(dir, `out-${name}`),
+      setup: setupPath,
+      log: (line) => notes.push(line),
+    });
+    const text = (
+      await Promise.all(
+        result.files.map((f) =>
+          Bun.file(f)
+            .text()
+            .catch(() => ""),
+        ),
+      )
+    ).join("\n");
+    return { text, notes };
+  }
+
+  // The corpus shape: two branches, each declaring AND requiring its own property. 1Password
+  // Connect writes exactly this (`vault` + `category`); Graph writes it 112 times.
+  const TWO_BRANCHES = {
+    type: "object",
+    allOf: [
+      { required: ["vault"], properties: { vault: { type: "string" } } },
+      { required: ["category"], properties: { category: { type: "string" } } },
+    ],
+  };
+
+  test("a required name living in a branch gets its cases, not a placeholder", async () => {
+    const { text, notes } = await emit("branches", TWO_BRANCHES);
+    // Coverage the naive read never produced: these two cases did not exist before the fix.
+    expect(text).toContain("missing required 'vault'");
+    expect(text).toContain("missing required 'category'");
+    expect(text).toContain("wrong type for 'vault'");
+    // And the base body is sound, so the drop rule stays silent. This assertion IS the validator's
+    // verdict: the notice is printed by unsoundFields, from crust's own validateSchema.
+    expect(notes.join("\n")).not.toContain("skipped");
+  });
+
+  test('the base body carries a real value for a branch field, not "x"', async () => {
+    const { text } = await emit("branch-values", {
+      type: "object",
+      additionalProperties: false,
+      allOf: [
+        { required: ["code"], properties: { code: { type: "string", pattern: "^CN-[0-9]{4}$" } } },
+      ],
+    });
+    // The `unexpected extra property` case sends the base body plus one unknown key, so the emitted
+    // body is the base body in the flesh: the field must hold something its pattern accepts. Before
+    // the fix this line read "code":"x" — a value crust invented for a field it never looked up.
+    expect(text).toContain("crustUnexpectedProp");
+    expect(text).toMatch(/\\"code\\":\\"CN-\d{4}\\"/);
+    expect(text).not.toMatch(/\\"code\\":\\"x\\"/);
+  });
+
+  test("a name required twice is not a case twice", async () => {
+    const { text } = await emit("dupe", {
+      type: "object",
+      required: ["kind"],
+      allOf: [{ required: ["kind"], properties: { kind: { type: "string" } } }],
+    });
+    const hits = text.match(/missing required 'kind'/g) ?? [];
+    expect(hits.length).toBe(1);
+  });
+
+  test("a union body composes to its first branch, the convention everywhere else", async () => {
+    // ably.io writes request bodies as a top-level anyOf; the naive empty `{}` failed the union and
+    // the whole operation lost its body cases.
+    const { text, notes } = await emit("union", {
+      anyOf: [
+        { required: ["ruleType"], properties: { ruleType: { type: "string" } } },
+        { required: ["requestMode"], properties: { requestMode: { type: "string" } } },
+      ],
+    });
+    expect(text).toContain("missing required 'ruleType'");
+    expect(notes.join("\n")).not.toContain("skipped");
+  });
+
+  // Falsifier: composition is not a licence to call every body sound. An unsatisfiable field inside
+  // a branch must still drop the OTHER fields' cases and still be disclosed, naming that field.
+  test("control: an unsound field inside a branch still drops and still says so", async () => {
+    const { text, notes } = await emit("branch-unsound", {
+      type: "object",
+      allOf: [
+        {
+          required: ["subnetId"],
+          properties: {
+            subnetId: { type: "string", pattern: "^(subnet-[0-9a-f]{8})(?!z)$" },
+          },
+        },
+        { required: ["name"], properties: { name: { type: "string" } } },
+      ],
+    });
+    expect(text).toContain("missing required 'subnetId'");
+    expect(text).not.toContain("missing required 'name'");
+    expect(notes.join("\n")).toContain("'subnetId' (pattern)");
+  });
+
+  test("control: a flat body is untouched by the composed view", async () => {
+    const { text, notes } = await emit("flat", {
+      type: "object",
+      required: ["a"],
+      properties: { a: { type: "string" } },
+    });
+    expect(text).toContain("missing required 'a'");
+    expect(text).not.toContain("missing required 'vault'");
+    expect(notes.join("\n")).not.toContain("skipped");
+  });
+});
+
+describe("a drop notice blames whoever is responsible", () => {
+  // The base-body check says "crust's own value for 'vmSpecs' (type) does not satisfy the schema".
+  // Half of that is a lie about where the defect lives. visualstudio.com/v1 declares
+  //   VMDiskType: {type: integer, format: int32, enum: ["0 (StandardHDD)", "1 (StandardSSD)", …]}
+  // — the enum members are YAML strings beside an int32, so NO value satisfies the node, and no
+  // generator on earth would fill that field. apptigent writes {type: string, enum: [true, false]}
+  // for the same effect. Saying "crust's own value" sends the reader to open an issue against the
+  // wrong repo, and the honest disclosure the F33 rule bought is then aimed at nothing.
+  //
+  // So the notice asks the validator the only question that settles it: does any member of that
+  // enum satisfy the node holding it? All fail => the SPEC contradicts itself, and the walk says
+  // WHERE (/diskType), because the reported field is the outer one. The controls are the load-
+  // bearing half: a contradiction in something OPTIONAL, in a union branch that is alive, or in an
+  // enum that agrees with its own type must not be reported as the spec's, or the escape hatch
+  // becomes a way to stop reading crust's own bugs.
+  let dir: string;
+  beforeAll(async () => {
+    dir = await mkdtemp(join(tmpdir(), "crust-gen-blame-"));
+  });
+  afterAll(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  async function emit(name: string, schema: Record<string, unknown>) {
+    const specPath = join(dir, `${name}.json`);
+    const spec = {
+      openapi: "3.0.0",
+      paths: {
+        "/things": {
+          post: {
+            requestBody: {
+              required: true,
+              content: { "application/json": { schema } },
+            },
+            responses: { "200": { description: "ok" }, "400": { description: "bad" } },
+          },
+        },
+      },
+    };
+    await writeFile(specPath, JSON.stringify(spec));
+    const setupPath = join(dir, `${name}.setup.ts`);
+    await writeFile(
+      setupPath,
+      "export const scopeParam = null;\nexport async function shared() { return {}; }\n" +
+        "export function headersFor() { return { 'content-type': 'application/json' }; }\n" +
+        "export function resolvePath(_c, t) { return 'http://127.0.0.1:1' + t; }\n",
+    );
+    const notes: string[] = [];
+    const result = await generateFixtures({
+      swagger: specPath,
+      out: join(dir, `out-${name}`),
+      setup: setupPath,
+      log: (line) => notes.push(line),
+    });
+    const text = (
+      await Promise.all(
+        result.files.map((f) =>
+          Bun.file(f)
+            .text()
+            .catch(() => ""),
+        ),
+      )
+    ).join("\n");
+    return { text, notes, result };
+  }
+
+  /** The corpus's unsatisfiable field, and one crust genuinely cannot build. */
+  const VM_SPECS = {
+    type: "object",
+    required: ["diskType"],
+    properties: {
+      diskType: {
+        type: "integer",
+        format: "int32",
+        enum: ["0 (StandardHDD)", "1 (StandardSSD)", "2 (PremiumSSD)"],
+      },
+    },
+  };
+  const UNREADABLE = { type: "string", pattern: "^(subnet-[0-9a-f]{8})(?!z)$" };
+  const body = (properties: Record<string, unknown>, required: string[]) => ({
+    type: "object",
+    properties,
+    required,
+  });
+
+  // `name` is the innocent bystander. A body with ONE unsound field drops nothing (every case is
+  // about that field, so each keeps its own blame) and so prints nothing — the notice only exists
+  // where cases were actually dropped, which is the right rule and makes the bystander necessary.
+  const INNOCENT = { type: "string" };
+
+  test("a spec that allows no value is named as the spec's own contradiction", async () => {
+    const { text, notes } = await emit(
+      "spec-dead",
+      body({ vmSpecs: VM_SPECS, name: INNOCENT }, ["vmSpecs", "name"]),
+    );
+    const joined = notes.join("\n");
+    expect(joined).toContain("case(s) skipped for POST /things");
+    expect(joined).toContain("the SPEC contradicts itself");
+    expect(joined).toContain("'vmSpecs'");
+    // Where, not just which field: the contradiction is one level below the reported field.
+    expect(joined).toContain("/diskType");
+    expect(joined).toContain('"0 (StandardHDD)"');
+    expect(joined).toContain("fails type");
+    // The half that was the lie: nothing blames crust for a field nothing can fill.
+    expect(joined).not.toContain("crust's own value");
+    // The drop itself is unchanged by who is blamed: cases about other fields go.
+    expect(text).toContain("missing required 'vmSpecs'");
+    expect(text).not.toContain("missing required 'name'");
+  });
+
+  test("a crust gap keeps the wording that names crust, byte for byte", async () => {
+    const { notes } = await emit(
+      "crust-gap",
+      body({ subnetId: UNREADABLE, name: INNOCENT }, ["subnetId", "name"]),
+    );
+    const joined = notes.join("\n");
+    expect(joined).toContain(
+      "crust's own value for 'subnetId' (pattern) does not satisfy the schema, so a 400 from " +
+        "that body would name the wrong field",
+    );
+    expect(joined).not.toContain("SPEC contradicts");
+  });
+
+  test("one body, both halves: each field is named by whoever is responsible", async () => {
+    const { notes } = await emit(
+      "mixed",
+      body({ vmSpecs: VM_SPECS, subnetId: UNREADABLE }, ["vmSpecs", "subnetId"]),
+    );
+    const joined = notes.join("\n");
+    expect(joined).toContain("the SPEC contradicts itself: 'vmSpecs'");
+    expect(joined).toContain("crust's own value for 'subnetId' (pattern)");
+  });
+
+  test("control: an enum that agrees with its own type is not a contradiction", async () => {
+    const { text, notes } = await emit(
+      "enum-ok",
+      body({ diskType: { type: "string", enum: ["StandardHDD", "PremiumSSD"] }, name: INNOCENT }, [
+        "diskType",
+        "name",
+      ]),
+    );
+    expect(notes.join("\n")).not.toContain("skipped");
+    expect(text).toContain("wrong type for 'diskType'");
+  });
+
+  test("control: a contradiction in an OPTIONAL field is crust's to omit, not the spec's to blame", async () => {
+    // baseBody fills required fields only, so an unsatisfiable optional field costs nothing. Were
+    // the walk to descend through optional properties it would report a dead end crust never
+    // entered — and the notice would stop being evidence.
+    const { notes } = await emit(
+      "optional-dead",
+      body({ vmSpecs: VM_SPECS, name: { type: "string" } }, ["name"]),
+    );
+    expect(notes.join("\n")).not.toContain("skipped");
+  });
+
+  test("control: a union with one live branch is crust choosing a branch, not the spec", async () => {
+    const { notes } = await emit(
+      "union-alive",
+      body(
+        {
+          diskType: {
+            anyOf: [{ type: "integer", enum: ["0 (StandardHDD)"] }, { type: "boolean" }],
+          },
+          name: INNOCENT,
+        },
+        ["diskType", "name"],
+      ),
+    );
+    const joined = notes.join("\n");
+    // crust composes a union to its first branch (see the F36 tests) and its value satisfies
+    // neither; `type: boolean` is satisfiable, so this one is crust's to fix and must read that way.
+    expect(joined).toContain("crust's own value for 'diskType' (anyOf)");
+    expect(joined).not.toContain("SPEC contradicts");
+  });
+
+  test("control: a union where every branch is impossible IS the spec's", async () => {
+    const { notes } = await emit(
+      "union-dead",
+      body(
+        {
+          diskType: {
+            anyOf: [
+              { type: "integer", enum: ["a"] },
+              { type: "string", enum: [1] },
+            ],
+          },
+          name: INNOCENT,
+        },
+        ["diskType", "name"],
+      ),
+    );
+    const joined = notes.join("\n");
+    expect(joined).toContain("the SPEC contradicts itself: 'diskType'");
+    expect(joined).toContain("every branch of its anyOf is unsatisfiable");
+    expect(joined).not.toContain("crust's own value");
+  });
+
+  // A CRUD-shaped spec: the flow derivation needs a create whose 2xx carries an id and an item path
+  // with a 404, or the flow is never a candidate and the create-body check never runs.
+  async function emitCrud(name: string, schema: Record<string, unknown>) {
+    const specPath = join(dir, `${name}.json`);
+    await writeFile(
+      specPath,
+      JSON.stringify({
+        openapi: "3.0.0",
+        paths: {
+          "/things": {
+            post: {
+              requestBody: { required: true, content: { "application/json": { schema } } },
+              responses: {
+                "201": {
+                  description: "created",
+                  content: {
+                    "application/json": {
+                      schema: {
+                        type: "object",
+                        required: ["id"],
+                        properties: { id: { type: "string" } },
+                        example: { id: "abc123" },
+                      },
+                    },
+                  },
+                },
+                "400": { description: "bad" },
+              },
+            },
+            get: { responses: { "200": { description: "ok" } } },
+          },
+          "/things/{thingId}": {
+            parameters: [
+              { name: "thingId", in: "path", required: true, schema: { type: "string" } },
+            ],
+            get: { responses: { "200": { description: "ok" }, "404": { description: "nope" } } },
+            put: {
+              requestBody: { required: true, content: { "application/json": { schema } } },
+              responses: { "200": { description: "ok" }, "400": { description: "bad" } },
+            },
+            delete: {
+              responses: { "204": { description: "gone" }, "404": { description: "nope" } },
+            },
+          },
+        },
+      }),
+    );
+    const setupPath = join(dir, `${name}.setup.ts`);
+    await writeFile(
+      setupPath,
+      "export const scopeParam = null;\nexport async function shared() { return {}; }\n" +
+        "export function headersFor() { return { 'content-type': 'application/json' }; }\n" +
+        "export function resolvePath(_c, t) { return 'http://127.0.0.1:1' + t; }\n",
+    );
+    const notes: string[] = [];
+    const result = await generateFixtures({
+      swagger: specPath,
+      out: join(dir, `out-${name}`),
+      setup: setupPath,
+      log: (line) => notes.push(line),
+    });
+    return { notes, result };
+  }
+
+  test("a contradiction in a create body is the spec's too, in the flow notice", async () => {
+    const { notes, result } = await emitCrud("flow-dead", body({ vmSpecs: VM_SPECS }, ["vmSpecs"]));
+    const joined = notes.join("\n");
+    expect(result.flowSkipped).toBe(1);
+    expect(joined).toContain("skipping flow for /things");
+    expect(joined).toContain("the SPEC contradicts itself: 'vmSpecs' — /diskType");
+    expect(joined).not.toContain("crust's own value");
+  });
+
+  test("control: a create body crust cannot fill still says so, word for word as before", async () => {
+    const { notes } = await emitCrud("flow-crust", body({ subnetId: UNREADABLE }, ["subnetId"]));
+    expect(notes.join("\n")).toContain(
+      "crust's own value for 'subnetId' (pattern) does not satisfy the schema, so the create " +
+        "step would 400",
+    );
+  });
+
+  test("the result counts operations left with no negative cases at all", async () => {
+    // Two unsatisfiable fields: the keep-rule needs the asserted field to be the ONLY bad one, so
+    // every 400 case for this operation goes. "40 cases dropped" and "this operation is uncovered"
+    // are different facts, and the notices get filtered by harnesses — the count is the aggregate
+    // that survives.
+    const dead = await emit(
+      "all-gone",
+      body({ vmSpecs: VM_SPECS, subnetId: UNREADABLE }, ["vmSpecs", "subnetId"]),
+    );
+    expect(dead.result.withNoCases).toBe(1);
+    expect(dead.text).not.toContain("wrong type for 'subnetId'");
+  });
+
+  test("control: the count is operations, not notices and not cases", async () => {
+    // The CRUD-shaped spec hits the same unsound body twice — create and update are two operations,
+    // so it says 2. Four cases go per operation, which is not the number being counted.
+    const both = await emitCrud(
+      "all-gone-crud",
+      body({ vmSpecs: VM_SPECS, subnetId: UNREADABLE }, ["vmSpecs", "subnetId"]),
+    );
+    expect(both.result.withNoCases).toBe(2);
+  });
+
+  test("control: an operation that keeps its own cases is not counted as uncovered", async () => {
+    // Cases ASSERTING the unsatisfiable field survive (that body cannot be wrong about anything
+    // else), so the operation keeps negative coverage even though its neighbour's cases went.
+    const partial = await emit(
+      "one-field",
+      body({ vmSpecs: VM_SPECS, name: INNOCENT }, ["vmSpecs", "name"]),
+    );
+    expect(partial.notes.join("\n")).toContain("case(s) skipped");
+    expect(partial.text).toContain("missing required 'vmSpecs'");
+    expect(partial.result.withNoCases).toBe(0);
+  });
+});
+
+describe("a union body whose branch carries the required (F43)", () => {
+  // urlbox.io writes a two-form POST the way anyone would: the node declares the fields ONCE, and
+  // each union branch says which one of them this form needs —
+  //   {oneOf: [{required: ["url"]}, {required: ["html"]}], properties: {url, html, format, …}}
+  // The composed read took a union branch only when the node owned NOTHING at all, so this one
+  // composed to `{}`: the base body satisfied no branch, crust's validator answered `anyOf`, and
+  // F33's honest rule removed EVERY negative case of the operation behind a notice blaming crust's
+  // own value. urlbox generated 0 cases from the whole spec; 23 of the corpus's specs were in that
+  // state, and 21 of them reported no negative cases at all (the 93 operations are the static
+  // census — skills.src/crust-dogfood/scripts/gen_union_bodies.py).
+  //
+  // So read a branch when the view cannot satisfy one — and the controls are what make that rule
+  // mean something. A branch already satisfied by the node's own `required` is NOT read: for a
+  // `oneOf`, adding the other alternative would make the base body match TWO branches and fail the
+  // very thing being composed for. A branch with no `required` is satisfied by anything, which is
+  // what keeps whatsapp on the first branch. And `allOf` stays an intersection: every branch, no
+  // choosing.
+  let dir: string;
+  beforeAll(async () => {
+    dir = await mkdtemp(join(tmpdir(), "crust-gen-union-"));
+  });
+  afterAll(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  async function emit(name: string, schema: Record<string, unknown>) {
+    const specPath = join(dir, `${name}.json`);
+    const spec = {
+      openapi: "3.0.0",
+      paths: {
+        "/things": {
+          post: {
+            requestBody: {
+              required: true,
+              content: { "application/json": { schema } },
+            },
+            responses: { "200": { description: "ok" }, "400": { description: "bad" } },
+          },
+        },
+      },
+    };
+    await writeFile(specPath, JSON.stringify(spec));
+    const setupPath = join(dir, `${name}.setup.ts`);
+    await writeFile(
+      setupPath,
+      "export const scopeParam = null;\nexport async function shared() { return {}; }\n" +
+        "export function headersFor() { return { 'content-type': 'application/json' }; }\n" +
+        "export function resolvePath(_c, t) { return 'http://127.0.0.1:1' + t; }\n",
+    );
+    const notes: string[] = [];
+    const result = await generateFixtures({
+      swagger: specPath,
+      out: join(dir, `out-${name}`),
+      setup: setupPath,
+      log: (line) => notes.push(line),
+    });
+    const text = (
+      await Promise.all(
+        result.files.map((f) =>
+          Bun.file(f)
+            .text()
+            .catch(() => ""),
+        ),
+      )
+    ).join("\n");
+    return { text, notes, result };
+  }
+
+  const RENDER = {
+    oneOf: [{ required: ["url"] }, { required: ["html"] }],
+    properties: {
+      url: { type: "string" },
+      html: { type: "string" },
+      format: { type: "string", enum: ["png", "json"] },
+    },
+  };
+
+  test("the branch's field gets cases, and no operation is emptied behind a notice", async () => {
+    const r = await emit("urlbox-shape", RENDER);
+    expect(r.notes.join("\n")).not.toContain("case(s) skipped");
+    expect(r.result.withNoCases).toBe(0);
+    expect(r.text).toContain("missing required 'url'");
+    // the base body carries a real value for the branch's field — not `{}`, and not `"x"`
+    expect(r.text).toContain(
+      '"{\\"url\\":\\"gen-value-x\\",\\"format\\":\\"__not_a_real_enum_value__\\"}"',
+    );
+  });
+
+  test("anyOf behaves the same way (linode writes records this shape)", async () => {
+    const r = await emit("anyof-shape", {
+      anyOf: [{ required: ["country"] }, { required: ["state"] }],
+      properties: { country: { type: "string" }, state: { type: "string" } },
+    });
+    expect(r.notes.join("\n")).not.toContain("case(s) skipped");
+    expect(r.text).toContain("missing required 'country'");
+  });
+
+  test("a node that requires its own field and a branch that requires another satisfies both", async () => {
+    // anyOf with BOTH requirements holds: the body has to carry `a` for the node and `b` for the
+    // branch, so both names must appear in the composed view or every case dies with the base body.
+    const r = await emit("node-and-branch", {
+      anyOf: [{ required: ["b"] }],
+      required: ["a"],
+      properties: { a: { type: "string" }, b: { type: "integer" } },
+    });
+    expect(r.notes.join("\n")).not.toContain("case(s) skipped");
+    expect(r.text).toContain("missing required 'a'");
+    expect(r.text).toContain("missing required 'b'");
+  });
+
+  test("control: a oneOf the node already satisfies is not widened to the second branch", async () => {
+    // The trap in the fix. The node requires `a`, which satisfies branch one; merging branch two
+    // would give a body matching BOTH branches, and `oneOf` means exactly one — so the base body
+    // crust builds to satisfy the union would be the thing that breaks it.
+    const r = await emit("oneof-exactly-one", {
+      oneOf: [{ required: ["a"] }, { required: ["b"] }],
+      required: ["a"],
+      properties: { a: { type: "string" }, b: { type: "string" } },
+    });
+    expect(r.notes.join("\n")).not.toContain("case(s) skipped");
+    expect(r.text).toContain("missing required 'a'");
+    expect(r.text).not.toContain("missing required 'b'");
+  });
+
+  test("control: a branch that requires nothing is satisfied by a body that requires nothing", async () => {
+    // Vacuous branch = any body matches, so the union is already satisfied and reading another
+    // branch would only invent a requirement the spec never asked for.
+    const r = await emit("branch-vacuous", {
+      anyOf: [{}, { required: ["b"] }],
+      properties: { a: { type: "string" }, b: { type: "string" } },
+    });
+    expect(r.notes.join("\n")).not.toContain("case(s) skipped");
+    expect(r.text).not.toContain("missing required 'b'");
+  });
+
+  test("control: the whatsapp shape still takes branch one, required included", async () => {
+    // The shape the rule already handled (the node leaves the whole shape to the branch). Branch
+    // two's `image` must stay out of the required set — taking both branches would invent a body
+    // needing audio AND image, which is no branch's request.
+    const r = await emit("branch-owns-shape", {
+      type: "object",
+      oneOf: [
+        {
+          properties: { audio: { type: "string" }, caption: { type: "string" } },
+          required: ["audio"],
+        },
+        { properties: { image: { type: "string" } }, required: ["image"] },
+      ],
+    });
+    expect(r.notes.join("\n")).not.toContain("case(s) skipped");
+    expect(r.text).toContain("missing required 'audio'");
+    expect(r.text).not.toContain("missing required 'image'");
+  });
+
+  test("control: an unsatisfiable field inside a union body still drops on its own blame", async () => {
+    // F33's honesty has to survive the new read. `a` is `{type: string, enum: [true, false]}` — no
+    // value satisfies it — but every case that SURVIVES is sound on its own terms (missing 'a',
+    // wrong type for 'a', a bad enum member), so nothing is dropped and nothing is blamed. The
+    // point of this test is what it refuses to assert: no notice, because no case went.
+    const r = await emit("dead-enum-in-union", {
+      oneOf: [{ required: ["a"] }, { required: ["b"] }],
+      properties: { a: { type: "string", enum: [true, false] }, b: { type: "string" } },
+    });
+    expect(r.notes.join("\n")).not.toContain("case(s) skipped");
+    expect(r.text).toContain("invalid enum for 'a'");
+    expect(r.result.totalCases).toBeGreaterThan(0);
+  });
+});
+
+describe("a $ref with siblings reads the way the mock reads it (F44)", () => {
+  // britbox writes `schema: {$ref: "#/components/schemas/ItvDeleteAccountRequest", type: string}` in
+  // an openapi 3.0.0 document — a keyword beside a `$ref`, which 3.0 says is not part of the schema.
+  // crust's VALIDATOR agrees: its `$ref` rule resolves the ref and validates the resolved node alone.
+  // It was the GENERATOR's inliner that laid EVERY sibling over the target, so a sound object schema
+  // arrived as `type: string` with `required` and `properties` still attached — a node no value
+  // satisfies. `baseBody` built the string, the validator rejected it, and every negative case of all
+  // four of that spec's JSON-body operations went behind `crust's own value for the body (type) …`.
+  // 180 corpus specs carry a structural sibling (2,003 sites — azure 104 specs, twilio 32; `type`
+  // 157 of them), 56 in 3.0.x and 6 in 3.1.
+  //
+  // The fix is not a new rule. `withRefSiblings` in src/mockServer/mockResponse.ts had ALREADY
+  // decided this — a narrowing sibling (`enum`, `pattern`, the bounds) is intent, a structural one
+  // (`type`, `properties`, `items`, `required`) is conversion noise — with a corpus measurement
+  // (acting on azure's turned seven correct bodies wrong) and its own tests behind it. The generator
+  // now calls that function instead of holding a second answer to the same question. Dialect is
+  // deliberately not part of it: honouring the siblings 3.1 legalises would put the two halves back
+  // in disagreement over exactly the 6 specs that are 3.1, and 3.1 legalises siblings without making
+  // a conflicting `type` any less ambiguous.
+  let dir: string;
+  beforeAll(async () => {
+    dir = await mkdtemp(join(tmpdir(), "crust-gen-refsib-"));
+  });
+  afterAll(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  const REQ = {
+    type: "object",
+    additionalProperties: false,
+    required: ["profileToken"],
+    properties: { profileToken: { type: "string" } },
+  };
+
+  async function emit(name: string, openapi: string, schema: Record<string, unknown>) {
+    const specPath = join(dir, `${name}.json`);
+    await writeFile(
+      specPath,
+      JSON.stringify({
+        openapi,
+        paths: {
+          "/itv/deleteaccount": {
+            post: {
+              requestBody: { required: true, content: { "application/json": { schema } } },
+              responses: { "204": { description: "ok" }, "400": { description: "bad" } },
+            },
+          },
+        },
+        components: { schemas: { Req: REQ } },
+      }),
+    );
+    const setupPath = join(dir, `${name}.setup.ts`);
+    await writeFile(
+      setupPath,
+      "export const scopeParam = null;\nexport async function shared() { return {}; }\n" +
+        "export function headersFor() { return { 'content-type': 'application/json' }; }\n" +
+        "export function resolvePath(_c, t) { return 'http://127.0.0.1:1' + t; }\n",
+    );
+    const notes: string[] = [];
+    const result = await generateFixtures({
+      swagger: specPath,
+      out: join(dir, `out-${name}`),
+      setup: setupPath,
+      log: (line) => notes.push(line),
+    });
+    const text = (
+      await Promise.all(
+        result.files.map((f) =>
+          Bun.file(f)
+            .text()
+            .catch(() => ""),
+        ),
+      )
+    ).join("\n");
+    return { text, notes: notes.join("\n"), result };
+  }
+
+  const SIBLING = { $ref: "#/components/schemas/Req", type: "string" };
+
+  test("a structural sibling does not empty the operation (openapi 3.0)", async () => {
+    const { text, notes } = await emit("structural30", "3.0.0", SIBLING);
+    expect(text).toContain("missing required 'profileToken' -> 400");
+    expect(text).toContain("wrong type for 'profileToken' -> 400");
+    expect(text).toContain("unexpected extra property -> 400");
+    expect(notes).not.toContain("does not satisfy the schema");
+    expect(notes).not.toContain("no negative cases");
+  });
+
+  test("…and the same in openapi 3.1, where siblings are legal but no less ambiguous", async () => {
+    const { text, notes } = await emit("structural31", "3.1.0", SIBLING);
+    expect(text).toContain("missing required 'profileToken' -> 400");
+    expect(text).toContain("unexpected extra property -> 400");
+    expect(notes).not.toContain("does not satisfy the schema");
+    expect(notes).not.toContain("no negative cases");
+  });
+
+  // The invariant the two tests above only show through a count: whatever the generator builds for a
+  // node must be something crust's own validator accepts for it. This is that sentence, executable,
+  // for both dialects — before the fix it returned `expected object, got string`.
+  test("the value crust builds for the node satisfies the schema crust's mock applies", () => {
+    for (const openapi of ["3.0.0", "3.1.0"]) {
+      const spec = { openapi, components: { schemas: { Req: REQ } } } as never;
+      const node = { $ref: "#/components/schemas/Req", type: "string" };
+      const value = validValue(derefSchemas(node, spec) as never);
+      expect(validateSchema(value, node, spec)).toEqual([]);
+    }
+  });
+
+  // Control: narrowing is still intent. ideal-postcodes narrows a referenced string with a pattern,
+  // and the mock's own synthesiser honours that — dropping it here would generate a base body the
+  // spec does not describe.
+  test("a narrowing sibling still shapes the value", () => {
+    const spec = {
+      openapi: "3.0.0",
+      components: { schemas: { Code: { type: "string" } } },
+    } as never;
+    const inlined = derefSchemas(
+      { $ref: "#/components/schemas/Code", pattern: "^[0-9]{6}$" },
+      spec,
+    ) as Record<string, unknown>;
+    expect(inlined.pattern).toBe("^[0-9]{6}$");
+    expect(String(validValue(inlined as never))).toMatch(/^[0-9]{6}$/);
+  });
+
+  // Control: most of this population is Swagger 2.0 leftovers (118 of the 180 specs), and crust's
+  // converter rewrites the ref but leaves the sibling where it is — so the same restraint has to hold
+  // after conversion, and the agreement below is what makes it worth having.
+  test("a swagger-2 conversion is read the same way", async () => {
+    const path = join(dir, "swagger20.json");
+    await writeFile(
+      path,
+      JSON.stringify({
+        swagger: "2.0",
+        info: { title: "t", version: "1" },
+        paths: {
+          "/itv/deleteaccount": {
+            post: {
+              parameters: [
+                {
+                  name: "body",
+                  in: "body",
+                  required: true,
+                  schema: { $ref: "#/definitions/Req", type: "string" },
+                },
+              ],
+              responses: { "400": { description: "bad" } },
+            },
+          },
+        },
+        definitions: { Req: REQ },
+      }),
+    );
+    const { spec } = await loadSpec(path);
+    // F47 moved a 2.0 body parameter into `requestBody`, and the sibling rides along with it.
+    const op = spec.paths!["/itv/deleteaccount"].post!;
+    expect(op.parameters).toEqual([]); // the body moved; the list is what's left of it
+    const node = op.requestBody!.content!["application/json"]!.schema as Record<string, unknown>;
+    expect(node.$ref).toBe("#/components/schemas/Req"); // rewritten, sibling untouched
+    const inlined = derefSchemas(node, spec) as Record<string, unknown>;
+    expect(inlined.type).toBe("object");
+    expect(validateSchema(validValue(inlined as never), node, spec)).toEqual([]);
+  });
+});
+
+// Swagger 2.0 declares a body as a parameter with `in: body`. The conversion used to drop it, so
+// gen-fixtures wrote nothing for 1,443 specs / 10,083 operations and its hint — "the 400 matrix
+// needs a JSON request-body schema plus a documented 400" — was precisely true and useless: the
+// spec had one, in the other dialect.
+describe("a Swagger 2.0 `in: body` parameter gets the 400 matrix (F47)", () => {
+  async function emit20(
+    name: string,
+    op: Record<string, unknown>,
+    extra?: Record<string, unknown>,
+    method: string = "post",
+  ) {
+    const specPath = join(dir, `${name}.json`);
+    await writeFile(
+      specPath,
+      JSON.stringify({
+        swagger: "2.0",
+        info: { title: "t", version: "1" },
+        consumes: ["application/json"],
+        produces: ["application/json"],
+        paths: { "/widgets": { [method]: op } },
+        definitions: {
+          Widget: {
+            type: "object",
+            required: ["name"],
+            properties: { name: { type: "string" }, size: { type: "integer" } },
+          },
+        },
+        ...extra,
+      }),
+    );
+    const result = await generateFixtures({
+      swagger: specPath,
+      out: join(dir, `out20-${name}`),
+      setup: join(dir, "setup.ts"),
+      log: () => {},
+    });
+    const text = (
+      await Promise.all(
+        result.files.map((f) =>
+          Bun.file(f)
+            .text()
+            .catch(() => ""),
+        ),
+      )
+    ).join("\n");
+    return { text };
+  }
+
+  const BODY = {
+    parameters: [
+      { name: "body", in: "body", required: true, schema: { $ref: "#/definitions/Widget" } },
+    ],
+    responses: { "201": { description: "created" }, "400": { description: "bad" } },
+  };
+
+  test("the matrix that was silently missing", async () => {
+    const { text } = await emit20("body", BODY);
+    expect(text).toContain("POST /widgets missing required 'name' -> 400");
+    expect(text).toContain("POST /widgets wrong type for 'name' -> 400");
+  });
+
+  test("the body it sends is the one the spec describes", async () => {
+    const { text } = await emit20("bodyvalue", BODY);
+    // base body from the resolved definition: name present, optional size omitted
+    expect(text).toContain('"name"');
+    expect(text).not.toContain('"size"');
+  });
+
+  // Control, and it is the load-bearing one: a form body is documented as NOT validated, so a case
+  // built from it would assert a 400 crust's own mock never returns — a false test. Carrying the
+  // declared media type instead keeps the generator and the mock in agreement.
+  test("a non-JSON `consumes` generates nothing, exactly as the mock validates nothing", async () => {
+    const { text } = await emit20("form", {
+      ...BODY,
+      consumes: ["application/x-www-form-urlencoded"],
+    });
+    expect(text).not.toContain("-> 400");
+  });
+
+  // The other half of the guard. 9 corpus specs declare a body on GET or HEAD, 12 of them
+  // required; a generated fixture fetches, and fetch refuses a body on those methods, so the
+  // case would ERROR rather than fail — measured, running the pre-guard output through
+  // crust's own test-fixture: `error: fetch() request with GET/HEAD/OPTIONS method cannot have
+  // body.` on hetras-certification.net's `GET /api/booking/v0/blocks/{blockCode} -> 404`. This
+  // spec's only operation is the GET, so any `body:` in its output would be a GET carrying one.
+  test("a GET body parameter generates no request that carries one", async () => {
+    const { text } = await emit20(
+      "getbody",
+      {
+        parameters: [
+          { name: "body", in: "body", required: true, schema: { $ref: "#/definitions/Widget" } },
+        ],
+        responses: { "200": { description: "ok" }, "400": { description: "bad" } },
+      },
+      undefined,
+      "get",
+    );
+    expect(text).not.toContain("GET /widgets missing required");
+    expect(text).not.toContain('body: "');
+  });
+});
+
+// A requestBody on GET is the same mistake in the other dialect, and it was here before F47: 20
+// corpus specs / 270 GET operations do it. crust read the body and built cases that fetch refuses
+// to construct (`fetch() request with GET/HEAD/OPTIONS method cannot have body.`), so the generated
+// suite ERRORED on them — 15 such cases across the 29-spec F52 population, and 6 in
+// brainbi.net's `GET /api/v1/utils/test_telstra` alone. The mock's half of the rule lives in
+// validateRequest; swagger2to3 applies it a third time on the 2.0 conversion path.
+describe("a request body on GET generates no request that carries one (F52)", () => {
+  async function emit30(
+    name: string,
+    op: Record<string, unknown>,
+    method: string = "get",
+  ): Promise<{ text: string; log: string[] }> {
+    const specPath = join(dir, `${name}.json`);
+    await writeFile(
+      specPath,
+      JSON.stringify({
+        openapi: "3.0.0",
+        info: { title: "t", version: "1" },
+        paths: {
+          "/widgets": {
+            [method]: {
+              ...op,
+              responses: {
+                "200": { description: "ok" },
+                "400": { description: "bad" },
+                ...(op.responses as Record<string, unknown> | undefined),
+              },
+            },
+          },
+        },
+        components: {
+          schemas: {
+            Widget: {
+              type: "object",
+              required: ["name"],
+              properties: { name: { type: "string" }, size: { type: "integer" } },
+            },
+          },
+        },
+      }),
+    );
+    const log: string[] = [];
+    const result = await generateFixtures({
+      swagger: specPath,
+      out: join(dir, `out30-${name}`),
+      setup: join(dir, "setup.ts"),
+      log: (line: string) => log.push(line),
+    });
+    const text = (
+      await Promise.all(
+        result.files.map((f) =>
+          Bun.file(f)
+            .text()
+            .catch(() => ""),
+        ),
+      )
+    ).join("\n");
+    return { text, log };
+  }
+
+  const JSON_BODY = {
+    requestBody: {
+      required: true,
+      content: { "application/json": { schema: { $ref: "#/components/schemas/Widget" } } },
+    },
+  };
+
+  // The bug, in one line each: no body in the emitted request, and no matrix asserting a 400
+  // crust could never ask for.
+  test("no case carries a body, and the 400 matrix is not claimed", async () => {
+    const { text } = await emit30("getbody", JSON_BODY);
+    expect(text).not.toContain("GET /widgets missing required");
+    expect(text).not.toContain('body: "');
+  });
+
+  // The disclosure is the load-bearing half: a silently smaller suite is the failure mode this
+  // project ranks worst, and here the reader has to know the operations exist at all.
+  test("the skipped matrix is named, with the operations it leaves empty", async () => {
+    const { log } = await emit30("getnotice", JSON_BODY);
+    const line = log.find((l) => l.includes("GET or HEAD"));
+    expect(line).toBeDefined();
+    expect(line).toContain("1 operation(s)");
+    expect(line).toContain("no negative cases at all");
+  });
+
+  // Control in the other direction: what crust CAN send on a GET it must still send. The 401
+  // case was carrying a body before (authzBody) and asserts a gate that answers before any body
+  // is read, so dropping the body must not drop the case.
+  test("a GET's own cases survive, bodyless", async () => {
+    const { text, log } = await emit30("getauthz", {
+      ...JSON_BODY,
+      responses: { "401": { description: "not authenticated" } },
+    });
+    expect(text).toContain("GET /widgets without credentials -> 401");
+    expect(text).not.toContain('body: "');
+    // kept > 0, so the notice must not claim the operation was left empty.
+    expect(log.find((l) => l.includes("GET or HEAD"))).not.toContain("no negative cases");
+  });
+
+  // Control that the rule is the METHOD and not the body: an identical POST keeps its whole
+  // matrix, bodies included. Without this the fix could pass by dropping every body everywhere.
+  test("the same operation on POST keeps its body and its matrix", async () => {
+    const { text, log } = await emit30("postcontrol", JSON_BODY, "post");
+    expect(text).toContain("POST /widgets missing required 'name' -> 400");
+    expect(text).toContain('body: "');
+    expect(log.find((l) => l.includes("GET or HEAD"))).toBeUndefined();
   });
 });
