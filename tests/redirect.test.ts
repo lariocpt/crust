@@ -159,8 +159,10 @@ describe("a redirect on a builtin line says so instead of exec-ing", () => {
     expect(r.code).toBe(1);
     expect(r.out).toMatch(/mock-server is a crust builtin/);
     expect(r.out).toMatch(/crust -c 'mock-server \/nonexistent\/spec\.json' > /);
-    // Not the old lie.
-    expect(r.out).not.toMatch(/command not found/);
+    // Not the old lie. `/not found/`, not `/command not found/`: that is bash's
+    // wording, and the CI runner's /bin/sh is dash — `sh: 1: mock-server: not
+    // found`. Pinned to bash, this negative control passes vacuously there.
+    expect(r.out).not.toMatch(/not found/);
     expect(await Bun.file(file).exists()).toBe(false);
   });
 
@@ -222,7 +224,7 @@ describe("a crust builtin reaching sh refuses by name", () => {
     const r = await run("mock-server /nonexistent/spec.json | grep ok");
     expect(r.code).toBe(1);
     expect(r.out).toMatch(/mock-server is a crust builtin/);
-    expect(r.out).not.toMatch(/command not found/);
+    expect(r.out).not.toMatch(/not found/); // dash says "not found", not "command not found"
   });
 
   test("logs: the refusal says where its filters actually go", async () => {
@@ -236,7 +238,7 @@ describe("a crust builtin reaching sh refuses by name", () => {
     const r = await run("range(0,2) | test-fixture /nonexistent/a.ts");
     expect(r.code).toBe(1);
     expect(r.out).toMatch(/test-fixture is a crust builtin/);
-    expect(r.out).not.toMatch(/command not found/);
+    expect(r.out).not.toMatch(/not found/); // dash says "not found", not "command not found"
   });
 
   test("builtin mid-pipeline behind a lambda", async () => {

@@ -411,8 +411,9 @@ describe("empty stages (a `|` with nothing on one side)", () => {
     // The hint matters because `\` continuation exists: this is exactly the
     // shape a multi-line pipeline takes when the backslash is missing.
     expect(r.out).toContain("trailing `\\`");
-    // Not sh's raw syntax error any more.
-    expect(r.out).not.toContain("syntax error");
+    // Not sh's raw syntax error any more. Case-insensitive: the CI runner's
+    // /bin/sh is dash and capitalises it (`sh: 1: Syntax error: pipe started`).
+    expect(r.out).not.toMatch(/syntax error/i);
   });
 
   test("--check catches all three", async () => {

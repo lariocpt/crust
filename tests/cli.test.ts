@@ -415,17 +415,50 @@ describe("shell syntax preflight on the exec path (F19)", () => {
     rmSync(marker);
   });
 
+  // Assert what crust controls, never how a shell words its complaints. crust
+  // runs whatever `/bin/sh` is, and the two dialects in play do not agree:
+  //   dash  (the CI runner)  `sh: 1: Syntax error: "(" unexpected`
+  //   bash  (this repo's host) `sh: -c: line 1: syntax error near unexpected token '('`
+  // and for a missing command `sh: 1: NAME: not found` vs `sh: line 1: NAME:
+  // command not found`. The first two assertions this test replaces were pinned
+  // to bash and failed on the runner at 95a1bbe (see the ledger: 1078/1/2 there,
+  // 1080/1/0 here). What is true in both dialects — and what F19 is actually
+  // about — is the exit code, that sh's own bytes are what the user sees, and
+  // that crust added nothing of its own.
   test("a pure-shell line keeps sh's own diagnostic, no preflight line", async () => {
     const r = await runCli(["-c", "head -("]);
     expect(r.code).toBe(2);
-    expect(r.stderr).toContain("syntax error");
+    expect(r.stderr).toMatch(/syntax error/i); // dash: "Syntax error"; bash: "syntax error"
+    expect(r.stderr).not.toContain("crust: shell stage does not parse");
+    expect(r.stderr).not.toMatch(/^crust:/m); // crust stayed out of the way entirely
+  });
+
+  test("the pure-shell line is atomic without the preflight: sh parses it all first", async () => {
+    // Why the preflight is only needed for MIXED lines. Here the whole line is
+    // one `sh -c`, so sh parses the syntax error before it executes anything and
+    // the upstream `touch` never happens — the same nothing-ran guarantee the
+    // preflight gives a mixed line, for free. Side-effect fact, dialect-neutral:
+    // dash and bash both parse `sh -c` input before running it.
+    const marker = `${import.meta.dir}/f19-pure-${process.pid}`;
+    const r = await runCli(["-c", `touch ${marker} | head -(`]);
+    expect(r.code).toBe(2);
+    expect(existsSync(marker)).toBe(false); // never created (size can't tell: touch makes a 0-byte file)
     expect(r.stderr).not.toContain("crust: shell stage does not parse");
   });
 
   test("127 is a runtime error: the preflight passes, the missing command reports", async () => {
-    const r = await runCli(["-c", "echo hi | base64 | definitely-not-a-cmd-xyz99"]);
+    // The preflight asks sh in NOEXEC mode, so it cannot see a command that is
+    // merely absent — `sh -n` parses it fine and the stages before it run. That
+    // is the guarantee this test exists for: 127 is not swallowed and not
+    // relabelled as a syntax error, and the stages that did run are proof the
+    // preflight passed rather than silently skipped the line.
+    const marker = `${import.meta.dir}/f19-127-${process.pid}`;
+    const r = await runCli(["-c", `touch ${marker} | base64 | definitely-not-a-cmd-xyz99`]);
     expect(r.code).toBe(127);
-    expect(r.stderr).toContain("command not found");
+    expect(existsSync(marker)).toBe(true); // stages before the missing command ran
+    rmSync(marker);
+    expect(r.stderr).toContain("definitely-not-a-cmd-xyz99"); // both dialects name it
     expect(r.stderr).not.toContain("crust: shell stage does not parse");
+    expect(r.stderr).not.toMatch(/^crust:/m);
   });
 });
