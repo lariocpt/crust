@@ -116,8 +116,13 @@ not a violation. Mutually exclusive with `--stateful`.
 The findings are pipeable — this is the conformance gate:
 
 ```crust
-GET :4747/__crust/violations | (v => v.violations.filter(x => x.direction === "response")) | assert (a => a.length === 0)
+GET :4747/__crust/violations | (r => r.json()) | (v => v.violations.filter(x => x.direction === "response")) | assert (a => a.length === 0)
 ```
+
+The `(r => r.json())` stage is not optional: an HTTP stage hands you the
+response object, so reading `.violations` off it straight away is `undefined`
+and the gate dies with `predicate threw` — which looks like a broken assert
+rather than a missing decode.
 
 `DELETE /__crust/violations` clears between runs; `--report file.ndjson`
 appends every violation as NDJSON for CI artifacts (requires `--proxy`).

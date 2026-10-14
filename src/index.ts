@@ -7,9 +7,10 @@ import { checkBuiltinLine } from "./checkBuiltin";
 import { type CrustGlobal, loadConfig } from "./config";
 import { onInterrupt, readLine, suspendEditor } from "./editor";
 import { appendHistory, loadHistory } from "./history";
-import { parse } from "./parser";
+import { shellSyntaxPreflight, tokenize } from "./lexer";
+import { HelpExit, parse } from "./parser";
 import { defaultPrompt } from "./prompt";
-import { runLine, runLines } from "./runLine";
+import { runLine, runLines, splitLines } from "./runLine";
 import { markStdinConsumed } from "./sources";
 import type { Context } from "./types";
 
@@ -135,11 +136,13 @@ async function main(): Promise<void> {
       await shutdown(await runLines(argv[1]!, ctx));
     }
     // Parse without running: the linter for documented examples. Building a
-    // pipeline touches no filesystem and spawns nothing — every source is a
-    // lazy generator — so an example referencing fixtures/*.json or :3000 checks
-    // clean on a machine that has neither. That is what lets a SEPARATE repo
-    // (the website) validate its own code blocks: it cannot import crust's
-    // lexer, but it can run the binary it already has.
+    // pipeline touches no filesystem and runs nothing — every source is a lazy
+    // generator — so an example referencing fixtures/*.json or :3000 checks clean
+    // on a machine that has neither. The one exception is sh in NOEXEC mode
+    // (`sh -n`), which parses a shell stage's text and cannot execute it.
+    // That is what lets a SEPARATE repo (the website) validate its own code
+    // blocks: it cannot import crust's lexer, but it can run the binary it
+    // already has.
     if (flag === "--check") {
       if (argv.length < 2) {
         process.stderr.write("crust: --check requires a line\n");
@@ -148,7 +151,10 @@ async function main(): Promise<void> {
       const ctx = newContext([]);
       registerBuiltinFns(ctx);
       let checked = 0;
-      for (const raw of argv[1]!.split("\n")) {
+      // Same line-splitting as the runtime, so what the linter checks is what
+      // crust runs — including `\` continuation, which is how the multi-line
+      // examples in docs and on the website are written.
+      for (const raw of splitLines(argv[1]!)) {
         const line = raw.trim();
         if (!line || line.startsWith("#")) continue;
         // A builtin line is not a pipeline — the parser would classify it as an
@@ -170,11 +176,33 @@ async function main(): Promise<void> {
         }
         try {
           parse(line)(ctx);
-          checked++;
         } catch (err) {
+          if (err instanceof HelpExit) {
+            // `fn --help` is a valid line — the usage prints when it RUNS,
+            // not when it is checked — so it checks clean like any other.
+            checked++;
+            continue;
+          }
           process.stderr.write(`crust: ${(err as Error).message}\n  in: ${line}\n`);
           process.exit(1);
         }
+        // parse() proved crust's own grammar. A stage that fell through to
+        // `shell` is opaque to it — the text is only ever read by sh — so ask
+        // sh, in NOEXEC mode. Without this, a line malformed enough to be
+        // classified as shell checked "ok" and then exited 2 at runtime —
+        // `range(1,` did — which is exactly how a broken documented example
+        // reaches the website: the fallback hides the mistake from the one
+        // tool meant to catch it. The same preflight now guards the exec path
+        // too (src/runLine.ts, F19); check mode keeps its exit 1.
+        const problem = await shellSyntaxPreflight(tokenize(line));
+        if (problem) {
+          const where = problem.stage === line ? "" : ` (stage: ${problem.stage})`;
+          process.stderr.write(
+            `crust: shell stage does not parse${where}: ${problem.first}\n  in: ${line}\n`,
+          );
+          process.exit(1);
+        }
+        checked++;
       }
       process.stdout.write(`ok: ${checked} line(s) parse\n`);
       process.exit(0);

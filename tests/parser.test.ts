@@ -1,5 +1,10 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { parse } from "../src/parser";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { registerBuiltinFns } from "../src/builtinFns";
+import { HelpExit, parse } from "../src/parser";
+import type { Context } from "../src/types";
 
 describe("parser — sources", () => {
   test("range produces correct items", async () => {
@@ -16,6 +21,78 @@ describe("parser — sources", () => {
     const p = parse("echo hello")();
     const out = await p.collect();
     expect(out).toContain("hello");
+  });
+
+  // Shell grouping (`{ …; }`) and the test bracket (`[ … ]`) are how a shell
+  // script feeds one stream to another and how it asks a question. Both start
+  // with a bracket, so both used to be swallowed by the JSON-literal rule —
+  // `{ echo hi; } | cat` said `JSON Parse error: Expected '}'`. They are shell
+  // stages now, which means sh gives them the meaning they have everywhere.
+  test("a brace group runs as shell, quoted or not", async () => {
+    expect(await parse("{ echo a; echo b; } | cat")().collect()).toEqual(["a", "b"]);
+    // a quoted brace group: the quotes are what made it look like JSON
+    expect(await parse('{ echo "hi"; }')().collect()).toEqual(["hi"]);
+  });
+
+  test("the shell test bracket answers true, and sh's own code answers false", async () => {
+    expect(await parse("[ -f package.json ] && echo found")().collect()).toEqual(["found"]);
+    // A false test is exit 1 from sh, and crust propagates a shell stage's
+    // nonzero exit rather than reporting a quiet pass. What matters here is
+    // *which* error: sh's status, never a JSON parse error for a line with no
+    // JSON in it.
+    let threw: unknown;
+    try {
+      await parse("[ -f no-such-file-here ] && echo found")().collect();
+    } catch (e) {
+      threw = e;
+    }
+    expect(threw).toBeInstanceOf(Error);
+    expect(String(threw)).not.toMatch(/JSON/i);
+  });
+
+  test("control: a brace group's output reaches crust's stages, not just sh", async () => {
+    expect(await parse("{ echo a; echo b; } | (s => s.toUpperCase())")().collect()).toEqual([
+      "A",
+      "B",
+    ]);
+  });
+
+  test("control: a JSON literal is still a one-item source", async () => {
+    expect(await parse('{"a":1}')().collect()).toEqual([{ a: 1 }]);
+    // one item, the parsed value — the array is the item, not two items
+    expect(await parse("[1,2]")().collect()).toEqual([[1, 2]]);
+    // and a half-typed one is still the JSON error, never a shell exec
+    expect(() => parse('{"a": }')()).toThrow(/JSON/);
+  });
+
+  // `$VAR` is expanded after the stage is classified, so these lines are
+  // literals by shape, not by parse. The first cut of the bracket rule decided
+  // by parse alone and all three fell through to the glob source — which with
+  // nothing to match is an empty stream and exit 0. Silent, not an error, and
+  // the shipped binary had answered `[1,5]`, `[5]` and `{"n":5}`.
+  test("control: a literal with a variable in it still runs as a literal", async () => {
+    process.env.CRUST_TEST_N = "5";
+    try {
+      expect(await parse("[1,$CRUST_TEST_N]")().collect()).toEqual([[1, 5]]);
+      expect(await parse("[$CRUST_TEST_N]")().collect()).toEqual([[5]]);
+      expect(await parse('{"n":$CRUST_TEST_N}')().collect()).toEqual([{ n: 5 }]);
+    } finally {
+      delete process.env.CRUST_TEST_N;
+    }
+    // unset, the same line is the loud thing it was before: a JSON error
+    expect(() => parse("[1,$CRUST_TEST_N]")()).toThrow(/JSON/);
+  });
+
+  test("the documented gap: a spaced array reads as the shell's test", async () => {
+    // `[ $N ]` is indistinguishable from `[ -n "$N" ]`, which is shell and the
+    // point of the bracket rule. Writing arrays tight (`[1,$N]`) is the fix, so
+    // pin the reading rather than leave it discovered as an empty run.
+    process.env.CRUST_TEST_N = "5";
+    try {
+      expect(await parse("[ $CRUST_TEST_N ]")().collect()).toEqual([]);
+    } finally {
+      delete process.env.CRUST_TEST_N;
+    }
   });
 });
 
@@ -210,5 +287,133 @@ describe("parser — HTTP", () => {
     const out = (await p.collect()) as Response[];
     expect(out).toHaveLength(1);
     expect(out[0]!.status).toBe(200);
+  });
+});
+
+// A lambda is compiled with `new Function`, which cannot produce an async arrow,
+// so `await` in a body used to be refused at parse time — including in the
+// documented `ls *.json | (s => JSON.parse(await Bun.file(s).text()))` idiom.
+// Such bodies are now recompiled `async`; the pipeline already awaited every
+// stage result, so nothing downstream had to change.
+describe("lambda — await in a body", () => {
+  const run = async (line: string) => parse(line)().collect();
+  let dir: string;
+  let file: string;
+
+  beforeAll(async () => {
+    dir = await mkdtemp(join(tmpdir(), "crust-await-"));
+    file = join(dir, "a.json");
+    await Bun.write(file, JSON.stringify({ id: "abc" }));
+  });
+  afterAll(() => rm(dir, { recursive: true, force: true }));
+
+  test("the awaited value is what downstream sees, not a Promise", async () => {
+    expect(await run("range(0, 0) | (_ => await Promise.resolve(7))")).toEqual([7]);
+  });
+
+  test("reads a real file per item — the documented idiom", async () => {
+    expect(
+      await run(`range(0, 0) | (_ => JSON.parse(await Bun.file("${file}").text()).id)`),
+    ).toEqual(["abc"]);
+  });
+
+  test("works under `parallel`, where one request per item is the point", async () => {
+    expect(await run("range(0, 4) | parallel 2 | (_ => await Promise.resolve(1))")).toEqual([
+      1, 1, 1, 1, 1,
+    ]);
+  });
+
+  test("filter and assert await their predicates", async () => {
+    expect(await run("range(0, 3) | filter (x => await Promise.resolve(x % 2 === 0))")).toEqual([
+      0, 2,
+    ]);
+    expect(await run("range(0, 0) | assert (x => await Promise.resolve(x === 0))")).toEqual([0]);
+    await expect(run("range(0, 0) | assert (x => await Promise.resolve(false))")).rejects.toThrow(
+      // the ORIGINAL text is echoed, not the asyncified body
+      /assert:.*x => await Promise\.resolve\(false\)/s,
+    );
+  });
+
+  test("an explicitly async body still compiles (this always worked)", async () => {
+    expect(await run("range(0, 0) | (async _ => await Promise.resolve(9))")).toEqual([9]);
+  });
+
+  test("a genuine syntax error keeps its own diagnostic", async () => {
+    await expect(run("range(0, 0) | (x => x +)")).rejects.toThrow(/Unexpected/);
+    // head is not a parameter list -> no async rewrite, same original message
+    await expect(run("range(0, 0) | (f(x) => await x)")).rejects.toThrow(/Unexpected/s);
+  });
+});
+
+describe("parser — registered fn --help (F42)", () => {
+  // The tool builtins got uniform --help through parseFlags; the registered
+  // fns are dispatched in the parser with no flag parsing at all, so --help
+  // arrived as DATA and each handler did whatever it does with data (sql: a
+  // SQL complaint, base64 on 0.2.4: the flag encoded). The fix answers it at
+  // parse time — in the builder, before any stage exists to run — so
+  // `http … | sql --help` prints usage without making the request and
+  // `touch f | sql --help` leaves no file behind (both measured).
+  function builtinCtx(overrides = new Map<string, (...a: unknown[]) => unknown>()): Context {
+    const ctx: Context = {
+      aliases: new Map<string, string>(),
+      functions: new Map<string, (...args: unknown[]) => unknown>(),
+      history: [],
+      exit: (() => {}) as never,
+      dotenv: { history: [], snapshot: null },
+      signalHandlers: new Map(),
+    };
+    registerBuiltinFns(ctx);
+    for (const [name, fn] of overrides) ctx.functions.set(name, fn);
+    return ctx;
+  }
+
+  const BUILTIN_NAMES = ["base64", "salt", "jwt", "bundle", "sql", "wait"] as const;
+
+  test("every builtin answers --help in the source position", () => {
+    for (const name of BUILTIN_NAMES) {
+      expect(() => parse(`${name} --help`)(builtinCtx()), `${name} --help`).toThrow(HelpExit);
+    }
+  });
+
+  test("every builtin answers --help mid-pipeline, and -h is the same request", () => {
+    for (const name of BUILTIN_NAMES) {
+      expect(() => parse(`range(1, 1) | ${name} --help`)(builtinCtx()), `${name} mid`).toThrow(
+        HelpExit,
+      );
+      expect(() => parse(`${name} -h`)(builtinCtx()), `${name} -h`).toThrow(HelpExit);
+    }
+  });
+
+  test("sql --help is a HelpExit, not a SQL or connection error", () => {
+    // Pre-fix: `Query contained no valid SQL statement` (rc 1) with a database,
+    // `no connection` without — the flag was a query, not a request for help.
+    expect(() => parse("sql --help")(builtinCtx())).toThrow(HelpExit);
+  });
+
+  test("after -- the flag is data again", async () => {
+    const out = await parse("base64 -- --help")(builtinCtx()).collect();
+    expect(out).toEqual(["LS1oZWxw"]);
+  });
+
+  test("a piped --help is data: only line arguments sit in an option slot", async () => {
+    const out = await parse("echo --help | base64")(builtinCtx()).collect();
+    expect(out).toEqual(["LS1oZWxw"]);
+  });
+
+  test("a crust.fn override keeps --help as an argument to ITS handler", async () => {
+    const seen: unknown[][] = [];
+    const handler = (...a: unknown[]): string => {
+      seen.push([...a]);
+      return "mine";
+    };
+    const ctx = builtinCtx(new Map([["base64", handler]]));
+    expect(await parse("base64 --help")(ctx).collect()).toEqual(["mine"]);
+    expect(await parse("range(7, 7) | base64 --help")(ctx).collect()).toEqual(["mine"]);
+    expect(seen).toEqual([["--help"], [7, "--help"]]);
+  });
+
+  test("a user fn that was never a builtin passes --help straight through", async () => {
+    const ctx = builtinCtx(new Map([["mine", (...a: unknown[]) => `args:${a.join(",")}`]]));
+    expect(await parse("mine --help")(ctx).collect()).toEqual(["args:--help"]);
   });
 });

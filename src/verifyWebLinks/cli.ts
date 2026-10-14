@@ -1,8 +1,9 @@
 #!/usr/bin/env bun
 import { FlagError, type FlagSpec, parseFlags } from "../args";
 import { crawl, extractFragment, stripFragment } from "./crawler";
+import { isHtmlType } from "./extractors";
 import { diff, loadMetaFixtures } from "./metaFixtures";
-import { renderJson, renderText } from "./report";
+import { incompleteReasons, renderJson, renderText } from "./report";
 import { discoverSeeds } from "./sitemap";
 import type { Failure, MetaFixture, VerifyOpts, VerifyReport } from "./types";
 
@@ -40,11 +41,16 @@ Pass --sitemap / --base-url explicitly to override that guess.
   --max-pages N            stop fetching after N URLs; the report counts what was
                            left unchecked. Safety valve for crawls that explode
                            (e.g. WooCommerce filter URLs). Default 0 = unlimited.
+  --strict                 exit 1 unless every discovered link was checked: a
+                           --max-pages cut-off, an unchecked #fragment link, or
+                           a page crust could not read as HTML all count. The
+                           same fact is totals.complete in --json output.
   --no-progress            suppress the 5s progress heartbeat on stderr.
   --json                   emit a machine-readable JSON report on stdout.
   -h, --help               show this message.
 
-Exit codes: 0 all clear, 1 verification failures, 2 bad args / unrecoverable fetch.
+Exit codes: 0 all clear, 1 verification failures (--strict: or unchecked work
+left in the run), 2 bad args / unrecoverable fetch.
 `;
 
 export async function runCli(args: string[]): Promise<number> {
@@ -78,25 +84,49 @@ export async function runCli(args: string[]): Promise<number> {
   }
 
   const { results, dropped } = await crawl(seeds, origin, opts);
-  const failures = collectFailures(results, fixtures, opts);
+  const { failures, anchorsSkipped } = collectFailures(results, fixtures, opts);
 
   let pages = 0;
   let assets = 0;
+  let sniffedPages = 0;
+  let unparsedPages = 0;
   for (const r of results.values()) {
-    if (r.contentType.toLowerCase().includes("text/html")) pages++;
+    // A page crust recognised from its body is a page, not an asset: counting
+    // it as an asset made the summary say "0 page(s), 1 asset(s)" about the
+    // only HTML document on the site.
+    if (r.sniffedHtml || isHtmlType(r.contentType)) pages++;
     else assets++;
+    if (r.sniffedHtml) sniffedPages++;
+    if (r.unparsedPage) unparsedPages++;
   }
 
   const report: VerifyReport = {
     results,
     failures,
-    totals: { pages, assets, failures: failures.length, dropped },
+    totals: {
+      pages,
+      assets,
+      failures: failures.length,
+      dropped,
+      anchorsSkipped,
+      sniffedPages,
+      unparsedPages,
+      complete: dropped === 0 && anchorsSkipped === 0 && unparsedPages === 0,
+    },
   };
 
   if (opts.json) {
     process.stdout.write(`${renderJson(report)}\n`);
   } else {
     process.stdout.write(renderText(report));
+  }
+  if (opts.strict && !report.totals.complete) {
+    const reasons = incompleteReasons(report.totals);
+    process.stderr.write(
+      `verify-web-links: --strict — ${reasons.length} kind(s) of discovered work left unchecked:\n` +
+        reasons.map((r) => `  - ${r}\n`).join(""),
+    );
+    return 1;
   }
   return failures.length > 0 ? 1 : 0;
 }
@@ -113,8 +143,9 @@ function collectFailures(
   results: Map<string, import("./types").CrawlResult>,
   fixtures: MetaFixture[],
   opts: VerifyOpts,
-): Failure[] {
+): { failures: Failure[]; anchorsSkipped: number } {
   const failures: Failure[] = [];
+  let anchorsSkipped = 0;
 
   for (const r of results.values()) {
     if (r.error) {
@@ -146,8 +177,22 @@ function collectFailures(
         if (!frag) continue;
         const targetUrl = stripFragment(ref.resolved);
         const target = results.get(targetUrl);
-        if (!target || target.error) continue;
+        if (!target || target.error) {
+          // Never fetched (excluded, off-origin without --include-external):
+          // crust cannot say anything about the fragment. Skipping silently is
+          // what lets a report claim a clean anchor check — count it.
+          anchorsSkipped++;
+          continue;
+        }
         if (target.status < 200 || target.status >= 400) continue;
+        // Fetched, but its body was never parsed as a page — `--no-recurse`,
+        // an `--exclude`d destination, or a depth cap. `ids` is empty because
+        // nothing read the document, not because the id is missing: this used
+        // to report every fragment on such a page as missing-anchor.
+        if (!target.parsed) {
+          anchorsSkipped++;
+          continue;
+        }
         if (!target.ids.includes(frag)) {
           failures.push({
             kind: "missing-anchor",
@@ -207,7 +252,7 @@ function collectFailures(
     }
   }
 
-  return failures;
+  return { failures, anchorsSkipped };
 }
 
 export const SPEC: FlagSpec = {
@@ -229,6 +274,7 @@ export const SPEC: FlagSpec = {
   "no-redirect-warnings": { type: "boolean" },
   "include-external": { type: "boolean" },
   "no-progress": { type: "boolean" },
+  strict: { type: "boolean" },
   json: { type: "boolean" },
 };
 
@@ -250,6 +296,7 @@ function parseArgs(args: string[]): VerifyOpts | number {
   let progress = true;
   let maxPages = 0;
   let json = false;
+  let strict = false;
 
   try {
     const { values, rest, help } = parseFlags(args, SPEC);
@@ -280,6 +327,7 @@ function parseArgs(args: string[]): VerifyOpts | number {
     includeExternal = values["include-external"] === true;
     progress = values["no-progress"] !== true;
     json = values.json === true;
+    strict = values.strict === true;
 
     if (concurrency < 1) throw new FlagError("--concurrency must be >= 1");
     if (timeoutMs < 1) throw new FlagError("--timeout must be >= 1");
@@ -317,6 +365,7 @@ function parseArgs(args: string[]): VerifyOpts | number {
     progress,
     maxPages,
     json,
+    strict,
   };
 }
 

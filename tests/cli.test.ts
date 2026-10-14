@@ -1,4 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
+import { existsSync, rmSync } from "node:fs";
 
 const ENTRY = `${import.meta.dir}/../src/index.ts`;
 
@@ -322,5 +323,142 @@ describe("trailing # comments on builtin lines", () => {
     const check = await runCli(["--check", "dotenv status --nonsense"]);
     expect(check.code).toBe(1);
     expect(check.stderr).toContain('unexpected argument "--nonsense"');
+  });
+});
+
+describe("registered fn --help (F42)", () => {
+  // The six registered fns had no flag parsing at all: `sql --help` reported
+  // a SQL-syntax complaint (rc 1) and `base64 --help` on 0.2.4 ENCODED the
+  // flag (`LS1oZWxw`, rc 0 — a false pass for a request for help). They now
+  // answer at parse time: usage on stdout, exit 0, no connection, no stage
+  // run — the same contract the tool builtins have had through parseFlags.
+
+  test("base64 --help: usage on stdout, nothing on stderr, exit 0", async () => {
+    const r = await runCli(["-c", "base64 --help"]);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("usage: base64");
+    expect(r.stderr).toBe("");
+  });
+
+  test("sql --help answers with no database configured", async () => {
+    const proc = Bun.spawn(["bun", ENTRY, "-c", "sql --help"], {
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+      env: {
+        ...process.env,
+        CRUST_CONFIG: "/dev/null",
+        CRUST_GLOBAL_PREFIX: "/tmp/crust-cli-test-no-globals",
+        DATABASE_URL: "",
+      },
+    });
+    const [stdout, stderr] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ]);
+    await proc.exited;
+    expect(proc.exitCode).toBe(0);
+    expect(stdout).toContain("usage: sql");
+    expect(stderr).toBe("");
+  });
+
+  test("a --help piped in is still encoded — the item is never in an option slot", async () => {
+    const r = await runCli(["-c", "stdin | base64"], "--help");
+    expect(r.code).toBe(0);
+    expect(r.stdout.trim()).toBe("LS1oZWxw");
+  });
+
+  test("--help after -- is encoded, not answered as usage", async () => {
+    const r = await runCli(["-c", "base64 -- --help"]);
+    expect(r.code).toBe(0);
+    expect(r.stdout.trim()).toBe("LS1oZWxw");
+  });
+
+  test("--check accepts fn --help: it is a valid line, answered when it runs", async () => {
+    const r = await runCli(["--check", "sql --help"]);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("ok:");
+  });
+
+  test("the help line runs no stage: an upstream touch never happens", async () => {
+    const marker = `${import.meta.dir}/f42-marker-${process.pid}`;
+    const r = await runCli(["-c", `touch ${marker} | sql --help`]);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("usage: sql");
+    expect(existsSync(marker)).toBe(false); // never created (size can't tell: touch makes a 0-byte file)
+  });
+});
+
+describe("shell syntax preflight on the exec path (F19)", () => {
+  // A MIXED line runs each shell stage as its own `sh -c` child. Without a
+  // preflight a syntax error in stage N surfaces only when that child exits —
+  // after stages 1..N-1 have run (measured on tree 2ca3952:
+  // `touch f | base64 | head -(` exited 2 and f existed). The preflight asks
+  // sh in NOEXEC mode about every shell stage before anything runs: exit 2,
+  // the stage named, zero side effects. A pure-shell line is one `sh -c` that
+  // parses the whole line first, so it is untouched (sh's own stderr is the
+  // answer), and 127 is a runtime error the preflight must not swallow.
+  test("a bad stage in a mixed line exits 2, named, and runs nothing", async () => {
+    const marker = `${import.meta.dir}/f19-marker-${process.pid}`;
+    const r = await runCli(["-c", `touch ${marker} | base64 | head -(`]);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toContain("crust: shell stage does not parse");
+    expect(r.stderr).toContain("(stage: head -()");
+    expect(existsSync(marker)).toBe(false); // never created (size can't tell: touch makes a 0-byte file)
+  });
+
+  test("the control: a valid mixed line with the same shape still runs", async () => {
+    const marker = `${import.meta.dir}/f19-control-${process.pid}`;
+    const r = await runCli(["-c", `touch ${marker} | base64`]);
+    expect(r.code).toBe(0);
+    expect(existsSync(marker)).toBe(true);
+    rmSync(marker);
+  });
+
+  // Assert what crust controls, never how a shell words its complaints. crust
+  // runs whatever `/bin/sh` is, and the two dialects in play do not agree:
+  //   dash  (the CI runner)  `sh: 1: Syntax error: "(" unexpected`
+  //   bash  (this repo's host) `sh: -c: line 1: syntax error near unexpected token '('`
+  // and for a missing command `sh: 1: NAME: not found` vs `sh: line 1: NAME:
+  // command not found`. The first two assertions this test replaces were pinned
+  // to bash and failed on the runner at 95a1bbe (see the ledger: 1078/1/2 there,
+  // 1080/1/0 here). What is true in both dialects — and what F19 is actually
+  // about — is the exit code, that sh's own bytes are what the user sees, and
+  // that crust added nothing of its own.
+  test("a pure-shell line keeps sh's own diagnostic, no preflight line", async () => {
+    const r = await runCli(["-c", "head -("]);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toMatch(/syntax error/i); // dash: "Syntax error"; bash: "syntax error"
+    expect(r.stderr).not.toContain("crust: shell stage does not parse");
+    expect(r.stderr).not.toMatch(/^crust:/m); // crust stayed out of the way entirely
+  });
+
+  test("the pure-shell line is atomic without the preflight: sh parses it all first", async () => {
+    // Why the preflight is only needed for MIXED lines. Here the whole line is
+    // one `sh -c`, so sh parses the syntax error before it executes anything and
+    // the upstream `touch` never happens — the same nothing-ran guarantee the
+    // preflight gives a mixed line, for free. Side-effect fact, dialect-neutral:
+    // dash and bash both parse `sh -c` input before running it.
+    const marker = `${import.meta.dir}/f19-pure-${process.pid}`;
+    const r = await runCli(["-c", `touch ${marker} | head -(`]);
+    expect(r.code).toBe(2);
+    expect(existsSync(marker)).toBe(false); // never created (size can't tell: touch makes a 0-byte file)
+    expect(r.stderr).not.toContain("crust: shell stage does not parse");
+  });
+
+  test("127 is a runtime error: the preflight passes, the missing command reports", async () => {
+    // The preflight asks sh in NOEXEC mode, so it cannot see a command that is
+    // merely absent — `sh -n` parses it fine and the stages before it run. That
+    // is the guarantee this test exists for: 127 is not swallowed and not
+    // relabelled as a syntax error, and the stages that did run are proof the
+    // preflight passed rather than silently skipped the line.
+    const marker = `${import.meta.dir}/f19-127-${process.pid}`;
+    const r = await runCli(["-c", `touch ${marker} | base64 | definitely-not-a-cmd-xyz99`]);
+    expect(r.code).toBe(127);
+    expect(existsSync(marker)).toBe(true); // stages before the missing command ran
+    rmSync(marker);
+    expect(r.stderr).toContain("definitely-not-a-cmd-xyz99"); // both dialects name it
+    expect(r.stderr).not.toContain("crust: shell stage does not parse");
+    expect(r.stderr).not.toMatch(/^crust:/m);
   });
 });

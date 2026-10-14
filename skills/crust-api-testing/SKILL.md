@@ -29,7 +29,8 @@ GET $BASE/api/buildings/$BID -H "authorization: Bearer $TOKEN" | expect 404
 Run: `test-pipes 'tests/**/*.pipes' [-b] [-t ms] [-s mod.ts] [-o report.xml]`.
 PASS/FAIL report lines are prefixed `file:LINE` with real file line numbers.
 `-o`'s extension picks the format: `.xml` is JUnit (testcase per line),
-`.json` the raw report — both CI-ingestable.
+`.json` the raw report — both CI-ingestable. Any other extension (or none)
+writes the same text report stdout shows; the file never changes the exit code.
 
 - **Setup module**: `-s mod.ts`, else sibling `<name>.setup.ts`; its
   default export is awaited before the file and seeds `process.env`
@@ -70,7 +71,8 @@ export default {
 
 Run: `test-fixture 'tests/*.crust.ts' -j8 [-n N] [-t ms] [-b] [-o report.xml]`.
 `-o`'s extension picks the format — `.xml` is JUnit for CI: testcase per
-run (stress iterations individually), percentiles in `<system-out>`.
+run (stress iterations individually), percentiles in `<system-out>`; `.json` is
+the raw report, `.md` markdown, anything else the text report.
 
 `output.schema`: give it an inline JSON Schema and the response body must
 conform — violations fail with per-field pointer paths. Inline means
@@ -113,6 +115,17 @@ required foreign keys → `skip`).
 
 The `--out` dir is DELETED and recreated every run — never hand-edit
 generated files.
+
+What crust cannot attribute it does not emit. The pattern sampler returns a
+knowingly-wrong placeholder for a pattern it cannot read — a lookahead, Python
+`\A`/`\Z` anchors, a JavaScript regex literal written into `pattern` (groups
+it reads: `(?:…)`, `(a|b)`, `(…){n}`, so an AWS id like
+`^(subnet-[0-9a-f]{8}|subnet-[0-9a-f]{17})$` yields `subnet-00000000`); in a
+base body a placeholder makes a case about `name` invalid in `subnetId`, so its
+400 names the wrong field. Those cases — and a CRUD flow
+whose create body cannot be filled — are dropped and NAMED on stdout
+(`gen-fixtures: 2 case(s) skipped for POST /things …`, `skipping flow for
+/things …`). A silently smaller suite would look like coverage.
 
 ## Workflow for a new API
 

@@ -12,6 +12,14 @@ function b64urlDecode(s: string): Buffer {
   return Buffer.from(s.replace(/-/g, "+").replace(/_/g, "/") + pad, "base64");
 }
 
+/** The screen `jwt --help` prints at parse time (F42). */
+export const jwtUsage =
+  "usage: jwt [sign|verify|decode] [--secret <s> | -s <s> | --secret=<s>] [payload|token]\n" +
+  "  sign    (default) sign a JSON payload with HS256 and print the token\n" +
+  "  verify  check a token's signature against the secret, print its payload\n" +
+  "  decode  print a token's payload; no secret needed\n" +
+  "  secret  --secret <s>, or $JWT_SECRET when no flag is given";
+
 function pickSecret(args: unknown[]): string {
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
@@ -44,16 +52,14 @@ function pickPositionals(args: unknown[]): unknown[] {
 }
 
 export function jwt(...args: unknown[]): unknown {
-  const head = args[0];
-  let op: Op;
-  let rest: unknown[];
-  if (head === "sign" || head === "verify" || head === "decode") {
-    op = head;
-    rest = args.slice(1);
-  } else {
-    op = "sign";
-    rest = args;
-  }
+  // The pipeline calls a registered function as `fn(item, ...args)`, so mid-pipeline
+  // the ITEM is args[0] and the op sits after it. It used to be read from args[0]
+  // only, which meant the documented line `echo <token> | jwt verify --secret k`
+  // missed the op, fell through to the `sign` default, and SIGNED the token while
+  // exiting 0 — a verification that minted a credential instead of checking one.
+  const opIndex = args.findIndex((a) => a === "sign" || a === "verify" || a === "decode");
+  const op: Op = opIndex === -1 ? "sign" : (args[opIndex] as Op);
+  const rest = opIndex === -1 ? args : args.filter((_, i) => i !== opIndex);
   const positionals = pickPositionals(rest);
   const value = positionals[0];
 

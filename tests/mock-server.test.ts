@@ -2481,13 +2481,114 @@ describe("a group alternation declines rather than joining its branches", () => 
     expect(sampleFromPattern("^(0000000000-|AAAA-AAAA)$")).not.toContain("|");
   });
 
-  test("a group alternation returns the announced fallback", () => {
-    expect(sampleFromPattern("^(a|b)$")).toBe(PATTERN_FALLBACK);
+  // MOVED 2026-10-07 by the group fix below. This assertion pinned a LIMITATION — the walk could not
+  // read a group, so declining was all it had — and the limitation is gone: `^(a|b)$` now builds one
+  // branch. What the test exists for is unchanged, and is still the property that matters: the value
+  // is ONE branch, never both joined by a pipe. It reads better as an assertion about the value than
+  // as an assertion about the fallback, so it moved rather than being deleted.
+  test("a group alternation returns one branch, never a joined pair", () => {
+    const v = sampleFromPattern("^(a|b)$");
+    expect(v).not.toBe(PATTERN_FALLBACK);
+    expect(v).not.toContain("|");
+    expect(matchesPattern("^(a|b)$", v)).toBe(true);
   });
 
   // Control: a pipe that is a real member of a character class is still built, not declined.
   test("a class member pipe is still built", () => {
     expect(matchesPattern("^[a|b]+$", sampleFromPattern("^[a|b]+$"))).toBe(true);
+  });
+});
+
+// A group is a BUILDABLE THING, not scenery.
+//
+// The walk read `(` and `)` as zero-width and appended the contents as loose literals, so three
+// ordinary shapes fell to the neutral value even though the regex says exactly what to build:
+//
+//   (?:…)     a non-capturing group was refused outright by `startsWith("(?")` — including `(?:`
+//   (a|b)     an alternation inside a group reached the walk as a bare `|` and declined
+//   (…)n * +  a quantifier after `)` had no atom to attach to (the group had already been skipped),
+//             so it was read as "a quantifier with nothing before it" and declined
+//
+// Measured over the 39 APIs-guru specs whose generated suite F33 had to shrink: 186 declined fields,
+// and 175 of them are one of those three. The single biggest is the base64 content pattern, 71
+// fields across five Microsoft Graph specs, and `^([0-9]{1,3}\.){3}[0-9]{1,3}$` — an IP address —
+// is 17 fields in one spec. They were not unsolvable; they were unread.
+//
+// Every value below is still verified by `sampleFromPattern` against the real regex before it is
+// returned, so the risk of the wider builder is a decline that should have been a build, never a
+// wrong value. Declines that remain are the second block: they are unreadable, not untried.
+describe("a group is built: non-capturing, alternation inside it, and quantified", () => {
+  // Patterns named by the corpus, not invented. Each is verbatim from an APIs-guru definition.
+  const corpus: Record<string, string> = {
+    "base64 content (71 fields, 5 specs)":
+      "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=|[A-Za-z0-9+/]{4})$",
+    "sort order (19 fields)": "^(?:top|bottom|after:\\d+)$",
+    "pagination cursor (19 fields)": "^(?:first|last|after:\\d+)$",
+    "locale (4 fields)": "^[A-Za-z]{2,2}(?:-[A-Za-z]{2,2})*$",
+    "IPv4 or CIDR (5 fields)": "^([0-9]{1,3}\\.){3}[0-9]{1,3}(\\/([0-9]|[1-2][0-9]|3[0-2]))?$",
+    "one or more suffixes (4 fields)": "^se(-[a-z0-9]+)+$",
+    "security-group id (2 fields)": "^sg-(([0-9a-z]{8})|([0-9a-z]{17}))$",
+    "MAC address (2 fields)": "^([0-9A-Fa-f]{2}[:-]?){5}([0-9A-Fa-f]{2})$",
+    "single letter as a group": "^(L|S|G)$",
+    "two anchored roots": "^ssh-(rsa|dss|ed25519) |^ecdsa-sha2-nistp(256|384|521) ",
+  };
+
+  for (const [what, pattern] of Object.entries(corpus)) {
+    // Does this pattern really offer alternatives? A `|` that only ever appears inside `[...]` is a
+    // class member, not a branch, so strip the groups and look again.
+    const offersBranches = pattern.replace(/\((?:\?:)?/g, "").includes("|");
+    test(`builds a value for ${what}`, () => {
+      const v = sampleFromPattern(pattern);
+      expect(v).not.toBe(PATTERN_FALLBACK);
+      expect(matchesPattern(pattern, v)).toBe(true);
+      // The old failure mode: both branches and the pipe between them. Still the property that
+      // matters most, so it is asserted for every recovered pattern, not only the declined ones.
+      if (offersBranches) expect(v).not.toContain("|");
+    });
+  }
+
+  // Control: the group fix must not make an UNREADABLE group a guess.
+  test("the smallest group still builds exactly its own contents", () => {
+    expect(sampleFromPattern("^(?:abc)$")).toBe("abc");
+    expect(sampleFromPattern("^(?:a){2}$")).toBe("aa");
+  });
+});
+
+// What the wider builder still refuses, pinned so "it declines" never quietly becomes "it guessed".
+describe("a group the builder cannot read still declines", () => {
+  const unreadable: Array<[string, string]> = [
+    ["a negative lookahead", "^(?!CLOUDENV.*$)[a-zA-Z_][a-zA-Z0-9_]{0,199}$"],
+    ["a tempered lookahead", "^[a-zA-Z]((?!--|__|..)[a-zA-Z0-9-_.])+$"],
+    ["a named group", "^(?<part>a|b)$"],
+    ["an atomic group", "^(?>ab|ba)$"],
+    ["a JS regex literal written into `pattern`", "/^[a-z0-9._]+$/"],
+    ["python \\A \\Z anchors", "\\A([a-zA-Z0-9-_]{1,63}\\.)+([a-zA-Z]{2,3})\\Z"],
+    ["a back-reference", "^(a)b\\1$"],
+    ["an unbalanced group", "^(abc$"],
+    ["an unbalanced nested group", "^(?:(a|b)$"],
+  ];
+
+  for (const [what, pattern] of unreadable) {
+    test(`${what} returns the announced fallback`, () => {
+      const v = sampleFromPattern(pattern);
+      expect(v).toBe(PATTERN_FALLBACK);
+    });
+  }
+
+  // Control: a `?` that is a quantifier, not the start of a special group, is still a quantifier.
+  test("a quantifier question mark is not read as a special group", () => {
+    expect(matchesPattern("^(?:ab)?c$", sampleFromPattern("^(?:ab)?c$"))).toBe(true);
+    expect(sampleFromPattern("^(?:ab)?c$")).toBe("c");
+  });
+
+  // Control: deeply nested groups are refused at a depth cap rather than recursing to a RangeError —
+  // the fault that once took down 198 specs and was recorded as their load failure, not crust's.
+  // Two depths are pinned from either side of the cap: the ordinary shape is built, the pathological
+  // one declines, so the cap cannot silently move by one without a test noticing.
+  test("a pathological nesting depth declines instead of exhausting the stack", () => {
+    const nest = (n: number) => `^${"(?:a".repeat(n) + ")".repeat(n)}$`;
+    expect(matchesPattern(nest(3), sampleFromPattern(nest(3)))).toBe(true);
+    expect(sampleFromPattern(nest(30))).toBe(PATTERN_FALLBACK);
   });
 });
 

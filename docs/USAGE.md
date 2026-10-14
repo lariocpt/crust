@@ -64,12 +64,50 @@ crust -c 'src/**/*.ts | wc -l'
 | Flag | Effect |
 |---|---|
 | `crust` | Interactive REPL (default, when stdin is a TTY). |
-| `crust <file.crust>` | Run a script file and exit. Blank lines and `#` comments are skipped (so a `#!/usr/bin/env crust` shebang works), and execution is **fail-fast**: crust stops at the first failing line and exits with *its* code. Positional script arguments are not supported — extra arguments are rejected (exit 2). An unreadable file exits 127. |
-| `cmd \| crust` | With stdin piped, crust reads it to EOF and runs the lines exactly like a script file — same comment handling, same fail-fast exit codes. Because stdin is drained up front, shell stages inside the script see EOF on their stdin. Piping **data** (not a program) is the [`stdin` source](#reading-piped-stdin-stdin-source)'s job: `docker logs -f app \| crust -c 'stdin \| grep ERROR'`. |
-| `crust -c <line>` | Run one line and exit. Multi-line strings split on `\n`, skip blanks and `#` comments, and are **fail-fast**: crust stops at the first failing line and exits with *its* code (previously a later success masked an earlier failure). |
+| `crust <file.crust>` | Run a script file and exit. Blank lines and `#` comments are skipped (so a `#!/usr/bin/env crust` shebang works), and execution is **fail-fast**: crust stops at the first failing line and exits with *its* code. Positional script arguments are not supported — extra arguments are rejected (exit 2). An unreadable file exits 127. A line ending in `\` continues on the next line (see [Continuing a line](#continuing-a-line)). |
+| `cmd \| crust` | With stdin piped, crust reads it to EOF and runs the lines exactly like a script file — same comment handling, same fail-fast exit codes, same `\` continuation. Because stdin is drained up front, shell stages inside the script see EOF on their stdin. Piping **data** (not a program) is the [`stdin` source](#reading-piped-stdin-stdin-source)'s job: `docker logs -f app \| crust -c 'stdin \| grep ERROR'`. |
+| `crust -c <line>` | Run one line and exit. Multi-line strings split on `\n`, skip blanks and `#` comments, honour `\` continuation, and are **fail-fast**: crust stops at the first failing line and exits with *its* code (previously a later success masked an earlier failure). |
 | `crust --env-file <path> …` | Load a `.env` file (same parser as the [`dotenv` builtin](#dotenv), overwrite mode) *before* any run mode — `-c`, a script, piped stdin, or the REPL — and before `init.ts`, so config code sees the vars. The "loaded" note goes to **stderr** (a `-c` pipeline's stdout stays clean), and a **missing file exits 2 loudly** — this flag exists to replace shell shims whose silent env failures made runs measure the wrong thing. Doesn't combine with `--check` (parse-only by contract). |
 | `crust -h`, `--help` | Show usage. |
 | `crust -V`, `--version` | Show version. |
+
+### How to read the examples in this document
+
+Every example that starts with a tool name — `mock-server ./openapi.yaml -p4000`,
+`test-fixture fixtures/*.crust.ts`, `skills list` — is a **crust line**, not a shell command.
+Run it at the REPL, or as `crust -c '<line>'`. A builtin is **not** an argv subcommand: crust
+treats every positional as a script file, so `crust mock-server -p4000 …` exits **2**
+(`script arguments are not supported`) and `crust verify-web-links` alone exits **127**
+(`cannot read verify-web-links`), which looks like a missing binary but is not one.
+
+### Continuing a line
+
+A line ending in `\` continues on the next one. The two lines are joined with a
+single space and the continuation's leading whitespace is dropped, so a long
+pipeline can be written one stage per line:
+
+```crust
+range(1,50) | stats \
+  | assert (s => s.count === 50)
+```
+
+This works in a script file, in piped stdin, in a multi-line `-c`, and in
+`--check` (which uses the same splitting as the runtime, so a checked block is
+the line crust actually runs). **Not the REPL** — there Enter means run.
+
+Two edges, both tested:
+
+- Only an **odd** run of trailing backslashes continues. A line ending in `\\`
+  is an escaped backslash and stays its own line.
+- Continuation is **never inferred from indentation**. A line that starts with
+  `|` without a preceding `\` is two lines, and the second is the empty-stage
+  refusal — put the `\` on the line above it.
+
+Before this existed, every multi-line example in this file and on the website
+was a bug: a trailing backslash is a shell metacharacter, so the line was
+classified `shell`, handed to `sh -c`, and answered `syntax error near
+unexpected token` — while both doc linters joined `\`+newline before parsing,
+which is exactly how those examples stayed green in CI and died in a terminal.
 
 ### Checking a line without running it
 
@@ -91,9 +129,38 @@ It also validates BUILTIN invocations against each CLI's own flag spec, so
 fail — the parser alone treats a builtin line as an opaque shell stage and would
 call either one fine.
 
+And it validates SHELL stages by asking `sh` itself, in noexec mode (`sh -n`),
+which parses a command and cannot execute it (`cat > f` under `-n` does not
+create `f`). crust's parser cannot see inside a shell stage, so before this a
+line malformed enough to be classified as one checked clean and then exited 2
+the instant it ran — `range(1,` did exactly that:
+
+```bash
+crust --check 'range(1,3) | head -('
+# crust: shell stage does not parse (stage: head -(): sh: -c: line 1: syntax error near unexpected token `(`
+```
+
+The runtime runs the same preflight before any stage of a **mixed** line: a
+shell stage whose text does not parse exits **2**, naming the stage, and nothing
+has run. Before this, the error in stage N surfaced only when stage N's own
+`sh -c` child exited — after stages 1..N-1 had already run theirs
+(`touch f | base64 | head -(` exited 2 and left `f` behind). A pure-shell line
+is one `sh -c`, which sh parses atomically, so its own stderr is the answer
+there; and 127 (command not found) is a runtime error the preflight cannot see.
+
 That makes it the linter for documented examples: blank lines and `#` comments
-are skipped, so a whole fenced block can be piped in as one argument. crust's
-own suite lints every ```crust example in the shipped agent skills this way.
+are skipped and `\` continuations are joined — the same splitting the runtime
+does — so a whole fenced block can be piped in as one argument. crust's own
+suite lints every ```crust example in the shipped agent skills this way.
+
+One edge to know when CI runs this over a docs file: `$VAR` is expanded from the
+**real environment** while the line is being built, so `--check` proves a line
+parses *for that environment*. An unset variable inside a JSON literal makes the
+literal malformed before anything runs — `--check '{"n":$N}'` is a JSON parse
+error with `N` unset and `ok` with `N=7` — while a URL, a header value or a
+`read` path is never parsed as JSON and checks clean whatever the variable
+holds. The lint therefore catches the shape mistakes a docs file can actually
+contain, and says nothing about values it never saw.
 
 ## Hello world
 
@@ -130,7 +197,7 @@ The shell parser classifies each `|`-separated stage by looking at its first tok
 | Contains `*` / `?` / `[…]` | Glob source |
 | Matches `range(a, b)` | Range source |
 | Matches `load <dur> <rate>[, …]` | Paced load source (malformed spec = hard error; bare `load` = shell) |
-| Starts with `{` or `[` | JSON-literal source (invalid JSON = hard error, never shell) |
+| Starts with `{` or `[`, and parses or is tight JSON-shaped text (`{"n":$N}`, `[1,$N]`) | JSON-literal source (a half-typed literal = hard error, never shell). The *spaced* shell shapes — `{ echo a; echo b; } \| cat`, `[ -f f ] && echo ok` — are shell stages |
 | Starts with `read <path\|glob>` | Whole-file source — one item per matched file |
 | Starts with `tail <path>` (with optional `-F` / `-n N`) | Native `tail` source |
 | Starts with `(` and contains `=>` | TypeScript lambda |
@@ -144,7 +211,45 @@ The shell parser classifies each `|`-separated stage by looking at its first tok
 | First token is a `crust.fn`-registered function | Registered function (per-item transform) |
 | Anything else | Shell stage — handed to `sh -c "<text>"` |
 
-Single-stage pure-shell lines (`ls -la`, `git status`) are short-circuited: crust execs `sh -c` with **inherited stdio** so colors, paging, and TUIs work normally. Mixed pipelines stream items through TS land.
+Single-stage pure-shell lines (`ls -la`, `git status`) are short-circuited: crust execs `sh -c` with **inherited stdio** so colors, paging, and TUIs work normally. So is a line whose *every* stage is shell — `ps aux | grep node` becomes one `sh -c`, byte for byte, which keeps `| head -3` and its early exit behaving like the shell you know. Mixed pipelines stream items through TS land.
+
+**That short-circuit carries shell's exit-code rule.** In an all-shell line the
+code is the *last* command's, exactly like a shell without `pipefail`:
+`ls /nope | wc -l` exits **0** (`wc` succeeded), while `ls /nope` alone exits 2.
+As soon as one crust stage joins the line, every shell stage is run by crust and
+a nonzero exit fails the line. If a gate must notice an upstream failure, end the
+line on a crust stage (`… | assert (l => …)`) rather than trusting the tail of a
+shell pipeline.
+
+**A `|` always splits, so there is no empty stage.** `||` is two pipes, not an
+or-operator, and a trailing `|` leaves nothing after the pipe — both used to be
+silently accepted, and the trailing one read the whole pipeline into `sh -c ""`,
+threw the output away and exited 0. Now both stop the line:
+
+```bash
+sh -c 'curl -s "$URL" || echo degraded'   # want or-logic? keep it inside one shell stage
+```
+
+    crust: empty stage between pipes: crust splits on `|`, so `||` is an empty stage,
+    not an or-operator (`&&` is fine — it contains no pipe). Put the whole shell
+    command in one stage instead: sh -c 'a || b'
+
+**Redirects belong to the shell stage.** `<` and `>` are not crust syntax — a
+shell stage's text is handed to `sh -c` verbatim, so its redirects are real, and
+that is the way to save a pipeline. Any other stage carrying one stops the line
+instead of guessing, because what it used to do varied: an HTTP stage dropped it
+(request ran, nothing written, exit 0), a lambda compiled it into a regex literal
+with invalid flags, and a `crust.fn` received `>` plus the path as arguments.
+
+```bash
+range(0, 3) | (x => `v${x}`) | cat > versions.txt   # save: end on a shell stage
+read **/*.log | grep ERROR > errors.txt             # save: same, from a file source
+lines body.json | POST :3000/users                  # feed in: start from a file source
+```
+
+    crust: `> out.json`: crust has no redirect except on a shell stage, whose text
+    goes to sh as-is — a http stage would read it as data. to save a pipeline, end
+    the line with a shell stage instead: | cat > out.json
 
 ---
 
@@ -188,8 +293,20 @@ Matches are sorted; zero matches is a hard error. Note the plain glob source
 (`fixtures/*.json | …`) yields *paths* — `POST` would post the path strings.
 
 A stage starting with `{` or `[` is a **JSON-literal source**: one parsed
-item. `$VAR`/`${VAR}` inside it are env-expanded first. Invalid JSON is a
-hard error — it never falls back to a shell command.
+item. `$VAR`/`${VAR}` inside it are env-expanded first. The claim is
+conditional on being JSON: anything that parses is a literal, whatever it
+contains (`{"cmd": "a && b"}` is one), and so is tight text still shaped like an
+attempt at one — a quote, colon, comma, or a `$` inside the brackets, as in
+`{"n":$N}`, `[1,$N]`, `[$N]`. The shell's own bracket shapes are always
+*spaced*: a test is `[ … ]`, a group `{ …; }`. So a bracket followed by a space
+is left to sh, in any position — `{ echo a; echo b; } | cat` groups,
+`[ -f users.csv ] && echo there` tests — and a tight pattern with no literal
+evidence at all (`[abc]*`) stays a glob. Two consequences worth knowing. Shape
+must decide the tight cases because `$VAR` expands *after* classification, and a
+stage nobody claims falls through to the glob rule, where no matches mean an
+empty stream and exit 0 — silence, which is why a typo'd `[1,]` is still a hard
+JSON error. And since a spaced head is shell, **write arrays tight**: `[1,$N]`
+is the array, `[ $N ]` is a file test.
 
 `GET` has a dual role: as the **first** stage it's a source yielding one
 `Response` (fixture asserts); **mid-pipeline** it's a per-item timed request
@@ -253,13 +370,20 @@ procs({
   With `live:`, the healthy stretch ends when a fatal probe streak **began**,
   not when the kill finally lands — a proc that answers ready and then
   wedges still accrues strikes, so `{max}` trips instead of restarting
-  forever.
+  forever. Giving up is a stream line, **not a failure**: after
+  `giving up after N restart(s)` the line exits 0, and so does a run whose
+  child exited nonzero without `restart:` (its stream simply ends). Gate it
+  where CI decides — `procs({api: "bun api.ts", restart: {max: 3}}) | assert (l => !/giving up/.test(l.line))`
+  — because supervision stopping is not the same as the pipeline succeeding.
 - `ready` — a readiness probe: `":3001/health"` / `"http(s)://…"` (ready =
   any 2xx) or `"port:5432"` (ready = TCP connect succeeds). Long form
   `{url?, port?, timeoutMs?, intervalMs?, probeTimeoutMs?}` (defaults 30s /
   250ms; each probe is capped at `min(intervalMs*4, 2s)` unless
   `probeTimeoutMs` raises it — needed for health endpoints that take >2s to
-  first byte). Probe progress is reported on a `ready` stream
+  first byte). Those keys belong INSIDE the probe object: a `timeoutMs`
+  sitting next to `cmd` is ignored without a word, so
+  `procs({api: {cmd: "sleep 40", ready: "port:3001", timeoutMs: 1200}})`
+  waits the full default 30s. Probe progress is reported on a `ready` stream
   (`ready after 120ms (…)`). On
   timeout, a restartable proc is killed and respawned (readiness is
   re-awaited after every restart); a non-restartable one fails the whole
@@ -269,7 +393,10 @@ procs({
   `{url?, port?, intervalMs?, probeTimeoutMs?, failures?, graceMs?}`
   (defaults: 5s interval — liveness polls for the proc's whole life, so the
   cadence is deliberately slower than readiness; 3 consecutive failures;
-  `graceMs: 0` delay after ready before the first probe). It arms once the
+  `graceMs: 0` delay after ready before the first probe). Use `url` here —
+  a `port` probe is only a TCP connect, and a wedged listener still accepts:
+  a server answering 503 for four seconds under `live: {port: 3001, failures:
+  3}` produced no `probe failed` line at all and the run exited 0. It arms once the
   proc is up (after `ready:`, or at spawn without one) and reports on a
   `live` stream: `probe failed (k/N) (…)`, `recovered after k failed
   probe(s) (…)` when a streak breaks, and `unhealthy after N consecutive
@@ -323,7 +450,9 @@ result should mean:
 | `filter (x => …)` | the item is **dropped** (plain JS truthiness: `0`, `""`, `null`, `undefined` all drop) | passes |
 | `assert (x => …)` | the **pipeline fails** naming the item | **fails** |
 
-Async predicates are awaited in all three.
+Async predicates are awaited in all three. A lambda body may `await` directly —
+write `(s => JSON.parse(await Bun.file(s).text()))`, no `async` keyword needed:
+a body that mentions `await` is compiled as an async arrow.
 
 **Shell stages see `node_modules/.bin` on PATH, npm-run style.** Every
 ancestor `node_modules/.bin` of the current directory is prepended
@@ -531,8 +660,12 @@ with the tag keys to scope it:
 … | stats --every 5 | assert (s => !s.final  || s.p95 < 200)   # final only
 ```
 
-Both guards are also correct without `--every` (the plain summary carries
-neither key, so the threshold applies).
+**A guard needs the object it guards.** The plain summary (no `--every`)
+carries *neither* key, so `!s.window` is already true and `||` short-circuits:
+the threshold never runs and the gate passes anything. Verified —
+`range(0,9) | parallel 2 | GET :3000/health | stats | assert (s => !s.window || s.p95 < 0.1)`
+exits **0** with p95 at 4.2. Same for `!s.final ||`. Drop the guard when you
+drop `--every`; a gate that can never fail is worse than no gate.
 
 **Warmup** is a separate line in the same `-c` script — its summary simply
 isn't gated:
@@ -644,11 +777,22 @@ logs <source>                   # interactive log search over a held stream
 skills <list|install>           # install the embedded agent skills
 ```
 
-Builtins run in-process. They dispatch when the first token matches a builtin
-name **and** the line has no *unquoted* pipe (`|`), redirect (`<`, `>`), or
+Builtins run in-process. They dispatch when the first token matches a tool
+builtin name **and** the line has no *unquoted* pipe (`|`), redirect (`<`, `>`), or
 sequencing (`&`, `;`) operator. Quoted ones are fine, which is what makes
 `export DB='postgres://h/d?a=1&b=2'` and `alias two='a | b'` work — before the
 gate understood quotes, both silently did nothing and exited 0.
+
+A tool builtin carrying a redirect, or appearing anywhere in a shell pipeline,
+says so rather than reaching `sh` (`sh: line 1: mock-server: command not found`
+read as crust not having the builtin): redirect the whole invocation instead —
+`crust -c 'mock-server spec.json' > mock.log`. The same refusal covers every
+position, so `mock-server spec.json | grep ok` and `range(0,2) | test-fixture
+a.ts` name the builtin instead of exiting 127 — the tools run in-process, so no
+shell operator can wrap them; `logs` adds that its filters belong at the `logs>`
+prompt. Shell-word builtins (`cd`, `export`, `source`, …) keep sh's meaning
+for the operator, and a real binary installed under one of these names is never
+shadowed.
 
 Builtin lines accept sh-style trailing comments, same as shell stages:
 `dotenv .env.test # matrix run`. Only an unquoted `#` that starts a word
@@ -673,10 +817,13 @@ GET :3000/api/buildings -H "authorization: Bearer $TOKEN" | (r => r.json()) | as
 
 The pieces:
 
-- **JSON-literal source** — a stage starting `{`/`[` parses as JSON and
-  yields one item: the request body. Invalid JSON is a **hard error**; it
-  never falls back to shell (a typo'd body exec'ing as a command would be
-  baffling).
+- **JSON-literal source** — a stage starting `{`/`[` that is JSON, or still
+  looks like someone typing one, parses as JSON and yields one item: the
+  request body. Invalid JSON is a **hard error**; it never falls back to
+  shell (a typo'd body exec'ing as a command would be baffling). The shell's
+  own bracket shapes are always spaced — `{ …; }` groups, `[ … ]` tests — so
+  `{ echo a; echo b; } | cat` and `[ -f f ] && echo ok` are shell stages, not
+  literal attempts.
 - **`-H "Key: value"`** — repeatable header flags on every http verb stage.
 - **`read <path|glob>`** — whole-file contents, one item per matched file
   (sorted; zero matches errors). Gotcha: this shadows POSIX `read <var>` at
@@ -718,7 +865,11 @@ verbatim and stays unexpanded.)
 
 ## TypeScript API
 
-The full pipeline surface is available to any `.ts` file run by Bun, including `~/.config/crust/init.ts`. Crust exposes these as globals when starting up:
+The full pipeline surface is globals **wherever crust starts its runtime**: every
+crust line (`-c`, REPL, stdin, `.crust` files), `~/.config/crust/init.ts`, and any
+`.ts`/`.js` file crust imports (`source file.ts`). A file run by plain `bun
+script.ts` never starts crust, so it gets none of them — import what you need
+from the modules below instead. Crust exposes these as globals when it starts up:
 
 ```ts
 Pipeline             // class — the unified stream abstraction
@@ -1079,7 +1230,8 @@ Derived cases:
   enum violation — asserting the canonical
   `{ error, code: "validation", fieldErrors }` body. Perturbations are
   applied to a **schema-valid base body** (with format-aware synthesis:
-  emails, uuids, dates, simple digit-pattern sampling), so exactly one thing
+  emails, uuids, dates, and values built from the field's own `pattern` — classes, quantifiers and
+  groups, each verified against the regex before it is used), so exactly one thing
   is wrong per case.
 - **400 boundary violations**, for ALL body properties — required *and*
   optional — in fixed per-field order: too short (`minLength`), too long
@@ -1087,12 +1239,17 @@ Derived cases:
 - `allOf` is merged as an **intersection**: `properties` and `required` are unioned across the branches, and where two bounds disagree the stricter one governs (`minLength: 3` beside a branch's `minLength: 40` means 40, since a 3-character value satisfies neither both). This reaches the shape where a node carries the `type` and leaves refinements to its branches.
 - The `enum` member picked satisfies the schema's own declared `type` — real specs write `{type: "string", enum: [true, false]}` — and `required`/`properties` are read **through `allOf`**, so an object composed from branches gets every field the composition demands rather than an empty body.
 - An object whose properties live in a **union branch** is built from that branch. A node declaring `type: "object"` alongside a `oneOf`/`anyOf` used to produce `{}`: the explicit type sent it straight to the object case, which composes through `allOf` only. The same node WITHOUT a type worked, which is what kept it hidden. The first branch is taken, since a union offers alternatives rather than an intersection.
+- **The mirror shape too**: the node declares the `properties` once and each branch says only *which of them* this form needs — urlbox.io's `RenderRequest` is `{oneOf: [{required: ["url"]}, {required: ["html"]}], properties: {url, html, format, …}}`, which is how a two-form POST gets written. A branch was read only when the node owned nothing at all, so this one composed to `{}`: the base body satisfied no branch, crust's own validator answered `anyOf`, and every negative case of the operation went behind `crust's own value for the body (anyOf) does not satisfy the schema` — urlbox generated **no cases from its whole spec**. Now a branch is read when the composed view **cannot satisfy one**: a branch requiring nothing is satisfied by anything, and a branch the node's own `required` already satisfies is *not* read, because on a `oneOf` adding the other alternative makes the body match two branches and breaks the very thing being composed for. 93 operations across 23 of the corpus's specs write this shape: the mentions blaming crust's body went **23 → 0**, the operations reporting *no negative cases at all* went **21 → 0**, cases rose **5,888 → 5,996** and **no spec lost one**. The control is the 31 union-body specs that do not write it — 29 byte-identical in both cases and notices (whatsapp's `audio`/`image` body composes exactly as before), the other two gained cases and lost a notice, their union being this shape one level deeper than the scan reaches.
 - `exclusiveMinimum`/`exclusiveMaximum` are honoured in **both spellings** — 3.0's boolean modifier on `minimum`/`maximum`, and 3.1's number — so a `{maximum: 1, exclusiveMaximum: true}` field is never answered with `1`, the one value it excludes. Where a `format` and a `pattern` are both declared, the format constant is used only if it satisfies the pattern: `format: email` beside a pattern whose TLD is 2-5 letters rejects `gen@crust.fixture`, which has seven. And the field-name heuristics yield to an explicit `format` as well as to a `pattern` and a length bound — a field called `first_email_date` declaring `format: date-time` was getting the email constant.
 - Formats the generator has no constant of its own for — `uri`/`url` above all — fall through to the same defaults the mock uses. Its four fixed constants (email, uuid, date, date-time) keep their values so existing matrices do not churn. And the field-name heuristics yield to anything the schema actually states — an explicit `pattern`, and equally a length bound: `client_id: {type: "string", maxLength: 20}` never mentions uuid, and the 36-character one does not fit. An explicit `format` is different: there the schema asked for the value itself, and a `maxLength` too small for it is the spec contradicting itself, which crust leaves visible. An explicit `pattern` also **outranks the field-name heuristics**: a field called `job_id` carrying `^job-[0-9]{3}$` gets a value matching the pattern, not the stable uuid, because a guess from a name must not beat what the schema says.
 - The **valid base body honours the schema's own bounds** — `maxLength`, `minLength`, `minItems`/`maxItems`, `minimum`/`maximum`. Every 400-case perturbs that body, so where it was already invalid the expected 400 could arrive for the wrong reason: a false pass, which is the one thing crust must never produce. The fixed format values (`gen@crust.fixture`, the stable uuid) are deliberately unchanged, since checked-in matrices are CI-diffed against a regeneration.
 - A **wrong-type case is only generated when the value is actually rejected**. A field whose schema constrains nothing — `{properties: {…}}` with no `type`, a description-only node — has no wrong value, and such a case would assert `-> 400` for a request a correct API answers 200: a test that fails against a correct implementation. 6,101 were derivable from the APIs-guru corpus. crust owns the validator, so it asks it rather than guessing.
 - A missing `type` is **inferred from the keywords present**, shared with the mock — so `{minLength: 3}` with no type now yields the boundary case it silently skipped before.
+- A **body crust cannot fill carries no cases it cannot attribute**. The pattern sampler returns its placeholder for a pattern it cannot read, which is *knowingly* wrong for the mock and was quietly wrong here: the placeholder landed in the base body, so a case about `name` shipped a body invalid in `subnetId`. The 400 then names `subnetId`, and the case fails a correct implementation or passes for a reason unrelated to its own name. 1,799 of the 164,473 request-body fields in the APIs-guru corpus were in that state, and the bulk of them were readable all along — crust was refusing groups (see the mock's `string` rule below). Reading groups took the 39 specs that were still losing cases from 186 declined fields down to 11, with nothing that used to build falling back; what remains is a lookahead, `\A`/`\Z` anchors, and a JavaScript regex literal written into `pattern`. So the base body is checked with crust's own validator and every case whose 400 could name a field other than the one it asserts is dropped — keeping the cases about the invalid field itself, and the 401/403/404 cases, whose gate answers before the body is read. The drop is printed (`gen-fixtures: 2 case(s) skipped for POST /things — crust's own value for 'subnetId' (pattern) does not satisfy the schema, so a 400 from that body would name the wrong field`): a smaller suite is a fact to report, not a silence to ship.
+- **A drop notice says whose fault it is.** Some specs allow no value at all: `VMDiskType: {type: integer, format: int32, enum: ["0 (StandardHDD)", "1 (StandardSSD)", "2 (PremiumSSD)"]}` (visualstudio.com/v1 — the enum members are YAML strings beside an int32), or `{type: string, enum: [true, false]}` (apptigent). No generator fills those fields, so blaming crust's value for one sends the reader to the wrong repo. The notice asks the validator the only question that settles it — does *any* member of that enum satisfy the node holding it — and when none does it names the contradiction and where it sits: `gen-fixtures: 3 case(s) skipped for PATCH /api/v1/tenant/{tenantId}/Pool/{poolName} — the SPEC contradicts itself: 'vmSpecs' — /diskType: enum ["0 (StandardHDD)", "1 (StandardSSD)", "2 (PremiumSSD)"] fails type, so a 400 from that body would name the wrong field` (that one is real, from visualstudio.com/v1; dracoon.team puts an `enum` of strings on a `type: array` node, and apptigent writes `{type: string, enum: [true, false]}`). Fields where crust's own value is what breaks keep the old wording, since that is the half you can file against crust, and a body with both says both. Only keywords that MUST hold are followed, so a contradiction in an optional field is not reported (the base body omits optional fields) and a union is the spec's only when *every* branch is unsatisfiable. Across the 39 APIs-guru specs that emit these notices the mentions naming crust's value went 68, then 24 once a body declared across `allOf` branches was read as one body (above), then 7. What those 7 name: a lookahead, `\A`/`\Z` anchors, an enum, and two `pattern`s written as JavaScript regex literals (`/^[a-z0-9._]+$/`), which cannot match as written — the leading `/` is a literal, so the `^` behind it asserts a start the string has already left. The summary ends with `note: N operation(s) left with no negative cases` (32 of them across those specs) — "40 cases dropped" and "this operation is uncovered" are different facts, and per-operation notices are the first thing a harness greps away.
 - Every `$ref` is inlined once and **shared**, and inlining stops after 200,000 nodes. azure's `network-applicationGateway` is a DAG of a few schemas referenced from many places: copying at each occurrence turned a few-MB spec into a 2.03 GB structure — 17s where it survived and OUT OF MEMORY on five of nine versions, so `gen-fixtures` there did not run slowly, it did not run. Past the budget a `$ref` inlines as `{}`, exactly as a cyclic one does, and gen-fixtures says so on stderr: fewer generated cases, none of them wrong.
+- A keyword written **beside a `$ref`** is read by the rule the mock reads it with, not by "everything wins". Narrowing ones apply — `enum`, `const`, `format`, `pattern`, the bounds, `example`, `examples`, `default`: that is how a spec restricts one use of a shared type (ideal-postcodes narrows a referenced string with a `pattern`). Structural ones do not — `type`, `properties`, `items`, `required`, `additionalProperties`, `allOf`/`oneOf`/`anyOf`, `nullable`, `discriminator` — for the same reason the mock ignores them (see its `oneOf`/`$ref` rule: sibling keywords were illegal beside `$ref` before 3.1, so Swagger-2 conversions are full of leftovers), and because a generated case asserts against **crust's own validator**, which resolves a `$ref` and validates the resolved node alone. Both directions follow from that. britbox writes `{$ref: ItvDeleteAccountRequest, type: string}` in an openapi 3.0.0 document, and that used to inline as a string carrying the target's `required` and `properties` — a node no value satisfies — so crust's own base body failed crust's own validator and **all four of that spec's JSON-body operations were dropped** behind `crust's own value for the body (type)`; they now generate 16 cases, `missing required 'profileToken'` among them. digitalocean writes `{$ref: …, required: [droplet_ids]}`, and crust no longer fills that field in a body — because the validator would not 400 without it either, so a case built from the sibling would assert a 400 that crust's mock answers 200. Measured across 4,138 specs: 2,274 put a keyword beside a `$ref`, 180 of them a structural one (2,003 sites — azure 104 specs, twilio 32; `type` 157, `nullable` 43), of which 118 are Swagger 2.0, 56 openapi 3.0.x and only 6 are 3.1. Dialect is deliberately not part of the rule: 3.1 legalises siblings without making a conflicting `type` any less ambiguous, and honouring them there would put the two halves of crust back in disagreement over exactly those 6 specs. Annotations (`description`, `title`) go the same way as the structural siblings, so a generated `output.schema` can carry one less description than it used to; nothing ever validated on it.
+- A **Swagger 2.0 `in: body` parameter is the operation's request body.** 2.0 has no `requestBody` — the body is a parameter — and the conversion dropped it, so a Swagger 2.0 spec could get no 400 matrix at all, however carefully it documented its 400s: `aiception.com` emitted 5 cases and `adafruit.com` 68, none of them about a body. Measured over the corpus with references resolved, **1,528 specs and 10,870 operations** declare their bodies this way — 10,083 on the operation, 775 through `$ref: #/parameters/…`, 12 on the path item. (My first two scans said 1,443 and 10,083: they matched `in == "body"` and so never saw a body arriving by `$ref`. The control caught it — a "body-less" control spec whose output tree changed.) The conversion now moves the parameter where both halves read it, so cases went **1,818 → 3,711** across that population, qualifying collections went **0 → 68** (a 2.0 spec could never produce a CRUD flow before), 38 specs moved off absolute zero, and **no spec lost a case**. The control is 120 Swagger-2 specs with no body parameter: **0 of 120** differ in their generated tree, hashed rather than counted. `consumes` picks the media type, operation-level first, JSON preferred, and a non-JSON one is carried as declared — crust does not validate form bodies, so a case built from one would assert a 400 its own mock never returns. One consequence to expect: the 401/403/404 cases of a 2.0 operation now send the body the spec declares instead of nothing, since a route may validate the body before it checks who is calling — on a method that can carry one, `GET` and `HEAD` excepted (see the rule below).
   below minimum / above maximum (`maximum: Number.MAX_SAFE_INTEGER` is
   treated as an "unbounded" sentinel and skipped), and pattern violation
   (deduped when the required-field wrong-type case already sends an
@@ -1108,6 +1265,24 @@ Derived cases:
   server). Regenerating a spec that predates the boundary matrix yields a
   purely additive diff — existing case names, order and bodies are
   untouched.
+- **A body on `GET` or `HEAD` generates no request that carries one.** No client can send that
+  request: `fetch` refuses to build it (`fetch() request with GET/HEAD/OPTIONS method cannot have
+  body.`), so the generated case did not *fail*, it ERRORED — running a pre-fix generated suite
+  through `test-fixture` reads `error: fetch() request with GET/HEAD/OPTIONS method cannot have
+  body.` And Bun discards a `GET` body even when a raw client sends one (see the mock's
+  `--validate` rule), so there is no request crust could emit that the API would ever see. The
+  body is therefore read only for a method that can carry one: the operation's 401/403/404 cases
+  survive, minus the body they used to carry, and the 400 matrix is not derived at all. Across
+  the 29 corpus specs that declare a body on `GET` (270 operations; openapi 3.x — the 9 Swagger
+  2.0 ones never get a body in the first place, see above) GET cases carrying a body went
+  **15 → 0**, 408 of the 414 GET cases remain, and the 6 that went were the 400-matrix cases that
+  could never run — what crust *can* send on a `GET` it still sends. The loss is disclosed, not
+  shipped as silence: `gen-fixtures: 1 operation(s) document a request body on GET or HEAD —
+  crust sends no body with those methods (fetch refuses the request), so their 400 matrix is not
+  generated; 1 of them now have no negative cases at all`, and those operations count toward the
+  `note: N operation(s) left with no negative cases` aggregate (261 of the 270 across that
+  population). Control: 120 corpus specs with a body on POST/PUT/PATCH and none on GET/HEAD —
+  **0 of 120** generated trees differ, hashed rather than counted.
 
 #### Generated CRUD flows
 
@@ -1121,7 +1296,10 @@ scope param (nested collections are skipped with a stdout notice), and the
 created id's location is derivable from the POST's 2xx response (the media
 `example`, else `schema.properties`: top-level `id`, else the first
 object-valued property containing an `id`; not derivable → skipped with a
-notice).
+notice). A flow whose derived create body crust cannot fill — a required field
+whose pattern it cannot build — is also skipped with a notice instead of
+shipped: its very first step would 400 against a correct implementation, so
+the flow would fail for a reason nobody wrote.
 
 Each flow chains create → read → update → delete → read-after-delete using
 the [capture](#shorthand-fixture-grammar) stage — the POST captures the new
@@ -1216,7 +1394,7 @@ Response bodies are picked example-first, schema-fallback:
 
    **Type.** Where a node omits `type` it is inferred from the keywords present: `format`, `pattern` and the length bounds are string-only; the numeric bounds are number-only; `properties`/`items` say object and array; an `enum` says the type of the member picked. `type` is optional in JSON Schema and the other keywords are not decoration — sinao writes `items: {format: "string"}`, and crust used to emit `[null]` for it. A node stating none of them still has no type. The 3.1 union form `type: ["string","null"]` synthesises the first **non-`null`** member, so a nullable field still gets representative data.
 
-   **`string`** → a value satisfying the schema's own constraints. A format-aware default for `email`, `date-time`, `uuid`, `uri`; otherwise a value constructed from `pattern` — character classes, `\d \w \s .`, the quantifiers `{n} {n,m} + * ?`, `\uXXXX` escapes inside a class (`[\u0031-\u0039]` **is** `[1-9]`, and AWS writes it that way), literals, and alternation **between top-level branches** — and **verified against the real regex before it is used**, so a construction crust cannot manage degrades to a neutral value rather than a confidently wrong one. Alternation is read only where it separates whole branches: a `|` nested inside a group is not something the character walk can choose between, so `^(a|b)$` degrades to the neutral value like any other construction crust declines. Inside a character class the pipe is simply one of its members — `[\w|-]` includes it — and is built normally. Where both a `format` and a `pattern` are declared, the pattern wins if the format default cannot satisfy it: a format names a family of values, a pattern names which of them.
+   **`string`** → a value satisfying the schema's own constraints. A format-aware default for `email`, `date-time`, `uuid`, `uri`; otherwise a value constructed from `pattern` — character classes, `\d \w \s .`, the quantifiers `{n} {n,m} + * ?`, `\uXXXX` escapes inside a class (`[\u0031-\u0039]` **is** `[1-9]`, and AWS writes it that way), literals, and **groups** — `(?:…)` is read as the ordinary group it is, an alternation inside a group takes its first buildable branch, and a group counts as one atom so `(…){n}`, `(…)*`, `(…)+` and `(…)?` repeat what the group matched. That is the difference between a placeholder and a value for the shapes specs actually write: `^(subnet-[0-9a-f]{8}|subnet-[0-9a-f]{17})$` now yields `subnet-00000000`, `^([0-9]{1,3}\.){3}[0-9]{1,3}$` yields `0.0.0.0`, `^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=|[A-Za-z0-9+/]{4})$` yields `AA==`. All of it **verified against the real regex before it is used**, so a construction crust cannot manage degrades to a neutral value rather than a confidently wrong one — reading more can cost a build that should have worked, never a value that is wrong. What crust still declines: a lookahead or lookbehind, a named or atomic group, a back-reference, nesting past eight levels, `\A`/`\Z` (Python anchors, which ECMA-262 reads as the letter `A`), and a pattern written as a JavaScript regex literal — see the boot line above. Alternation is never **joined**: `(a|b)` builds one branch, never `a|b`, because `matchesPattern` is an unanchored test — a joined value passes it and breaks the `maxLength` beside it. Inside a character class the pipe is simply one of its members — `[\w|-]` includes it — and is built normally. Where both a `format` and a `pattern` are declared, the pattern wins if the format default cannot satisfy it: a format names a family of values, a pattern names which of them.
 
    Lengths are then clamped to `minLength`/`maxLength` — but **never in a way that unmakes the match just verified**. Length is bought by widening an open-ended quantifier (`+`, `*`, `{n,}`); where a fixed-width pattern and the bound cannot both hold, the pattern wins as the narrower statement. A format-derived value is likewise never truncated, so `{format: uuid, maxLength: 8}` keeps the valid uuid instead of emitting `"00000000"`. Plain `"string"` appears only when nothing constrains the field.
 
@@ -1232,7 +1410,7 @@ Response bodies are picked example-first, schema-fallback:
 
    **`oneOf`/`anyOf`** → the first branch, merged with the node's own `properties` where it has them (the branch wins a conflict, being the narrower statement about which variant this is); some specs use a union purely to say "one of these *required* sets" and declare the properties on the node, and taking the branch alone yielded `null` for the whole object. Where a `discriminator` is present the chosen branch is **named**: the property takes the mapping key that selects it, or the schema's own name when there is no mapping. Both spellings are handled — the base carrying `oneOf` plus a discriminator, and the commoner inheritance form where the derived schema carries `allOf: [{$ref: Base}]` together with the discriminator whose mapping names it. A branch that pins the property itself (`const`, a single-value `enum`) keeps its own value.
 
-   **`$ref`** — local refs into `components.schemas.*` are resolved, and **narrowing keywords written beside a `$ref` apply**: `enum`, `format`, `pattern`, the bounds, `example`, `default`, since 3.1 permits them and they are how a spec restricts one use of a shared type. *Structural* siblings (`type`, `properties`, `items`) are deliberately ignored — sibling keywords were illegal beside `$ref` before 3.1, so Swagger-2 conversions are full of leftovers the tools of that era ignored, and acting on them makes correct bodies wrong.
+   **`$ref`** — local refs into `components.schemas.*` are resolved, and **narrowing keywords written beside a `$ref` apply**: `enum`, `const`, `format`, `pattern`, the bounds, `example`/`examples`, `default`, since 3.1 permits them and they are how a spec restricts one use of a shared type. *Structural* siblings (`type`, `properties`, `items`, `required`, `nullable`, `allOf`/`oneOf`/`anyOf`) are deliberately ignored — sibling keywords were illegal beside `$ref` before 3.1, so Swagger-2 conversions are full of leftovers the tools of that era ignored, and acting on them makes correct bodies wrong. `gen-fixtures` inlines a `$ref` by this same rule, so both halves of crust read one referring node the same way (see the gen-fixtures rule above for what that unblocked).
 
    A **cyclic** `$ref` terminates with the properties its schema *requires* and nothing else; optional properties are dropped, which is what makes it finite, since the property closing the loop is nearly always optional. A required property that closes the loop gets the empty shape of the type it declares. A required *array* of the type being terminated is finite either way, and which answer is right depends on the ELEMENT: where the element type requires nothing of its own, the array is filled to `minItems` with that empty shape, because it costs nothing and satisfies the bound; where the element has required properties, it stays `[]`, since one element carrying none of them is valid at the top and wrong at every level below — and `--validate` then reports the bound honestly rather than crust hiding it. connect's evaluation forms are the first case (`EvaluationFormItem` requires nothing, so a terminated section keeps its `minItems: 1`); quicksight's sheet layouts are the second (`Layout` requires `Configuration`, so `Layouts` is empty and says so). Both the required list and that type are read **through `allOf`**, because real specs compose recursive types out of branches rather than declaring them on the node; reading the node alone found nothing and terminated with `null`, putting the wrong type in a body crust's own validator then rejected.
 
@@ -1374,6 +1552,35 @@ violation carries `pointer` (JSON pointer into the body, or the param name),
 (`body`/`path`/`query`). Composes with `--stateful`: an invalid POST returns
 `422` and creates nothing.
 
+A **Swagger 2.0 document's body is validated too.** 2.0 has no `requestBody` — it
+declares the body as a parameter with `in: body` — and the conversion used to drop
+that parameter, so `--validate` on a 2.0 spec had no body to validate at all. What
+that looked like, measured against a schema requiring `name`: `POST /widgets` with
+`{"size":"nope"}` was answered with the documented `201`, and so were `"a string"`
+and `{}`. Now it answers `422` carrying `missing required property 'name'` and
+`expected integer, got string`, while a valid body still gets its documented `201`
+and its synthesised response. The media type comes from `consumes`, operation-level
+first and JSON preferred; a declared non-JSON type is carried as declared, so a
+form body stays a form body and is still not validated (below). That is 1,528 specs
+of the APIs-guru corpus and 10,870 operations — a third of it, every one Swagger 2.0.
+The exception is `GET` and `HEAD`, where a body is not something a request can carry (just
+below): 9 specs declare one there, 12 of them required. Those parameters stay exactly where
+they were.
+
+A **`requestBody` on `GET` or `HEAD` is never enforced**, in any dialect. No client can deliver
+that body: `fetch` refuses to build the request (`fetch() request with GET/HEAD/OPTIONS method
+cannot have body.`), and Bun discards one a raw client sends anyway — measured through
+`Bun.serve`, a `GET` arrives with `content-length: 13` and `arrayBuffer()` reads 0 bytes. So
+`required: true` on a `GET` is a constraint nobody can satisfy, and crust does not report it.
+What that cost, on a corpus spec: `trakt.tv`'s `GET /shows/{id}/progress/collection` documents a
+required body and a `200`, and `--validate` answered every GET to it `422 request body is
+required but absent` — the well-formed ones included, since no client can satisfy that
+requirement. It answers the documented `200` now. The corpus does this 20 specs and **270
+operations** deep (openapi 3.0.0: 245 ops / 12 specs; 3.0.3: 23 / 6; 3.0.1 and 3.1.0: 1 each),
+and 10 of those operations are `required`, across 7 specs — those 7 are the ones that had been
+refusing every GET. The rule is "you cannot *require* a body on these two methods", not "bodies
+on `GET` are ignored": a body that does arrive is still validated against its schema.
+
 What is checked: path/query parameters (string values are coerced to the
 declared `integer`/`number`/`boolean` type first; path params are
 percent-decoded before validation; `header`/`cookie` params are skipped),
@@ -1444,6 +1651,13 @@ mutually exclusive with `--stateful`. `--strict` composes with `--proxy`:
 the additionalProperties check then applies to both request and response
 bodies — recorded, never enforced, like every proxy-mode violation.
 
+Turn the findings into a gate. The decode stage is required — an HTTP stage
+hands over the response object, so `.violations` is `undefined` without it:
+
+```crust
+GET :4000/__crust/violations | (r => r.json()) | (v => v.violations.filter(x => x.direction === "response")) | assert (a => a.length === 0)
+```
+
 ```bash
 mock-server --swagger ./openapi.yaml --port 4000 --validate
 mock-server --swagger ./openapi.yaml --port 4000 \
@@ -1500,9 +1714,29 @@ verify-web-links --base-url https://example.com --fixtures meta/*.crust.ts
 verify-web-links --site-map-url ./public/sitemap.xml --no-recurse
 ```
 
-Flags: `--site-map-url <url-or-path>` or `--base-url <url>` (one required, mutually exclusive); `--fixtures <glob>` (optional `.crust.ts` meta fixtures); `--concurrency N` (default `4`); `--timeout ms` (default `10000`); `--user-agent <s>`; `--max-depth N` (default `5`); `--no-recurse` / `--no-anchors` / `--no-redirect-warnings` to opt out of those checks; `--include-external` to status-check off-origin links (never recursed); `--exclude <substring>` (repeatable) to skip URLs containing the substring — for subtrees that redirect by design, like a WooCommerce `/checkout/` or `/wp-admin/`; `--max-pages N` to stop after N URLs (the report counts what was left unchecked — a safety valve for crawls that explode into e.g. WooCommerce filter URLs; default `0` = unlimited); `--no-progress` to silence the 5-second progress heartbeat on stderr; `--json` for a machine-readable report.
+Flags: `--site-map-url <url-or-path>` or `--base-url <url>` (one required, mutually exclusive); `--fixtures <glob>` (optional `.crust.ts` meta fixtures); `--concurrency N` (default `4`); `--timeout ms` (default `10000`); `--user-agent <s>`; `--max-depth N` (default `5`); `--no-recurse` / `--no-anchors` / `--no-redirect-warnings` to opt out of those checks; `--include-external` to status-check off-origin links (never recursed); `--exclude <substring>` (repeatable) to skip URLs containing the substring — for subtrees that redirect by design, like a WooCommerce `/checkout/` or `/wp-admin/`; `--max-pages N` to stop after N URLs (the report counts what was left unchecked — a safety valve for crawls that explode into e.g. WooCommerce filter URLs; default `0` = unlimited); `--no-progress` to silence the 5-second progress heartbeat on stderr; `--json` for a machine-readable report; `--strict` to fail (exit 1) unless **every discovered link was checked** — see below.
 
 By default, all four verification behaviors are on: 2xx status, recurse into internal pages, validate `#fragment` targets against element ids on the destination page, and flag any 3xx redirect chain (often a sign of stale internal links). Each `og:image` URL is fetched and its content-type asserted to start with `image/`.
+
+A page is crawled when crust can read it as a HTML document: when the content-type says so
+(`text/html` or `application/xhtml+xml`), or when the declaration says otherwise but the document
+itself begins `<!doctype html>` / `<html`. That second case is printed — `N page(s) had to be
+recognised from their body or an xhtml content-type` — because the server is mislabelling its own
+pages, and crust following them anyway is not the same as the run being healthy. A page-shaped
+document that is *neither* (a JSON API response that ended up in a sitemap) is **not** crawled: its
+`<a href>` strings are data, not links. It is counted in `totals.unparsedPages`, which makes
+`totals.complete` false — a link graph crust could not read is never reported as a clean one.
+
+`totals.complete` is the machine-readable version of "nothing was left unchecked": false when
+`--max-pages` cut the crawl short, when a `#fragment` link pointed at a page crust never parsed, or
+when `unparsedPages` is nonzero. **In CI, prefer `--strict`**, which turns that same fact into exit
+1 — you cannot wire the check up as a pipeline stage, because a builtin runs on its own line:
+`verify-web-links --json | assert (r => r.totals.complete)` is refused outright. Reading the JSON
+from a shell instead works, but only ever checks what you remembered to look at:
+
+```bash
+verify-web-links --base-url https://example.com --strict --max-pages 500
+```
 
 Meta fixtures use the same `.crust.ts` default-export pattern as `test-fixture`. Predicates (single-arg functions) work on any value:
 
@@ -1526,7 +1760,7 @@ verify-web-links --base-url https://example.com --fixtures site/*.meta.crust.ts
 
 Fixture `url`s are matched **URL-normalized**, not byte-for-byte: `https://example.com` and `https://example.com/` are the same page, host case and default ports don't matter. A trailing slash on a non-root path stays significant — `/login/` and `/login` are different pages.
 
-Exit codes: `0` all clear, `1` verification failures (broken links, missing anchors, redirect chains, OG image issues, meta mismatches), `2` bad args / unreachable sitemap.
+Exit codes: `0` all clear, `1` verification failures (broken links, missing anchors, redirect chains, OG image issues, meta mismatches) — or, with `--strict`, a run that finished having left discovered links unchecked, `2` bad args / unreachable sitemap.
 
 ### logs — interactive log searching
 
@@ -1626,14 +1860,31 @@ gap the buffer while looking live, which is exactly the false picture
 
 Crust ships a small set of `crust.fn`-registered helpers. They work as both pipeline stages (`echo … | base64`) and one-shot sources (`base64 hello`). User-defined `crust.fn(...)` calls in `init.ts` override these by name.
 
+Each builtin answers `-h`/`--help` with its usage screen and exit 0 — **at parse time, before any stage runs**, so `http … | sql --help` prints usage without making the request. The scan stops at `--`, so `base64 -- --help` encodes the flag, and a value that arrives through the pipe is never an option (`echo --help | base64` encodes it). A `crust.fn` override of the name keeps its handler's own argument handling — `--help` is just another argument to it.
+
 | Function | Usage |
 |---|---|
-| `base64 [-d \| decode]` | Encode (default) or decode. `echo hi \| base64` → `aGk=`; `echo aGk= \| base64 -d` → `hi`. |
-| `salt [bytes] [hex\|base64\|base64url]` | Cryptographically random bytes. Defaults: 16 bytes, hex. `salt 32 base64`. |
+| `base64 [-d \| decode] [-f \| --file <path>] [-o \| --out <path>] [--]` | Encode (default) or decode **text**. `echo hi \| base64` → `aGk=`; `echo aGk= \| base64 -d` → `hi`. Shadows `/usr/bin/base64`, which takes the same argument and encodes the **FILE** — see below. Options are only ever what you typed: `-d` arriving as a piped *item* is data. A dash you did not define is refused, never encoded. `-f`/`--file <path>` reads a file's bytes, `-o`/`--out <path>` writes the result to a file. Decoding checks its input: a character outside `A-Za-z0-9+/=`, `-`/`_`, and whitespace is an error, not mojibake. |
+| `salt [bytes] [hex\|base64\|base64url]` | Cryptographically random bytes. Defaults: 16 bytes, hex. `salt 32 base64`. Mid-pipeline it emits one salt per item and the byte count is the argument that *trails* the item — `lines users.csv \| salt 16` — because the item takes the first slot in any registered function; a bare `\| salt` refuses to guess. |
 | `jwt sign \| verify \| decode --secret <s>` | HS256 JWT. Reads `$JWT_SECRET` if `--secret` omitted. Item can be a JSON string (sign) or a token (verify/decode). |
 | `bundle <entry> [--outdir \| --outfile \| --minify \| --sourcemap \| --target=bun\|browser\|node]` | Wraps `Bun.build` for one-shot bundling. With `--outfile`, writes the first artifact and returns `{outfile, bytes}`. |
-| `sql "<query>" [params…]` | Runs a SQL query via Bun's SQL client using `$DATABASE_URL`. **Streams one item per row in both positions** — as a source and mid-pipeline. Mid-pipeline the upstream item **binds as the first parameter** when the line declares none, so `range(1,1) \| sql "SELECT … WHERE id = ?"` queries id 1; an explicitly declared parameter still wins. |
-| `wait <target> [--timeout <dur>] [--interval <dur>] [--probe-timeout <dur>]` | Blocks until a target answers, then emits `{target, ready, ms, attempts}`. Target: `:3001/health` / `http(s)://…` (ready = any 2xx) or `port:5432` (TCP connect). Durations like `300ms`/`30s`/`2m` (defaults 30s / 500ms). `--probe-timeout` caps each probe (default `min(interval*4, 2s)`) — raise it for slow-to-accept targets. Not ready in time → error, exit 1 — CI-friendly. |
+| `sql "<query>" [params…]` | Runs a SQL query via Bun's SQL client using `$DATABASE_URL`. **Streams one item per row in both positions** — as a source and mid-pipeline. **The query is always the one you wrote on the line**, whatever the upstream item is; mid-pipeline that item **binds as the first parameter** when the line declares none, so `range(1,1) \| sql "SELECT … WHERE id = ?"` queries id 1 and `"beta" \| sql "SELECT … WHERE name = ?"` queries `'beta'`. An explicitly declared parameter still wins. |
+| `wait <target> [--timeout <dur>] [--interval <dur>] [--probe-timeout <dur>]` | Blocks until a target answers, then emits `{target, ready, ms, attempts}`. Target: `:3001/health` / `http(s)://…` (ready = any 2xx) or `port:5432` (TCP connect). **A bare `:3000` probes `/`** — a spec-driven server (mock-server, most APIs) has no root route, so it 404s forever and `wait` burns the whole timeout on a server that is already up: point it at a real path, or use `port:3000`. Durations like `300ms`/`30s`/`2m` (defaults 30s / 500ms). `--probe-timeout` caps each probe (default `min(interval*4, 2s)`) — raise it for slow-to-accept targets. Not ready in time → error, exit 1 — CI-friendly. |
+
+**`base64` shadows a real command, and the two disagree about its argument.**
+`/usr/bin/base64 in.ts` encodes the file; crust's `base64 in.ts` encodes the five
+characters of the path (`aW4udHM=`) — because every crust verb in this section takes a
+*value*, and the pipeline that puts a value in front of it (`echo … | base64`) has no
+filenames in it. That is not a bug to auto-detect away: deciding by "does this string
+exist on disk" would make `read list.txt | base64` encode text or a file depending on the
+caller's cwd. So the text stays the default, the file is an explicit `--file`, and when a
+typed operand *is* a file the shadow is called out on stderr (stdout is unchanged) with the
+`--file` that means what the reader wanted.
+
+`--file` is also the only binary-safe route. `read logo.png | base64` decodes the file as
+UTF-8 on its way through the pipeline, so every invalid byte becomes U+FFFD: measured on a
+26-byte PNG, `77+9UE5H…` where `base64 -w0 logo.png` gives `iVBORw0KGgo…`. `--file` reads
+bytes and `--out` writes them, which is what you want for an image, a zip, or a key:
 
 Examples:
 
@@ -1642,6 +1893,12 @@ echo hello | base64                                  # aGVsbG8=
 echo "QmVhcmVy" | base64 -d                          # Bearer
 salt 32 base64                                       # random 32-byte token
 
+# A FILE's bytes (coreutils' meaning) — the only binary-safe route
+base64 --file logo.png                               # bytes in, base64 out
+base64 --file logo.png --out logo.b64                # …to a file: a fn stage has no redirect
+base64 --file logo.b64 -d --out logo-copy.png        # …and back, byte for byte
+printf '%s' -d | base64                              # LWQ= — an item is data, never an option
+
 # Sign + verify a JWT
 jwt sign '{"sub":"42"}' --secret k                   # eyJhbGciOiJIUzI1Ni…
 echo eyJhbGciOiJIUzI1Ni… | jwt verify --secret k     # { sub: "42" }
@@ -1649,11 +1906,19 @@ echo eyJhbGciOiJIUzI1Ni… | jwt verify --secret k     # { sub: "42" }
 # SQL as a streaming source — pipe rows downstream
 sql "select id, email from users limit 5" | (r => r.email)
 
+# Mid-pipeline — the piped value is a PARAMETER, never the query. Handy when
+# the value only exists upstream (and it stays a parameter even when the row
+# it came from is a string).
+range(2,2) | (n => "beta") | sql "SELECT name FROM t WHERE name = ?" | assert (r => r.name === "beta")
+
 # Block a CI step until the app is up (exit 1 if it never is)
 wait :3001/health --timeout 30s
 
 # Bundle in one shot
 bundle src/index.ts --outfile dist/app.js --minify
+
+# Per-function usage — answered at parse time: exit 0, nothing runs
+base64 --help
 ```
 
 Note: function-as-source now **flattens Array return values** — `fn` returning `[a, b, c]` emits three items, not one array. This makes `sql "..."` and similar row-yielding sources compose naturally with downstream lambdas.
@@ -1797,9 +2062,14 @@ POST the path strings. For a whole suite of lines like this, put them in a
 range(0, 999) | parallel 50 | GET :3000/health | expect 200 | stats
 ```
 
-Or in a `.ts` file (run with `bun script.ts`):
+Or in a `.ts` file, run with `bun script.ts`. Plain Bun gives you no crust
+globals — those exist only inside a crust line — so the file imports what it
+uses itself (`crust/sources` once published; paths below resolve in a checkout):
 
 ```ts
+import { load } from "../src/sources";
+import { parallel, statsStage, timedGet } from "../src/transforms";
+
 const summary = await load([{ durMs: 10_000, rps: 100 }])
   .pipe(parallel(50, timedGet("http://localhost:3000/health")))
   .pipe(statsStage())
@@ -1866,6 +2136,9 @@ Honest about what doesn't work yet:
   crust lines; multi-line bash constructs (`if`/`fi`, loops) won't survive
   line-by-line execution — run those with `sh file.sh`.
 - **No `$(...)` substitution across stages.** Within a single shell stage it works (delegated to `sh`).
+- **No redirects on crust stages.** `<` / `>` belong to the shell stage, whose
+  text goes to `sh` as-is; anywhere else the line is refused. Save with `… | cat
+  > f`, feed in from `lines <path>` / `read <path>`.
 - **No `|>` operator and no `[0..9]` range literal.** Need a Bun loader; v0.2.
 - **No syntax highlighting in the editor.** v0.1.5.
 - **No fuzzy history search (Ctrl-R).** v0.2.
