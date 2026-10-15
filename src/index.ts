@@ -2,7 +2,7 @@
 import pkg from "../package.json" with { type: "json" };
 import { hasUnquotedShellMeta, splitArgs, stripTrailingComment } from "./args";
 import { registerBuiltinFns } from "./builtinFns";
-import { dotenvLoad, isBuiltin, renderBuiltinList } from "./builtins";
+import { dotenvLoad, isBuiltin, renderBuiltinList, standaloneTools } from "./builtins";
 import { checkBuiltinLine } from "./checkBuiltin";
 import { type CrustGlobal, loadConfig } from "./config";
 import { onInterrupt, readLine, suspendEditor } from "./editor";
@@ -21,6 +21,9 @@ interface UserCrustGlobals {
 const USAGE = `crust ${pkg.version} — the whole test stack, baked into one binary
 usage:
   crust                    start interactive REPL
+  crust <tool> <args…>     run one tool as a command (skills, mock-server,
+                           verify-web-links, gen-fixtures, test-fixture,
+                           test-pipes) — the same verbs as at the REPL
   crust <file.crust>       run a script file and exit
   crust -c <line>          run one line and exit
   crust --check <line>     parse without running (lint documented examples)
@@ -210,6 +213,25 @@ async function main(): Promise<void> {
     if (flag.startsWith("-")) {
       process.stderr.write(`crust: unsupported argument: ${flag}\n`);
       process.exit(2);
+    }
+    // `crust skills install`, `crust mock-server openapi.json` … — a tool
+    // builtin as argv[0] is a COMMAND, not a script path. See `standaloneTools`
+    // for which names qualify and why the session builtins do not. Booted the
+    // same way `-c` is, so `crust --env-file . env mock-server x` and the init.ts
+    // hooks behave identically whichever spelling was used.
+    const tool = standaloneTools[flag];
+    if (tool) {
+      // A real file wins when it is ALL that was given, so an existing script
+      // named after a tool keeps running as a script. With extra arguments
+      // present the file reading was never available — script mode rejects
+      // them — so the tool is the only possible meaning.
+      const asScript = argv.length === 1 && (await Bun.file(flag).exists());
+      if (!asScript) {
+        // The tool runners read the process, not the session, but booting the
+        // context anyway is what makes `crust --env-file . skills install` work.
+        await bootstrapCtx([], envFile);
+        await shutdown(await tool(argv.slice(1)));
+      }
     }
     // Script mode: `crust file.crust`. Positional args are not supported —
     // rejecting (not ignoring) them keeps `crust deploy.crust prod` from
