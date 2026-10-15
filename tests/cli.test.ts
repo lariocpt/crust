@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, rmSync } from "node:fs";
 
 const ENTRY = `${import.meta.dir}/../src/index.ts`;
@@ -6,8 +6,10 @@ const ENTRY = `${import.meta.dir}/../src/index.ts`;
 async function runCli(
   args: string[],
   stdin?: string,
+  opts: { cwd?: string } = {},
 ): Promise<{ code: number; stdout: string; stderr: string }> {
   const proc = Bun.spawn(["bun", ENTRY, ...args], {
+    cwd: opts.cwd,
     stdin: stdin === undefined ? "ignore" : Buffer.from(stdin),
     stdout: "pipe",
     stderr: "pipe",
@@ -460,5 +462,81 @@ describe("shell syntax preflight on the exec path (F19)", () => {
     expect(r.stderr).toContain("definitely-not-a-cmd-xyz99"); // both dialects name it
     expect(r.stderr).not.toContain("crust: shell stage does not parse");
     expect(r.stderr).not.toMatch(/^crust:/m);
+  });
+});
+
+describe("crust CLI: a tool builtin as argv[0]", () => {
+  // Why this exists: every positional was read as a script path, so the verbs the
+  // docs and the published README lead with were unreachable from a shell.
+  // `crust skills install` exited 2 (`script arguments are not supported`) and a
+  // bare `crust verify-web-links` exited 127 (`cannot read verify-web-links`) — a
+  // code that reads as "the binary is not installed" while the binary was the
+  // thing printing it.
+  let dir: string;
+  let join: typeof import("node:path").join;
+
+  beforeAll(async () => {
+    const { mkdtemp } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    join = (await import("node:path")).join;
+    dir = await mkdtemp(join(tmpdir(), "crust-standalone-"));
+  });
+
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+  const skillsDir = () => join(dir, ".claude/skills");
+
+  test("skills install runs as a command and writes the skills", async () => {
+    const r = await runCli(["skills", "install", "--all"], undefined, { cwd: dir });
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("skills: installed");
+    expect(existsSync(join(skillsDir(), "crust-cli/SKILL.md"))).toBe(true);
+  });
+
+  test("--select installs only the named skills", async () => {
+    rmSync(skillsDir(), { recursive: true, force: true });
+    const r = await runCli(["skills", "install", "--select", "crust-cli"], undefined, { cwd: dir });
+    expect(r.code).toBe(0);
+    expect(existsSync(join(skillsDir(), "crust-cli/SKILL.md"))).toBe(true);
+    expect(existsSync(join(skillsDir(), "crust-logs/SKILL.md"))).toBe(false);
+  });
+
+  test("an unknown skill name is exit 2, not a silent no-op", async () => {
+    const r = await runCli(["skills", "install", "--select", "nope"], undefined, { cwd: dir });
+    expect(r.code).toBe(2);
+    expect(r.stderr).toContain("unknown skill nope");
+  });
+
+  test("a tool with no arguments answers with its own usage, never 127", async () => {
+    const r = await runCli(["verify-web-links"], undefined, { cwd: dir });
+    expect(r.code).toBe(2);
+    expect(r.stderr).toContain("a sitemap URL or a base URL is required");
+    expect(r.stderr).not.toContain("cannot read");
+  });
+
+  test("a script FILE named after a tool still runs as a script", async () => {
+    // The one ambiguity in the rule, resolved toward the file: what the user
+    // pointed at exists, so it runs. Only with extra arguments — which script
+    // mode could never accept — is the tool reading the only possible one.
+    const { writeFile } = await import("node:fs/promises");
+    await writeFile(join(dir, "skills"), "range(1,2)\n");
+    const r = await runCli(["skills"], undefined, { cwd: dir });
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("2");
+    expect(r.stdout).not.toContain("agent skills");
+    rmSync(join(dir, "skills"), { force: true });
+  });
+
+  test("--check lints the skills flags the docs tell people to run", async () => {
+    const ok = await runCli(["--check", "skills install --global --force"]);
+    expect(ok.code).toBe(0);
+    const okVerb = await runCli(["--check", "skills list"]);
+    expect(okVerb.code).toBe(0);
+    const bad = await runCli(["--check", "skills install --bogus"]);
+    expect(bad.code).toBe(1);
+    expect(bad.stderr).toContain("--bogus");
+    const badVerb = await runCli(["--check", "skills install-skills"]);
+    expect(badVerb.code).toBe(1);
+    expect(badVerb.stderr).toContain("install-skills");
   });
 });

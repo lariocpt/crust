@@ -10,6 +10,7 @@ let pendingResolve: ((s: string | null) => void) | null = null;
 let stdinClosed = false;
 let listening = false;
 let interruptWatcher: (() => void) | null = null;
+let dataWatcher: ((chunk: string) => void) | null = null;
 
 // Exported for tests — the raw-mode data path with no tty attached.
 export function handleStdinData(chunk: Buffer | string): void {
@@ -24,6 +25,13 @@ export function handleStdinData(chunk: Buffer | string): void {
   // arrives here as byte 0x03 instead of a SIGINT. With a watcher armed
   // that byte means "cancel": drop the typeahead queue AND this chunk (the
   // user is cancelling, not typing) and fire once per chunk.
+  if (dataWatcher) {
+    // A running line is holding the keyboard itself (the skills picker). Keys
+    // are NOT queued as typeahead while it does, so the picker sees them and
+    // the prompt after it does not inherit arrow-key escape sequences.
+    dataWatcher(str);
+    return;
+  }
   if (interruptWatcher && str.includes("\x03")) {
     queue.length = 0;
     interruptWatcher();
@@ -56,6 +64,27 @@ export function onInterrupt(cb: () => void): () => void {
   interruptWatcher = cb;
   return () => {
     if (interruptWatcher === cb) interruptWatcher = prev;
+  };
+}
+
+/**
+ * Take the keyboard for the duration of a RUNNING line — the skills picker,
+ * which is a full-screen menu rather than a prompt.
+ *
+ * Single slot, same discipline as `onInterrupt`: the REPL is sequential, so only
+ * one thing can hold the keys at a time, and nesting (a picker inside a picker)
+ * is a bug this makes impossible to hide. The returned dispose also drops the
+ * typeahead queue: the keystrokes the menu consumed — and any that arrived while
+ * it was drawing — must not be replayed into the next prompt, where `\x1b[A`
+ * would show up as literal characters.
+ */
+export function onData(cb: (chunk: string) => void): () => void {
+  ensureListening();
+  const prev = dataWatcher;
+  dataWatcher = cb;
+  return () => {
+    if (dataWatcher === cb) dataWatcher = prev;
+    queue.length = 0;
   };
 }
 
