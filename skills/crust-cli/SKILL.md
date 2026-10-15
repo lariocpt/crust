@@ -1,6 +1,6 @@
 ---
 name: crust-cli
-description: How to invoke crust and read its answer — the run modes (`-c`, script file, piped stdin, REPL), what each exit code actually means (0/1/2/127/130, and why there is no 124), `--check` as a linter including what it cannot catch, `--env-file` vs `dotenv` vs `export`, the REPL's verified keybindings and Ctrl-C semantics, and where crust's globals (`GET`, `range`, `parallel`, `crust.fn`) do and do not exist. Use when a crust run's exit code is confusing, when a CI step passes on a failing line, when `--check` says ok but the line dies, when `GET is not defined` appears in a `.ts` file, or when driving the REPL from a script.
+description: How to invoke crust and read its answer — the run modes (`-c`, script file, piped stdin, REPL, tool subcommands like `crust skills install`), what each exit code actually means (0/1/2/127/130, and why there is no 124), `--check` as a linter including what it cannot catch, `--env-file` vs `dotenv` vs `export`, the REPL's verified keybindings and Ctrl-C semantics, and where crust's globals (`GET`, `range`, `parallel`, `crust.fn`) do and do not exist. Use when a crust run's exit code is confusing, when a CI step passes on a failing line, when `--check` says ok but the line dies, when `GET is not defined` appears in a `.ts` file, or when driving the REPL from a script.
 ---
 
 # Running crust, and reading what it says back
@@ -13,6 +13,7 @@ description: How to invoke crust and read its answer — the run modes (`-c`, sc
 | `crust` (stdin is piped) | Reads **lines of crust** from stdin to EOF and runs them like a script (fail-fast, same exit codes). stdin is the *command* source in this mode, so a shell stage inside those lines sees EOF. Want data on stdin? Use `-c`. |
 | `crust run.crust` | Script mode: blank lines and `#` comments are skipped (so a `#!/usr/bin/env crust` shebang works), lines run in order, and it **fails fast** — the first failing line stops the file and becomes the process exit code. A line ending in `\` continues on the next. The extension doesn't matter. Positional args after the path are refused (exit 2), an unreadable path is 127. |
 | `crust -c '<line>'` | One line. A shell stage inherits the process stdin, so `docker logs app \| crust -c 'grep ERROR'` really does grep the logs. To feed a **crust** pipeline, name the source: `docker logs -f app \| crust -c 'stdin \| grep ERROR'`. To run several lines, put a **newline inside the one argument** — they then behave like a script (fail-fast) — or continue one line with a trailing `\`. Two lines as two arguments is refused. Quote the whole pipeline: `-c range(1,2) extra` splits into three argv words and is refused. |
+| `crust <tool> [args…]` | A **tool builtin as a subcommand**: `crust skills install`, `crust mock-server openapi.yaml -p4000`, `crust test-fixture 'fixtures/*.crust.ts' -j8`. Same flags as the REPL line, and `crust <tool> --help` prints them. The names that work are the ones needing no live session: `skills`, `test-fixture`, `test-pipes`, `gen-fixtures`, `mock-server`, `verify-web-links`. The **session** builtins (`cd`, `export`, `alias`, `unalias`, `source`, `dotenv`, `exit`, `help`, `history`) are refused rather than silently doing nothing — a one-shot process has no session to change. A file that exists wins when it is the only argument, so `crust skills` runs `./skills`; any extra argument selects the tool. |
 | `crust --check '<line>'` | Parse without running. See below. |
 | `crust --env-file <path> …` | Loads `.env` before *any* run mode and before `init.ts`. The "loaded" note goes to stderr so a `-c` pipeline's stdout stays clean. A missing file exits **2, loudly** — this flag exists to replace shell shims that failed silently. Does not combine with `--check`. |
 | `crust -h` / `-V` | Usage / version, exit 0. |
@@ -27,6 +28,12 @@ description: How to invoke crust and read its answer — the run modes (`-c`, sc
 | the stage's own | A shell stage's exit code, propagated. | `range(1,3) \| sh -c "exit 9"` → 9 |
 | 127 | Command not found (shell stage), or an unreadable script file. | `nosuchbinary-xyz` |
 | 130 / 143 | crust killed by SIGINT / SIGTERM. | Ctrl-C during a long `-c` run |
+
+**A builtin name is not a missing binary.** `crust verify-web-links` with no
+arguments exits **2** with the tool's own usage, and `crust skills install
+--bogus` exits **2** naming the valid flags. 127 means a *script path* could not
+be read, or sh could not find a command — if a builtin name produces 127, the
+binary really is an older one that treated every positional as a path.
 
 **There is no crust exit 124.** `wait` timing out is exit **1** with
 `crust: wait: <target> not ready after Ns`. If a probe reports 124, then

@@ -4,6 +4,56 @@ Notable changes to crust. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project is
 pre-1.0, so minor versions may carry breaking changes.
 
+## [Unreleased]
+
+### Added
+
+- **`crust skills install` works from a shell.** The published README leads with
+  `bunx crust skills install`, and it did not work: every positional was read as
+  a script path, so that command exited **2** (`script arguments are not
+  supported`) and a bare `crust verify-web-links` exited **127** (`cannot read
+  verify-web-links`) — a code that reads as "the binary is not installed" while
+  the binary was the thing printing it. The tool builtins are argv subcommands
+  now, flags and all, booted through the same context as `-c` so `--env-file`
+  and `init.ts` behave the same whichever spelling is used. Only the builtins
+  that need nothing from a live session qualify (`skills`, `test-fixture`,
+  `test-pipes`, `gen-fixtures`, `mock-server`, `verify-web-links`); `cd`,
+  `export`, `alias`, `source` and the rest stay REPL-only, because a one-shot
+  process has no session to change and a command that quietly does nothing is
+  worse than one that refuses. A file that exists still wins when it is the only
+  argument, so an existing script named `skills` keeps running as a script.
+- **A picker for `skills install`.** On a terminal it no longer writes all nine
+  skills into a project on someone's behalf: a menu lists each one with its
+  status **in the target it would actually write to** (`not installed`,
+  `current`, `EDITED locally`), pre-checked to everything not already current
+  there, with `g` switching between the project and `~/.claude/skills` — which
+  recomputes the statuses, since a skill current here can be missing there.
+  Cancel and empty-selection exit `0`: declining is not a failure. Piped or
+  non-TTY output keeps the old install-everything behaviour, and `--all` /
+  `--select a,b` say it explicitly.
+- **`npm install` offers to install the skills**, once. It stays silent on CI,
+  with a piped stdout, for a global install, when crust is pulled in as a
+  dependency (the target would have been `node_modules/crust`), and once crust
+  skills are already in the project; `CRUST_NO_SKILLS=1` stops it permanently.
+  Answering yes hands the terminal to the picker. Every failure path resolves to
+  "declined" with exit 0 — a postinstall that fails takes the whole install with
+  it, and not wanting to answer a question is not a reason to refuse a package.
+
+### Fixed
+
+- **`--check` now lints `skills install`.** The line had nothing declarative to
+  check, so a wrong flag surfaced only at run time; `skills install --bogus` is
+  caught at parse time alongside the other tools.
+
+### Changed
+
+- **`skills list` refuses arguments instead of ignoring them.** `skills list
+  --global` printed the same list and exited 0 — a flag silently doing nothing.
+  It exits 2 now, which is also what `--check` had been saying about it.
+- An unbound escape sequence cannot press a key by accident. The picker swallows
+  a whole CSI sequence instead of its first two bytes: leaving the tail behind
+  fed `f` to the overwrite toggle when a right-arrow was pasted into the menu.
+
 ## [0.2.4] — 2026-08-25
 
 Both of these came out of dogfooding crust against a fresh codebase

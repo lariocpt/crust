@@ -88,6 +88,23 @@ logs> filter (e => e.level >= 50) | stats --every 5
 logs> search "connection reset"
 ```
 
+## Agent skills
+
+Crust ships the SKILL.md guides that teach a coding agent how to drive it —
+pipelines, fixture suites, load gates, the mock server, `procs`, the link
+checker — embedded in the binary, so they always match the version you run:
+
+```bash
+bunx crust skills install          # on a terminal: pick which ones
+bunx crust skills install --all    # everything, into ./.claude/skills
+bunx crust skills install --global # into ~/.claude/skills
+```
+
+`npm install` asks once whether to install them. It never asks on CI, with
+piped output, for a global install, or once crust skills are already in the
+project, and it can never fail the install. Answering no writes nothing;
+`CRUST_NO_SKILLS=1` stops the question permanently.
+
 ## What this package installs
 
 This package is a ~4 KB launcher, not the binary. On first use it downloads the
@@ -106,5 +123,6 @@ from source — see the repository README.
 | `CRUST_SOURCE` | `github` (default for this package) or `apps` — which artifact plane to resolve from. |
 | `CRUST_GITHUB_REPO` | Override the `owner/repo` the release is fetched from. |
 | `CRUST_APPS_URL` | Base URL of a self-hosted artifact plane, used when `CRUST_SOURCE=apps`. |
+| `CRUST_NO_SKILLS` | Set to any value to stop the postinstall question about installing agent skills. `crust skills install` still works. |
 
 MIT © Lario Borges
