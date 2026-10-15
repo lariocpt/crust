@@ -2,7 +2,13 @@
 import pkg from "../package.json" with { type: "json" };
 import { hasUnquotedShellMeta, splitArgs, stripTrailingComment } from "./args";
 import { registerBuiltinFns } from "./builtinFns";
-import { dotenvLoad, isBuiltin, renderBuiltinList, standaloneTools } from "./builtins";
+import {
+  dotenvLoad,
+  isBuiltin,
+  notACommandReason,
+  renderBuiltinList,
+  standaloneTools,
+} from "./builtins";
 import { checkBuiltinLine } from "./checkBuiltin";
 import { type CrustGlobal, loadConfig } from "./config";
 import { onInterrupt, readLine, suspendEditor } from "./editor";
@@ -23,7 +29,9 @@ usage:
   crust                    start interactive REPL
   crust <tool> <args…>     run one tool as a command (skills, mock-server,
                            verify-web-links, gen-fixtures, test-fixture,
-                           test-pipes) — the same verbs as at the REPL
+                           test-pipes) — the same verbs as at the REPL. The
+                           session verbs (cd, export, alias, source, dotenv,
+                           logs) are not: they need a running session.
   crust <file.crust>       run a script file and exit
   crust -c <line>          run one line and exit
   crust --check <line>     parse without running (lint documented examples)
@@ -219,19 +227,27 @@ async function main(): Promise<void> {
     // for which names qualify and why the session builtins do not. Booted the
     // same way `-c` is, so `crust --env-file . env mock-server x` and the init.ts
     // hooks behave identically whichever spelling was used.
+    // A real file wins when it is ALL that was given, so an existing script
+    // named after a tool (or a builtin) keeps running as a script. With extra
+    // arguments present the file reading was never available — script mode
+    // rejects them — so the command reading is the only possible one.
+    const asScript = argv.length === 1 && (await Bun.file(flag).exists());
     const tool = standaloneTools[flag];
-    if (tool) {
-      // A real file wins when it is ALL that was given, so an existing script
-      // named after a tool keeps running as a script. With extra arguments
-      // present the file reading was never available — script mode rejects
-      // them — so the tool is the only possible meaning.
-      const asScript = argv.length === 1 && (await Bun.file(flag).exists());
-      if (!asScript) {
-        // The tool runners read the process, not the session, but booting the
-        // context anyway is what makes `crust --env-file . skills install` work.
-        await bootstrapCtx([], envFile);
-        await shutdown(await tool(argv.slice(1)));
-      }
+    if (tool && !asScript) {
+      // The tool runners read the process, not the session, but booting the
+      // context anyway is what makes `crust --env-file . skills install` work.
+      await bootstrapCtx([], envFile);
+      await shutdown(await tool(argv.slice(1)));
+    }
+    // `crust cd /tmp`, `crust export FOO=1`, `crust logs tail app.log` — named
+    // at argv[0] but not runnable as a command. Letting script mode answer would
+    // say `cannot read export` (127) or `script arguments are not supported`
+    // (2), and both read as a broken installation in a binary that is printing
+    // its own name. This is the half of the rule the session builtins need.
+    const misuse = notACommandReason(flag);
+    if (misuse && !asScript) {
+      process.stderr.write(`crust: ${misuse}\n`);
+      process.exit(2);
     }
     // Script mode: `crust file.crust`. Positional args are not supported —
     // rejecting (not ignoring) them keeps `crust deploy.crust prod` from

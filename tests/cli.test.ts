@@ -514,6 +514,47 @@ describe("crust CLI: a tool builtin as argv[0]", () => {
     expect(r.stderr).not.toContain("cannot read");
   });
 
+  test("a session builtin named at argv[0] is refused BY NAME, not as a missing file", async () => {
+    // The other half of the rule. `cd`, `export`, `source` change state a
+    // one-shot process does not have, so they are not reachable this way — but
+    // letting script mode answer said `cannot read export` (exit 127) or
+    // `script arguments are not supported — got "/tmp"` (exit 2), and in a
+    // binary printing its own name both read as a broken installation.
+    for (const argv of [
+      ["cd", "/tmp"],
+      ["export", "FOO=1"],
+      ["source", "x.crust"],
+    ]) {
+      const r = await runCli(argv, undefined, { cwd: dir });
+      expect(r.code).toBe(2);
+      expect(r.stderr).toContain("running crust session");
+      expect(r.stderr).toContain(`\`${argv[0]}\``);
+      expect(r.stderr).not.toContain("cannot read");
+      expect(r.stderr).not.toContain("script arguments are not supported");
+    }
+  });
+
+  test("`crust logs` is refused too, for its own reason", async () => {
+    // Not a session-state problem: its argument IS the rest of the line (a
+    // `procs({...})` literal), so argv would have to re-lex it to mean anything.
+    const r = await runCli(["logs", "tail", "app.log"], undefined, { cwd: dir });
+    expect(r.code).toBe(2);
+    expect(r.stderr).toContain("verbatim");
+    expect(r.stderr).not.toContain("cannot read");
+  });
+
+  test("`crust help` points at --help instead of the REPL-only verb", async () => {
+    const r = await runCli(["help"], undefined, { cwd: dir });
+    expect(r.code).toBe(2);
+    expect(r.stderr).toContain("--help");
+  });
+
+  test("an unknown word is still a missing script at 127 (refusal is not a catch-all)", async () => {
+    const r = await runCli(["no-such-tool-here"], undefined, { cwd: dir });
+    expect(r.code).toBe(127);
+    expect(r.stderr).toContain("cannot read");
+  });
+
   test("a script FILE named after a tool still runs as a script", async () => {
     // The one ambiguity in the rule, resolved toward the file: what the user
     // pointed at exists, so it runs. Only with extra arguments — which script

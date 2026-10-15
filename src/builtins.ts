@@ -378,6 +378,34 @@ export const standaloneTools: Record<string, (argv: string[]) => Promise<number>
   "verify-web-links": runVerifyWebLinksTool,
 };
 
+/** A word that names a tool, whether or not it is reachable as a command. Used
+ *  to decide when a "this is not an executable" complaint is really a misuse
+ *  and has to say so. */
+export function isStandaloneToolName(name: string): boolean {
+  return Object.hasOwn(standaloneTools, name);
+}
+
+/** Why naming a builtin at argv[0] is refused rather than run — and why the
+ *  answer is not "no such file". `null` for the tools that DO run this way.
+ *
+ *  Falling through to script mode produced `cannot read export` (exit 127) or
+ *  `script arguments are not supported — got "/tmp"` (exit 2): both read as a
+ *  broken installation, in a binary that prints its own name. A one-shot
+ *  process has no session for `cd`/`export`/`alias` to change, and `logs` takes
+ *  the rest of its line verbatim (a `procs({...})` literal), which argv cannot
+ *  carry without re-lexing it. */
+export function notACommandReason(name: string): string | null {
+  if (isStandaloneToolName(name)) return null;
+  if (!isBuiltin(name)) return null;
+  if (name === "logs") {
+    return "`logs` takes the rest of its line verbatim — a `procs({...})` spec argv cannot carry. Run it at the `crust` prompt.";
+  }
+  if (name === "help") {
+    return "`help` describes a running crust session. From a shell, `crust --help` lists the builtins and the tool commands.";
+  }
+  return `\`${name}\` is a builtin of a running crust session — a one-shot command has no session for it to change. Run it at the \`crust\` prompt instead.`;
+}
+
 // Keyed by registry name so `help` and `crust -h` can't drift from what is
 // actually registered; renderBuiltinList shows an undescribed builtin with an
 // empty summary rather than hiding it.
