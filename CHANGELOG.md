@@ -41,6 +41,18 @@ pre-1.0, so minor versions may carry breaking changes.
 
 ### Fixed
 
+- **A redirect no longer gets to decide what your stage is.** A stage pattern is
+  matched against the whole text, so appending `> f` to `range(1,3)` made it stop
+  matching as a `range`, fall through to shell, and die with sh's own
+  `syntax error near unexpected token \`1,3'` at exit 2 — an error that mentions
+  no way out. Measured leaks, all refused now, each naming the stage it really
+  was: `range(1,3) > f`, `capture N > f`, `parallel 5 > f`, `expect 200 > f`,
+  `expect 2xx > f`, `stats > f`, `stdin > f`. `load 10s 100/s > f` failed
+  *inside* load's parser and complained about the rate plan, quoting the redirect
+  back as part of it; it now refuses as a redirect. `grep` keeps its redirect —
+  that one is the shell's and genuinely works — and a stage that is malformed
+  with or without the tail keeps its own error, so the strip never invents a
+  refusal. Refusals are grammatical now too: `an expect stage`, `an http stage`.
 - **The limits section said scripts starve their shell stages, and they don't.**
   It claimed shell stages see EOF on stdin "in script/piped mode". Only `cmd |
   crust` drains stdin — there the *program* arrives on fd 0, so crust reads it to

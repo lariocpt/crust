@@ -99,24 +99,28 @@ export function redirectTail(text: string): string | null {
   return null;
 }
 
-function refusal(where: string, tail: string): Error {
+function refusal(kind: string, tail: string): Error {
   const target = tail.trim();
   const hint = target.startsWith("<")
     ? `to feed a file in, start the line from a file source instead: lines ${target.slice(1).trim()}`
     : `to save a pipeline, end the line with a shell stage instead: | cat ${target}`;
+  // `an expect stage`, `an http stage` — the message quotes a stage NAME, and
+  // reading it out loud wrong is the difference between an error that sounds
+  // written and one that sounds generated.
+  const article = /^[aeiou]/.test(kind) || kind === "http" ? "an" : "a";
   return new Error(
-    `\`${target}\`: crust has no redirect except on a shell stage, whose text goes to sh as-is — a ${where} would read it as data. ${hint}`,
+    `\`${target}\`: crust has no redirect except on a shell stage, whose text goes to sh as-is — ${article} ${kind} stage would read it as data. ${hint}`,
   );
 }
 
 /**
- * Refuse a redirect that the stage named by `where` would read as data.
+ * Refuse a redirect that the stage kind named by `kind` would read as data.
  * Exported because registered fns are demoted from shell stages in the parser
  * (the lexer is ctx-free), so `sql "…" > f` is still `shell` at classify time.
  */
-export function rejectRedirect(text: string, where: string): void {
+export function rejectRedirect(text: string, kind: string): void {
   const tail = redirectTail(text);
-  if (tail) throw refusal(where, tail);
+  if (tail) throw refusal(kind, tail);
 }
 
 /**
@@ -158,11 +162,54 @@ function looksJsonish(t: string): boolean {
   return false;
 }
 
+/**
+ * Whether a redirect tail is hiding a crust stage: the text WITHOUT `tail`
+ * classifies as a crust stage rather than as shell (or `grep`, whose redirect
+ * is a real one — see `isPureShell` in runLine.ts) or not at all.
+ */
+function stageHiddenByRedirect(text: string, tail: string): StageKind | null {
+  let inner: StageKind;
+  try {
+    inner = classifyStage(text.slice(0, text.length - tail.length).trim());
+  } catch {
+    return null; // malformed either way — sh's diagnosis is about the user's text
+  }
+  return inner.kind === "shell" || inner.kind === "grep" ? null : inner;
+}
+
 export function classify(text: string): StageKind {
-  const kind = classifyStage(text);
+  const tail = redirectTail(text);
+  let kind: StageKind;
+  try {
+    kind = classifyStage(text);
+  } catch (err) {
+    // A redirect can break a crust stage's own parse before it reaches
+    // classification at all: `load 10s 100/s > f` reads "10s 100/s > f" as a
+    // rate plan and complains about the rate. If the text is a crust stage once
+    // the tail is gone, the redirect is the real problem — name it.
+    if (tail) {
+      const hidden = stageHiddenByRedirect(text, tail);
+      if (hidden) throw refusal(hidden.kind, tail);
+    }
+    throw err;
+  }
   // Checked after classification, not before: `grep ERROR > combined.log` is
   // a redirect that WORKS, precisely because it classifies as a shell stage.
-  if (kind.kind !== "shell") rejectRedirect(text, `${kind.kind} stage`);
+  if (kind.kind !== "shell") {
+    if (tail) throw refusal(kind.kind, tail);
+    return kind;
+  }
+  // …and a redirect can also HIDE a crust stage from classification. Stage
+  // patterns match against the whole text, so `range(1,3) > f` stopped being a
+  // range pattern the moment `> f` was appended and fell through to shell —
+  // and the answer was sh's own, `syntax error near unexpected token \`1,3'`
+  // at exit 2, with no `| cat > f` anywhere in it. Measured leaks:
+  // `range(1,3) > f`, `capture N > f`, `parallel 5 > f`, `expect 200 > f`,
+  // `stats > f`, `stdin > f`, `load 10s 100/s > f`.
+  if (tail) {
+    const hidden = stageHiddenByRedirect(text, tail);
+    if (hidden) throw refusal(hidden.kind, tail);
+  }
   return kind;
 }
 

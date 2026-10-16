@@ -251,8 +251,18 @@ lines body.json | POST :3000/users                  # feed in: start from a file
 ```
 
     crust: `> out.json`: crust has no redirect except on a shell stage, whose text
-    goes to sh as-is — a http stage would read it as data. to save a pipeline, end
+    goes to sh as-is — an http stage would read it as data. to save a pipeline, end
     the line with a shell stage instead: | cat > out.json
+
+The refusal also catches the stage a redirect *hides*: a stage pattern is
+matched against the whole text, so `range(1,3) > f` is not a `range` any more to
+the lexer, and it used to fall through to `sh -c` — where the answer was
+`syntax error near unexpected token \`1,3'` at exit 2, with no way out
+mentioned. Same for `capture N > f`, `parallel 5 > f`, `expect 200 > f`,
+`stats > f`, `stdin > f`, `load 10s 100/s > f`: crust strips the tail, sees what
+the stage really was, and refuses. `grep` is the deliberate exception — a grep
+stage's redirect is the shell's and it works, which is why the second line above
+is a supported way to save a filtered log.
 
 ---
 
@@ -2199,8 +2209,9 @@ Honest about what doesn't work yet:
   line-by-line execution — run those with `sh file.sh`.
 - **No `$(...)` substitution across stages.** Within a single shell stage it works (delegated to `sh`).
 - **No redirects on crust stages.** `<` / `>` belong to the shell stage, whose
-  text goes to `sh` as-is; anywhere else the line is refused. Save with `… | cat
-  > f`, feed in from `lines <path>` / `read <path>`.
+  text goes to `sh` as-is; anywhere else the line is refused — including when the
+  redirect is the very thing that hid the stage from the lexer (`range(1,3) > f`).
+  Save with `… | cat > f`, feed in from `lines <path>` / `read <path>`.
 - **No syntax highlighting in the editor.** v0.1.5.
 - **No fuzzy history search (Ctrl-R).** v0.2.
 

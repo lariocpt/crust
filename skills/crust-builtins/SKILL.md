@@ -130,6 +130,16 @@ sql "select 1" > one.txt
     pipeline, end the line with a shell stage instead: | cat > one.txt
 ```
 
+The refusal also catches a stage the redirect **hides**. Stage patterns match the
+whole text, so `range(1,3) > f` stopped matching as a `range` and fell through to
+`sh -c`, where sh's own syntax error answered at exit 2 (and `parallel 5 > f`
+ran GNU parallel and exited 0 with an empty file). crust strips the tail, sees
+the stage, and refuses. Affected: `range`, `capture`, `parallel`, `expect`,
+`stats`, `stdin`, and `load` — where the tail used to break load's parser first
+and the complaint was about the rate plan. `grep` is the exception: its redirect
+is the shell's and works, so `read **/*.log | grep ERROR > errors.txt` is a
+supported way to save a filtered log.
+
 ```crust
 base64 hello | cat > out.b64
 base64 --file logo.png --out logo.b64

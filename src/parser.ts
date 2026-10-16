@@ -195,7 +195,7 @@ function resolveKind(text: string, ctx?: Context): StageKind {
       // `sql "…" > out.json` would otherwise hand `>` and the path to the fn
       // as query parameters. Same refusal the lexer raises, at the point where
       // this stage stops being a shell stage.
-      rejectRedirect(text, `${head} stage`);
+      rejectRedirect(text, head);
       // Env-expand fn args so `sql "..." "prefix $RUN_ID"` works in .pipes
       // files. SQL positional params ($1, $2) survive — a digit can't start
       // an env var name.
