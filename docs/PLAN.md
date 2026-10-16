@@ -67,7 +67,7 @@ Below this line is in v0.1. Anything else is v0.2+, period.
 
 - `bundle()`, `optimize()`, `tar()`, `run-smoke()`, `dest dir/` as a packaging sink
 - Job control (`fg`/`bg`/Ctrl-Z)
-- `|>` operator and `[0..9]` range-literal (need custom Bun loader)
+- ~~`|>` operator and `[0..9]` range-literal~~ — **decided, won't fix** (2026-10-16): crust's `|` already *is* the pipe, and `[a..b]` collides with the JSON-array literal and with the shell's `[ … ]` test. `range(a, b)` / `seq` cover it; in TS, `.pipe()`. See `docs/USAGE.md` → "Syntax we deliberately did not add".
 - `$(...)` command substitution / backticks mid-pipeline
 - Multi-line input / heredocs
 - Syntax highlighting / fuzzy history search
@@ -122,9 +122,9 @@ Built on Bun primitives that already exist — we don't reimplement them:
 - `new Worker(url, opts)` — real OS threads on Linux/macOS
 - `Bun.serve({ reusePort: true })` — surfaces the kernel SO_REUSEPORT socket option
 
-**Range literal syntax (`[0..9]`)** would need a Bun loader doing AST rewrites — deferred to v0.2. v0.1 ships the `range(a, b)` helper (inclusive). Same call site, no syntax magic.
+**Range literal syntax (`[0..9]`)** — **decided, won't fix.** It would need a Bun loader doing AST rewrites, and worse, it collides twice over: `[1,$N]` is a JSON-array literal (`looksJsonish` in `src/lexer.ts` already has a comment explaining that a wrong verdict there is a silent empty glob) and `[ … ]` spaced is the shell's `test` command. A range would be settled by precedence rules layered on top of both. `range(a, b)` ships the same call site with no syntax magic.
 
-**Pipe operator (`|>`)** for TS — same story: needs a custom loader, deferred to v0.2. `.pipe()` works today and is what we ship.
+**Pipe operator (`|>`)** for TS — **decided, won't fix.** In crust, `|` already *is* the pipe operator; a second spelling of the same thing is exactly what the "don't grow the grammar" rule forbids. In TypeScript host code the honest answer is `.pipe()`, which is what we ship.
 
 ## Repo layout (`~/Projects/crust/`)
 
@@ -373,8 +373,8 @@ curl -fsSL https://raw.githubusercontent.com/lariocpt/crust/main/install.sh | ba
 - Syntax highlighting *as you type*
 - Fuzzy history search (Ctrl-R)
 - Async completion / completion plugins
-- `|>` pipe operator in TS — needs custom Bun loader, v0.2
-- `[0..9]` range-literal syntax — needs custom Bun loader, v0.2
+- ~~`|>` pipe operator in TS~~ — **decided, won't fix**: crust's `|` is already the pipe; TS uses `.pipe()`
+- ~~`[0..9]` range-literal syntax~~ — **decided, won't fix**: collides with the JSON-array literal and the shell's `[ … ]` test; `range(a, b)` / `seq` cover it
 - Unifying the shell `|` parser with `Pipeline<T>` — v0.2; v0.1 still leans on `Bun.$`'s native pipe parser for shell-syntax lines
 - Shared-memory worker primitives (only param-passing for now)
 - The actual Crust distro ISO (phase 2)

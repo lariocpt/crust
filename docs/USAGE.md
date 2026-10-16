@@ -2201,9 +2201,27 @@ Honest about what doesn't work yet:
 - **No redirects on crust stages.** `<` / `>` belong to the shell stage, whose
   text goes to `sh` as-is; anywhere else the line is refused. Save with `… | cat
   > f`, feed in from `lines <path>` / `read <path>`.
-- **No `|>` operator and no `[0..9]` range literal.** Need a Bun loader; v0.2.
 - **No syntax highlighting in the editor.** v0.1.5.
 - **No fuzzy history search (Ctrl-R).** v0.2.
+
+### Syntax we deliberately did not add
+
+These are not gaps — they are decisions, recorded so they stop reading as
+pending work.
+
+- **No `|>` operator.** In crust, `|` *is* the pipe operator. A second spelling
+  of an operator that already exists is a second thing to learn, document, and
+  disambiguate from the first. In TypeScript host code the answer is `.pipe()`.
+- **No `[0..9]` range literal.** It collides twice: `[1,$N]` is a JSON-array
+  literal, and `[ … ]` with spaces is the shell's `test` command. A range would
+  have to be settled by precedence rules layered over both, and every wrong
+  verdict is silent. `range(0, 9)` is inclusive and does the job; `seq` works as
+  a shell stage, and `load 10s 100/s` covers rate-shaped work.
+
+```bash
+range(0, 9)                       # the inclusive range that [0..9] would have been
+range(1,3) | cat > nums.txt       # … and the way to save it
+```
 
 See `docs/spec/v0.1-contract.md` for the green-light test contract and `docs/PLAN.md` for the design notes.
 

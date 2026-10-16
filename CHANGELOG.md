@@ -58,6 +58,13 @@ pre-1.0, so minor versions may carry breaking changes.
 
 ### Changed
 
+- **`|>` and `[0..9]` are no longer promised.** The limits list said "Need a Bun
+  loader; v0.2" and `docs/PLAN.md` carried the wish three times, so both read as
+  shipping soon. They are decisions now, in a **Syntax we deliberately did not
+  add** section: crust's `|` already *is* the pipe (TS uses `.pipe()`), and a
+  `[a..b]` literal collides with the JSON-array literal and with the shell's
+  `[ … ]` test — precedence rules over both, with a silent wrong answer as the
+  failure mode. `range(0, 9)` is inclusive and occupies the same call site.
 - **Skills install to `.agents/skills`, and `.claude/skills` gets a link per
   skill.** The nine SKILL.md files were written into `.claude/skills`, which
   only Claude Code reads: a project with Codex, Cursor or OpenCode installed got
