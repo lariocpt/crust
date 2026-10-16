@@ -263,46 +263,67 @@ function parseDotenv(text: string): Array<[string, string]> {
   return out;
 }
 
+// One runner per tool, taking the argument ARRAY. The builtin wrapper feeds it
+// `splitArgs(rawArgs)` exactly as before; `standaloneTools` below feeds it real
+// argv. Both paths land in the same function, so `crust -c 'mock-server x'` and
+// `crust mock-server x` cannot drift apart.
+//
 // In-process like every other tool builtin. A standalone AOT runner
 // (~/.crust/bin/crust-test-fixture) used to be probed here, but no install
 // route ever put a file at that path, and measurement showed the exec path
 // 1.6x SLOWER than this import once the main binary itself was
 // bytecode-compiled — the probe's only real effect was letting a stale
 // binary silently shadow the current runner.
-const testFixtureBuiltin: Builtin = async (rawArgs, _ctx) => {
-  const args = splitArgs(rawArgs).map(expandEnv);
+const runTestFixtureTool = async (argv: string[]): Promise<number> => {
   const { runCli } = await import("./testFixture/cli");
-  return await runCli(args);
+  return await runCli(argv.map(expandEnv));
 };
 
-const testPipesBuiltin: Builtin = async (rawArgs, _ctx) => {
-  const args = splitArgs(rawArgs).map(expandEnv);
+const testFixtureBuiltin: Builtin = async (rawArgs, _ctx) =>
+  await runTestFixtureTool(splitArgs(rawArgs));
+
+const runTestPipesTool = async (argv: string[]): Promise<number> => {
   const { runCli } = await import("./testPipes/cli");
-  return await runCli(args);
+  return await runCli(argv.map(expandEnv));
 };
 
-const genFixturesBuiltin: Builtin = async (rawArgs, _ctx) => {
-  const args = splitArgs(rawArgs).map(expandEnv);
+const testPipesBuiltin: Builtin = async (rawArgs, _ctx) =>
+  await runTestPipesTool(splitArgs(rawArgs));
+
+const runGenFixturesTool = async (argv: string[]): Promise<number> => {
   const { runCli } = await import("./genFixtures/cli");
-  return await runCli(args);
+  return await runCli(argv.map(expandEnv));
 };
 
-const mockServerBuiltin: Builtin = async (rawArgs, _ctx) => {
-  const args = splitArgs(rawArgs).map(expandEnv);
+const genFixturesBuiltin: Builtin = async (rawArgs, _ctx) =>
+  await runGenFixturesTool(splitArgs(rawArgs));
+
+const runMockServerTool = async (argv: string[]): Promise<number> => {
   const { runCli } = await import("./mockServer/cli");
-  return await runCli(args);
+  return await runCli(argv.map(expandEnv));
 };
 
-const verifyWebLinksBuiltin: Builtin = async (rawArgs, _ctx) => {
-  const args = splitArgs(rawArgs).map(expandEnv);
+const mockServerBuiltin: Builtin = async (rawArgs, _ctx) =>
+  await runMockServerTool(splitArgs(rawArgs));
+
+const runVerifyWebLinksTool = async (argv: string[]): Promise<number> => {
   const { runCli } = await import("./verifyWebLinks/cli");
-  return await runCli(args);
+  return await runCli(argv.map(expandEnv));
 };
 
-const skillsBuiltin: Builtin = async (rawArgs, _ctx) => {
+const verifyWebLinksBuiltin: Builtin = async (rawArgs, _ctx) =>
+  await runVerifyWebLinksTool(splitArgs(rawArgs));
+
+// No expandEnv here, and that is the runtime's existing behaviour for `skills`:
+// a skill name is never a variable. Keep it that way — `skills install
+// '$FOO'` should fail as an unknown skill, not install something by expansion.
+const runSkillsTool = async (argv: string[]): Promise<number> => {
   const { runSkills } = await import("./skillsCli");
-  return await runSkills(splitArgs(rawArgs.trim()));
+  return await runSkills(argv);
 };
+
+const skillsBuiltin: Builtin = async (rawArgs, _ctx) =>
+  await runSkillsTool(splitArgs(rawArgs.trim()));
 
 const logsBuiltin: Builtin = async (rawArgs, ctx) => {
   // rawArgs stays UNSPLIT — the source spec is the rest of the line verbatim
@@ -329,6 +350,61 @@ export const builtins: Record<string, Builtin> = {
   "verify-web-links": verifyWebLinksBuiltin,
   logs: logsBuiltin,
 };
+
+/**
+ * The tool builtins that ALSO mean something as a one-shot command, so
+ * `crust skills install` works from a shell instead of only at the REPL.
+ *
+ * WHY. Every positional was read as a script path, so the verbs the docs and
+ * the published README lead with were unreachable: `crust skills install` died
+ * with `script arguments are not supported` (exit 2) and a bare
+ * `crust verify-web-links` with `cannot read verify-web-links` (exit 127) — a
+ * code that reads as "the binary is not installed" when the binary was running
+ * the whole time.
+ *
+ * The session builtins (`cd`, `export`, `alias`, `source`, `history`, `exit`,
+ * `help`, `dotenv`) are deliberately absent: a one-shot process has no session
+ * to mutate, so each would be a silent no-op, which is worse than the error it
+ * replaces. `logs` is absent too — its source spec is the REST OF THE LINE
+ * VERBATIM (a `procs({...})` literal, a quoted command) and argv cannot carry
+ * that without re-lexing it.
+ */
+export const standaloneTools: Record<string, (argv: string[]) => Promise<number>> = {
+  skills: runSkillsTool,
+  "test-fixture": runTestFixtureTool,
+  "test-pipes": runTestPipesTool,
+  "gen-fixtures": runGenFixturesTool,
+  "mock-server": runMockServerTool,
+  "verify-web-links": runVerifyWebLinksTool,
+};
+
+/** A word that names a tool, whether or not it is reachable as a command. Used
+ *  to decide when a "this is not an executable" complaint is really a misuse
+ *  and has to say so. */
+export function isStandaloneToolName(name: string): boolean {
+  return Object.hasOwn(standaloneTools, name);
+}
+
+/** Why naming a builtin at argv[0] is refused rather than run — and why the
+ *  answer is not "no such file". `null` for the tools that DO run this way.
+ *
+ *  Falling through to script mode produced `cannot read export` (exit 127) or
+ *  `script arguments are not supported — got "/tmp"` (exit 2): both read as a
+ *  broken installation, in a binary that prints its own name. A one-shot
+ *  process has no session for `cd`/`export`/`alias` to change, and `logs` takes
+ *  the rest of its line verbatim (a `procs({...})` literal), which argv cannot
+ *  carry without re-lexing it. */
+export function notACommandReason(name: string): string | null {
+  if (isStandaloneToolName(name)) return null;
+  if (!isBuiltin(name)) return null;
+  if (name === "logs") {
+    return "`logs` takes the rest of its line verbatim — a `procs({...})` spec argv cannot carry. Run it at the `crust` prompt.";
+  }
+  if (name === "help") {
+    return "`help` describes a running crust session. From a shell, `crust --help` lists the builtins and the tool commands.";
+  }
+  return `\`${name}\` is a builtin of a running crust session — a one-shot command has no session for it to change. Run it at the \`crust\` prompt instead.`;
+}
 
 // Keyed by registry name so `help` and `crust -h` can't drift from what is
 // actually registered; renderBuiltinList shows an undescribed builtin with an

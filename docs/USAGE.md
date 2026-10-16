@@ -64,7 +64,8 @@ crust -c 'src/**/*.ts | wc -l'
 | Flag | Effect |
 |---|---|
 | `crust` | Interactive REPL (default, when stdin is a TTY). |
-| `crust <file.crust>` | Run a script file and exit. Blank lines and `#` comments are skipped (so a `#!/usr/bin/env crust` shebang works), and execution is **fail-fast**: crust stops at the first failing line and exits with *its* code. Positional script arguments are not supported — extra arguments are rejected (exit 2). An unreadable file exits 127. A line ending in `\` continues on the next line (see [Continuing a line](#continuing-a-line)). |
+| `crust <file.crust>` | Run a script file and exit. Blank lines and `#` comments are skipped (so a `#!/usr/bin/env crust` shebang works), and execution is **fail-fast**: crust stops at the first failing line and exits with *its* code. Positional script arguments are not supported — extra arguments are rejected (exit 2), unless the first argument names a tool builtin, which is a command instead (next row). An unreadable file exits 127. A line ending in `\` continues on the next line (see [Continuing a line](#continuing-a-line)). |
+| `crust <tool> [args…]` | Run a **tool builtin** as a shell command: `crust skills install`, `crust mock-server openapi.yaml -p4000`, `crust test-fixture 'fixtures/*.crust.ts' -j8`. The flags are the ones documented under each builtin in [Builtins](#builtins), and `crust <tool> --help` prints them. The names that work are the ones that need nothing from a live session: `skills`, `test-fixture`, `test-pipes`, `gen-fixtures`, `mock-server`, `verify-web-links`. The session builtins (`cd`, `export`, `alias`, `unalias`, `source`, `dotenv`, `exit`, `help`, `history`) are deliberately **not** reachable this way — a one-shot process has no session to change, and a command that quietly does nothing is worse than one that refuses. `logs` is refused too, for a different reason: its argument is the rest of the line **verbatim** (a `procs({...})` literal), which argv cannot carry without re-lexing it. Either refusal is exit 2 and names the builtin — not `cannot read cd`, which in a binary printing its own name reads as a broken install. A file that exists wins when it is the only argument, so `crust skills` runs `./skills`; adding any flag selects the tool. |
 | `cmd \| crust` | With stdin piped, crust reads it to EOF and runs the lines exactly like a script file — same comment handling, same fail-fast exit codes, same `\` continuation. Because stdin is drained up front, shell stages inside the script see EOF on their stdin. Piping **data** (not a program) is the [`stdin` source](#reading-piped-stdin-stdin-source)'s job: `docker logs -f app \| crust -c 'stdin \| grep ERROR'`. |
 | `crust -c <line>` | Run one line and exit. Multi-line strings split on `\n`, skip blanks and `#` comments, honour `\` continuation, and are **fail-fast**: crust stops at the first failing line and exits with *its* code (previously a later success masked an earlier failure). |
 | `crust --env-file <path> …` | Load a `.env` file (same parser as the [`dotenv` builtin](#dotenv), overwrite mode) *before* any run mode — `-c`, a script, piped stdin, or the REPL — and before `init.ts`, so config code sees the vars. The "loaded" note goes to **stderr** (a `-c` pipeline's stdout stays clean), and a **missing file exits 2 loudly** — this flag exists to replace shell shims whose silent env failures made runs measure the wrong thing. Doesn't combine with `--check` (parse-only by contract). |
@@ -74,11 +75,13 @@ crust -c 'src/**/*.ts | wc -l'
 ### How to read the examples in this document
 
 Every example that starts with a tool name — `mock-server ./openapi.yaml -p4000`,
-`test-fixture fixtures/*.crust.ts`, `skills list` — is a **crust line**, not a shell command.
-Run it at the REPL, or as `crust -c '<line>'`. A builtin is **not** an argv subcommand: crust
-treats every positional as a script file, so `crust mock-server -p4000 …` exits **2**
-(`script arguments are not supported`) and `crust verify-web-links` alone exits **127**
-(`cannot read verify-web-links`), which looks like a missing binary but is not one.
+`test-fixture fixtures/*.crust.ts`, `skills list` — is a **crust line**. From a shell,
+name the tool the way you would name any other command and keep its flags:
+`crust mock-server ./openapi.yaml -p4000`, or `bunx crust skills install` with the npm
+launcher. The same line also runs at the REPL, inside a script, and under `crust -c`,
+which is where the **session** builtins live — `cd`, `export`, `alias`, `source`,
+`dotenv`. Those change state a one-shot process does not have, so `crust cd /tmp` is
+refused rather than silently ignored.
 
 ### Continuing a line
 
@@ -1000,7 +1003,7 @@ The TS-test ecosystem owns the name `expect`. Crust exports the API name as `exp
 | `gen-fixtures <spec> [-o d] [-s m] [--no-flows]` | Generates negative-case `.crust.ts` fixtures and CRUD flow `.pipes` suites from an OpenAPI spec. See [gen-fixtures](#gen-fixtures). |
 | `mock-server <spec> [-p N] [-b addr] [--stateful] [--state <path\|url>] [--seed <file>] [--validate] [--strict] [--proxy <upstream>]` | Boots a `Bun.serve` instance that mocks every operation in an OpenAPI 3.x spec; `--stateful` adds a CRUD layer, `--state` persists it to sqlite/postgres, `--seed` inserts boot data, `--validate` rejects spec-violating requests with 422, `--strict` also enforces literal `additionalProperties: false`, `--proxy` turns it into a validation proxy in front of a real upstream. See [mock-server](#mock-server). |
 | `verify-web-links <url\|sitemap> [-c N] [-t ms] [--fixtures g] [--exclude s]` | Crawls a site from its sitemap (or auto-discovers one from a base URL), verifying every link, anchor and redirect, and diffs Open Graph/meta tags against fixtures. See [verify-web-links](#verify-web-links). |
-| `skills <list\|install> [--global] [--force]` | Claude agent skills shipped in the binary. See [Agent skills](#agent-skills). |
+| `skills <list\|install> [-g] [-f] [--all] [--select a,b]` | Claude agent skills shipped in the binary. `install` on a terminal asks which ones per scope. See [Agent skills](#agent-skills). |
 | `logs [--buffer N] <source>` | Interactive log searcher: holds a `tail -F`/`procs(...)`/shell-command stream, buffers the last N items, and every typed line is a pipeline fragment run over the buffer then live. See [logs](#logs--interactive-log-searching). |
 | `exit [code]` | Exits crust with optional code (default 0). |
 | `help` | Lists builtins. |
@@ -1012,16 +1015,68 @@ how to drive crust's pipelines, tests, mocks, load runs, and process
 tooling. They're embedded in the binary and installed per project:
 
 ```bash
-skills list                 # what's embedded, with descriptions
-skills install              # write to ./.claude/skills/<name>/SKILL.md
-skills install --global     # write to ~/.claude/skills/ instead
-skills install --force      # overwrite locally-edited copies
+crust skills list                       # what's embedded, with descriptions
+crust skills install                    # on a terminal: pick; anywhere else: all of them
+crust skills install --all              # no menu — everything
+crust skills install --select crust-cli,crust-logs
+crust skills install --global           # target ~/.agents/skills/ instead of ./.agents/
+crust skills install --force            # overwrite locally-edited copies, and turn a
+                                        # real .claude/skills/<name> directory into a link
 ```
 
-Install is idempotent; a file you've edited locally is refused without
-`--force`. Every example line inside the skills is checked against the live
-grammar by the test suite, so they can't silently rot. Exit codes: `0` ok,
-`1` refused overwrites, `2` bad args.
+Each skill is written **once**, to `.agents/skills/<name>/` — the cross-client
+directory Codex, Cursor and OpenCode all read — and then linked into
+`.claude/skills/<name>` as `../../.agents/skills/<name>`, because Claude Code is
+the one mainstream host that does not read the standard path. One file, not four
+copies: edit it in either path and every host sees the same edit. Re-running the
+same command also reconciles links, so an install made by an older crust is
+upgraded in place.
+
+What happens to `.claude/skills/<name>`:
+
+| State there | Result |
+|---|---|
+| absent, or a link crust wrote | created / refreshed — the summary reports `linked 9 into …/.claude/skills for Claude Code` |
+| a **real directory** crust did not write | left untouched and listed on stderr; `--force` is what consents to replacing it with a link |
+| a link pointing somewhere else | left alone **even with** `--force`, and reported |
+| symlinks unsupported (some Windows setups) | falls back to a copy, and says so |
+
+A compat problem never fails the install: the canonical file under
+`.agents/skills` is written first, so the worst case costs Claude Code's
+discovery of that one skill, not the skill itself.
+
+On a terminal, `install` opens a menu instead of writing everything: one row
+per skill with its status **in the target you are about to write to**
+(`not installed`, `current`, `EDITED locally`), pre-checked to install
+everything that is not already current there.
+
+| Key | |
+|---|---|
+| `↑` `↓` `j` `k` | move |
+| `space` `x` | toggle this skill |
+| `a` | all / none |
+| `g` | switch target: this project ⇄ `~/.agents/skills` — statuses and the `.claude/skills` links follow the target |
+| `f` | toggle overwriting skills you have edited |
+| `enter` | install the selection |
+| `q` `n` `Ctrl-C` | quit without writing |
+
+Statuses matter per scope, so switching target with `g` recomputes them: a
+skill that is current in your project may be missing from `~/.agents/skills`,
+and the menu shows the status of the place it would actually be written.
+
+Cancel exits `0` — declining is not a failure — as does an empty selection.
+Install is idempotent; a file you've edited locally is refused with exit `1`
+without `--force`, which the menu exposes per-skill as `EDITED locally` and
+globally as the `f` toggle. An unknown `--select` name exits `2` and lists the
+valid ones. Every example line inside the skills is checked against the live
+grammar by the test suite, so they can't silently rot.
+
+When crust is installed from npm, `npm install` asks once whether to install the
+skills — never on CI, never with a piped stdout, never into `node_modules`, and
+not when `crust-*` skills already sit under `.agents/skills` **or** the older
+`.claude/skills` (an install from before the layout change counts as installed).
+Say no and nothing is written. `CRUST_NO_SKILLS=1` stops the question
+permanently; `npm install --ignore-scripts` skips the launcher hook outright.
 
 ### dotenv
 
@@ -2130,6 +2185,9 @@ Honest about what doesn't work yet:
   is its own `sh -c`. Use `export FOO=x` (builtin) or `capture`.
 - **No positional script arguments.** `crust file.crust prod` is rejected —
   there is no `$1`/`$@` plumbing yet; parameterize via environment variables.
+  This is only about *scripts*: `crust <tool> [args…]` passes its arguments
+  through to the builtin, and `crust skills install` is a command, not a script
+  named `skills` that happens to be given an argument.
 - **Shell stages see EOF on stdin** in script/piped mode (stdin is drained
   before the first line runs).
 - **`source` doesn't run bash scripts.** Non-`.ts`/`.js` files are parsed as

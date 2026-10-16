@@ -8,7 +8,8 @@ Never reports a false pass — a run that measured nothing fails.
 An OpenAPI mock server, fixture suites generated from the spec, load gates CI
 can fail on, a process orchestrator, and a link checker — every tool composes
 on the same `|` stream, driven from an interactive REPL, a `crust -c`
-one-liner, or a `.crust` script.
+one-liner, a `.crust` script, or as a one-shot command from your shell
+(`crust mock-server openapi.yaml -p 4000`).
 
 ```bash
 npm i -g @lariocpt/crust
@@ -88,6 +89,33 @@ logs> filter (e => e.level >= 50) | stats --every 5
 logs> search "connection reset"
 ```
 
+## Agent skills
+
+Crust ships the SKILL.md guides that teach a coding agent how to drive it —
+pipelines, fixture suites, load gates, the mock server, `procs`, the link
+checker — embedded in the binary, so they always match the version you run.
+They go into `.agents/skills/`, the cross-client directory Codex, Cursor and
+OpenCode read, plus a link per skill in `.claude/skills/` for Claude Code, the
+one mainstream host that doesn't read the standard path:
+
+```bash
+bunx crust skills install          # on a terminal: pick which ones
+bunx crust skills install --all    # everything, into ./.agents/skills
+bunx crust skills install --select crust-cli,crust-logs
+bunx crust skills install --global # into ~/.agents/skills
+```
+
+The menu lists each skill with its status in the target it would write to
+(`current`, `not installed`, `EDITED locally`) and `g` switches between the
+project and `~/.agents/skills`; declining exits `0`. A `.claude/skills/<name>`
+directory crust did not write is left alone and reported — `--force` consents
+to replacing it with a link.
+
+`npm install` asks once whether to install them. It never asks on CI, with
+piped output, for a global install, or once crust skills are already in the
+project under either path, and it can never fail the install. Answering no
+writes nothing; `CRUST_NO_SKILLS=1` stops the question permanently.
+
 ## What this package installs
 
 This package is a ~4 KB launcher, not the binary. On first use it downloads the
@@ -106,5 +134,6 @@ from source — see the repository README.
 | `CRUST_SOURCE` | `github` (default for this package) or `apps` — which artifact plane to resolve from. |
 | `CRUST_GITHUB_REPO` | Override the `owner/repo` the release is fetched from. |
 | `CRUST_APPS_URL` | Base URL of a self-hosted artifact plane, used when `CRUST_SOURCE=apps`. |
+| `CRUST_NO_SKILLS` | Set to any value to stop the postinstall question about installing agent skills. `crust skills install` still works. |
 
 MIT © Lario Borges

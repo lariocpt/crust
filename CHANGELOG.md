@@ -4,6 +4,78 @@ Notable changes to crust. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project is
 pre-1.0, so minor versions may carry breaking changes.
 
+## [Unreleased]
+
+### Added
+
+- **`crust skills install` works from a shell.** The published README leads with
+  `bunx crust skills install`, and it did not work: every positional was read as
+  a script path, so that command exited **2** (`script arguments are not
+  supported`) and a bare `crust verify-web-links` exited **127** (`cannot read
+  verify-web-links`) — a code that reads as "the binary is not installed" while
+  the binary was the thing printing it. The tool builtins are argv subcommands
+  now, flags and all, booted through the same context as `-c` so `--env-file`
+  and `init.ts` behave the same whichever spelling is used. Only the builtins
+  that need nothing from a live session qualify (`skills`, `test-fixture`,
+  `test-pipes`, `gen-fixtures`, `mock-server`, `verify-web-links`); `cd`,
+  `export`, `alias`, `source` and the rest stay REPL-only, because a one-shot
+  process has no session to change and a command that quietly does nothing is
+  worse than one that refuses. A file that exists still wins when it is the only
+  argument, so an existing script named `skills` keeps running as a script.
+- **A picker for `skills install`.** On a terminal it no longer writes all nine
+  skills into a project on someone's behalf: a menu lists each one with its
+  status **in the target it would actually write to** (`not installed`,
+  `current`, `EDITED locally`), pre-checked to everything not already current
+  there, with `g` switching between the project and `~/.claude/skills` — which
+  recomputes the statuses, since a skill current here can be missing there.
+  Cancel and empty-selection exit `0`: declining is not a failure. Piped or
+  non-TTY output keeps the old install-everything behaviour, and `--all` /
+  `--select a,b` say it explicitly.
+- **`npm install` offers to install the skills**, once. It stays silent on CI,
+  with a piped stdout, for a global install, when crust is pulled in as a
+  dependency (the target would have been `node_modules/crust`), and once crust
+  skills are already in the project; `CRUST_NO_SKILLS=1` stops it permanently.
+  Answering yes hands the terminal to the picker. Every failure path resolves to
+  "declined" with exit 0 — a postinstall that fails takes the whole install with
+  it, and not wanting to answer a question is not a reason to refuse a package.
+
+### Fixed
+
+- **`--check` now lints `skills install`.** The line had nothing declarative to
+  check, so a wrong flag surfaced only at run time; `skills install --bogus` is
+  caught at parse time alongside the other tools.
+
+### Changed
+
+- **Skills install to `.agents/skills`, and `.claude/skills` gets a link per
+  skill.** The nine SKILL.md files were written into `.claude/skills`, which
+  only Claude Code reads: a project with Codex, Cursor or OpenCode installed got
+  nothing, even though those three (and the Cursor rules ecosystem) have settled
+  on `.agents/skills` as the cross-client directory. The canonical copy now
+  lives at `.agents/skills/<name>/` — project, or `~/.agents/skills` with
+  `--global` — and each skill is symlinked at `.claude/skills/<name>` as
+  `../../.agents/skills/<name>`, because Claude Code is the one mainstream host
+  that still reads only its own path. One file instead of four copies, so an
+  edit in either path is the same edit. Links are per-skill on purpose: linking
+  the whole `skills/` directory would hide whatever else a host keeps there
+  (Codex stores its built-ins under `.agents/skills/.system`). A real
+  `.claude/skills/<name>` directory crust did not write is reported and left
+  untouched — `--force` is what consents to replacing it with a link — and a
+  link pointing somewhere else is left alone even then. None of it can fail an
+  install: the canonical file is written first, systems that cannot symlink fall
+  back to a copy, and the summary names what was linked. Re-running the same
+  command upgrades an old-layout install in place.
+- **`skills install` answers with a settled line** — `✔ installed 3, up-to-date
+  6 → /path/.agents/skills`, or `✔ 9 skills already current → …` when it wrote
+  nothing — instead of a `skills:`-prefixed log line, so the result of an
+  install reads the same as the rest of the tool's success output.
+- **`skills list` refuses arguments instead of ignoring them.** `skills list
+  --global` printed the same list and exited 0 — a flag silently doing nothing.
+  It exits 2 now, which is also what `--check` had been saying about it.
+- An unbound escape sequence cannot press a key by accident. The picker swallows
+  a whole CSI sequence instead of its first two bytes: leaving the tail behind
+  fed `f` to the overwrite toggle when a right-arrow was pasted into the menu.
+
 ## [0.2.4] — 2026-08-25
 
 Both of these came out of dogfooding crust against a fresh codebase

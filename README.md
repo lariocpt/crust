@@ -8,7 +8,8 @@ Never reports a false pass — a run that measured nothing fails.
 An OpenAPI mock server, fixture suites generated from the spec, load gates
 CI can fail on, a process orchestrator, and a link checker — every tool
 composes on the same `|` / `.pipe()` stream, driven from an interactive REPL, a
-`crust -c` one-liner, or a `.crust` script.
+`crust -c` one-liner, a `.crust` script, or as a one-shot command from your
+shell (`crust mock-server openapi.yaml -p 4000`).
 
 Battle-tested by dogfooding against a real 97-operation production API:
 406 generated fixtures, spec-driven mocking for two client apps, and the
@@ -122,6 +123,29 @@ logs> filter (e => e.level >= 50) | stats --every 5
 logs> search "connection reset"
 logs> buffer 50000
 ```
+
+**Agent skills.** Nine SKILL.md guides that teach a coding agent to drive
+crust — pipelines, fixtures, mocks, load runs, `procs` — installed from the
+binary itself into `.agents/skills/`, the cross-client directory Codex, Cursor
+and OpenCode read, with a link per skill under `.claude/skills/` because Claude
+Code is the one mainstream host that doesn't read the standard path:
+
+```bash
+crust skills install            # on a terminal: pick which ones, per target
+crust skills install --all      # every skill, no menu
+crust skills install --select crust-cli,crust-logs
+crust skills install --global   # target ~/.agents/skills/ instead of ./.agents/
+```
+
+The menu shows each skill's status **in the target it would actually write to**
+(`current`, `not installed`, `EDITED locally`), and `g` switches between the
+project and `~/.agents/skills` — recomputing them, since a skill current here
+can be missing there. A `.claude/skills/<name>` directory crust did not write is
+left alone and reported; `--force` is what says it may become a link. Declining
+exits `0`. Piped or non-TTY installs (CI) keep installing everything. Installed
+from npm, `npm install` asks once — silently skipped on CI, when output is
+piped, for a global install, or when crust skills already sit in either path;
+`CRUST_NO_SKILLS=1` stops the question for good.
 
 ## What crust is not
 

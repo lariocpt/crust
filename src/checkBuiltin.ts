@@ -19,6 +19,11 @@ interface BuiltinCheck {
   requiresAnyOf?: string[];
   /** bare words that are subcommands, not arguments */
   subcommands?: string[];
+  /**
+   * A bare word that takes the flag spec itself (`skills install --global`),
+   * as opposed to the no-argument subcommands above.
+   */
+  verb?: string;
 }
 
 async function specFor(name: string): Promise<BuiltinCheck | null> {
@@ -41,9 +46,15 @@ async function specFor(name: string): Promise<BuiltinCheck | null> {
         spec: (await import("./builtins")).DOTENV_SPEC,
         subcommands: ["status", "list", "clear"],
       };
+    case "skills":
+      return {
+        spec: (await import("./skillsCli")).SKILLS_SPEC,
+        subcommands: ["list"],
+        verb: "install",
+      };
     default:
       // Builtins with no flag spec (cd, export, alias, source, exit, history,
-      // help, skills, logs) are not checked — there is nothing declarative to
+      // help, logs) are not checked — there is nothing declarative to
       // check them against.
       return null;
   }
@@ -64,8 +75,14 @@ export async function checkBuiltinLine(name: string, argv: string[]): Promise<st
     return null;
   }
 
+  // A verb is part of the command word, not an argument: `skills install
+  // --global` has to be parsed as `--global`, or the linter reports
+  // `unexpected argument "install"` on the documented form.
+  let flagArgs = argv;
+  if (check.verb && argv.length > 0 && argv[0] === check.verb) flagArgs = argv.slice(1);
+
   try {
-    const { values, rest, help } = parseFlags(argv, check.spec);
+    const { values, rest, help } = parseFlags(flagArgs, check.spec);
     if (help) return null;
     if (rest.length > 0) return `${name}: unexpected argument "${rest[0]}"`;
     if (check.requires && values[check.requires] === undefined) {

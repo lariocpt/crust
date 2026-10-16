@@ -8,6 +8,9 @@ dist/
 .env
 .env.local
 .claude
+# Both written by `crust skills install` — generated from the binary, so they
+# are never edited here and never belong in git.
+.agents
 .husky/_/
 
 # Compiled binaries — ~95MB each and they never delta, so committing them added
