@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { classify } from "../src/lexer";
 
 const ENTRY = `${import.meta.dir}/../src/index.ts`;
@@ -76,5 +79,43 @@ describe("stdin source — CLI round-trips", () => {
     const r = await runCli(["-c", "range(1, 3) | stdin"], "unused\n");
     expect(r.code).toBe(1);
     expect(r.stderr).toContain("stdin cannot appear as a non-first stage");
+  });
+});
+
+// The drain is a property of `cmd | crust` — the mode where the PROGRAM arrives
+// on stdin — and of nothing else. The limits section used to claim "script/piped
+// mode", which told people that `crust file.crust` also starves its shell
+// stages. It doesn't: crust never touches stdin there, so a shell stage inherits
+// the pipe and reads it. These pin the distinction the docs now draw.
+describe("stdin is drained only when the program itself is piped", () => {
+  const dir = mkdtempSync(join(tmpdir(), "crust-stdin-mode-"));
+
+  test("piped program: a shell stage sees EOF, because stdin WAS the program", async () => {
+    const r = await runCli([], "echo start\nwc -l\n");
+    expect(r.stdout).toBe("start\n0\n");
+  });
+
+  test("script file with piped data: the shell stage inherits the pipe", async () => {
+    const file = join(dir, "inherit.crust");
+    writeFileSync(file, "echo start\nwc -l\n");
+    const r = await runCli([file], "DATA1\nDATA2\n");
+    expect(r.code).toBe(0);
+    expect(r.stdout).toBe("start\n2\n");
+  });
+
+  test("script file with piped data: the `stdin` source also reads it", async () => {
+    // Nothing drained it, so the source works here — which is exactly why a
+    // script must not do BOTH this and a stdin-eating shell stage.
+    const file = join(dir, "source.crust");
+    writeFileSync(file, "stdin | wc -l\n");
+    const r = await runCli([file], "DATA1\nDATA2\n");
+    expect(r.code).toBe(0);
+    expect(r.stdout).toBe("2\n");
+  });
+
+  test("-c with piped data: the shell stage reads the data (nothing is drained)", async () => {
+    const r = await runCli(["-c", "wc -l"], "DATA1\nDATA2\n");
+    expect(r.code).toBe(0);
+    expect(r.stdout).toBe("2\n");
   });
 });

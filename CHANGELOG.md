@@ -41,6 +41,17 @@ pre-1.0, so minor versions may carry breaking changes.
 
 ### Fixed
 
+- **The limits section said scripts starve their shell stages, and they don't.**
+  It claimed shell stages see EOF on stdin "in script/piped mode". Only `cmd |
+  crust` drains stdin — there the *program* arrives on fd 0, so crust reads it to
+  EOF before running anything. `crust file.crust` never touches stdin: with data
+  piped in, a `wc -l` stage measured **2** piped lines, not 0. The false half
+  hides the actual rule, which is one stdin per run — the program, the `stdin`
+  source, or the shell stages, never two of them. The wording is corrected in the
+  limits list and the run-mode table, and all four mode/behaviour pairs are
+  pinned in `tests/stdin.test.ts`. No guard was added: detecting whether an
+  arbitrary `sh -c` text reads fd 0 is not decidable, and a wrong guess is a
+  false alarm on scripts that work.
 - **`--check` now lints `skills install`.** The line had nothing declarative to
   check, so a wrong flag surfaced only at run time; `skills install --bogus` is
   caught at parse time alongside the other tools.
