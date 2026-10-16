@@ -8,7 +8,8 @@ Never reports a false pass — a run that measured nothing fails.
 An OpenAPI mock server, fixture suites generated from the spec, load gates CI
 can fail on, a process orchestrator, and a link checker — every tool composes
 on the same `|` stream, driven from an interactive REPL, a `crust -c`
-one-liner, or a `.crust` script.
+one-liner, a `.crust` script, or as a one-shot command from your shell
+(`crust mock-server openapi.yaml -p 4000`).
 
 ```bash
 npm i -g @lariocpt/crust
@@ -97,8 +98,13 @@ checker — embedded in the binary, so they always match the version you run:
 ```bash
 bunx crust skills install          # on a terminal: pick which ones
 bunx crust skills install --all    # everything, into ./.claude/skills
+bunx crust skills install --select crust-cli,crust-logs
 bunx crust skills install --global # into ~/.claude/skills
 ```
+
+The menu lists each skill with its status in the target it would write to
+(`current`, `not installed`, `EDITED locally`) and `g` switches between the
+project and `~/.claude/skills`; declining exits `0`.
 
 `npm install` asks once whether to install them. It never asks on CI, with
 piped output, for a global install, or once crust skills are already in the
