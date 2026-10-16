@@ -93,23 +93,28 @@ logs> search "connection reset"
 
 Crust ships the SKILL.md guides that teach a coding agent how to drive it —
 pipelines, fixture suites, load gates, the mock server, `procs`, the link
-checker — embedded in the binary, so they always match the version you run:
+checker — embedded in the binary, so they always match the version you run.
+They go into `.agents/skills/`, the cross-client directory Codex, Cursor and
+OpenCode read, plus a link per skill in `.claude/skills/` for Claude Code, the
+one mainstream host that doesn't read the standard path:
 
 ```bash
 bunx crust skills install          # on a terminal: pick which ones
-bunx crust skills install --all    # everything, into ./.claude/skills
+bunx crust skills install --all    # everything, into ./.agents/skills
 bunx crust skills install --select crust-cli,crust-logs
-bunx crust skills install --global # into ~/.claude/skills
+bunx crust skills install --global # into ~/.agents/skills
 ```
 
 The menu lists each skill with its status in the target it would write to
 (`current`, `not installed`, `EDITED locally`) and `g` switches between the
-project and `~/.claude/skills`; declining exits `0`.
+project and `~/.agents/skills`; declining exits `0`. A `.claude/skills/<name>`
+directory crust did not write is left alone and reported — `--force` consents
+to replacing it with a link.
 
 `npm install` asks once whether to install them. It never asks on CI, with
 piped output, for a global install, or once crust skills are already in the
-project, and it can never fail the install. Answering no writes nothing;
-`CRUST_NO_SKILLS=1` stops the question permanently.
+project under either path, and it can never fail the install. Answering no
+writes nothing; `CRUST_NO_SKILLS=1` stops the question permanently.
 
 ## What this package installs
 

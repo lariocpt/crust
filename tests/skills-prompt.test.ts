@@ -9,7 +9,8 @@ import { shouldAsk } from "../npm/lib/skills-prompt.mjs";
 // "yes" hangs CI on a question nobody is there to answer, or drops nine SKILL.md
 // files into node_modules/crust. The question itself is a readline call.
 let dir: string;
-const SKILLS = ".claude/skills";
+const SKILLS = ".agents/skills";
+const CLAUDE_SKILLS = ".claude/skills";
 
 beforeAll(async () => {
   dir = await mkdtemp(join(tmpdir(), "crust-skillsprompt-"));
@@ -91,10 +92,21 @@ describe("postinstall skills prompt: gating", () => {
     expect(r.ask).toBe(false);
   });
 
-  test("an unrelated .claude/skills entry is not 'already installed'", async () => {
-    const project = await emptyProject("other-skills");
-    await mkdir(join(project, SKILLS, "my-own-skill"), { recursive: true });
+  test("silent for the pre-.agents layout too — that install counts as done", async () => {
+    // Someone who ran crust before the layout change has .claude/skills/crust-*.
+    // Asking them again would offer to install what they already have.
+    const project = await emptyProject("installed-claude");
+    await mkdir(join(project, CLAUDE_SKILLS, "crust-cli"), { recursive: true });
     const r = shouldAsk({ env: { INIT_CWD: project }, stdinTty: true, stdoutTty: true });
-    expect(r.ask).toBe(true);
+    expect(r.ask).toBe(false);
+  });
+
+  test("an unrelated skill entry in either directory is not 'already installed'", async () => {
+    for (const sub of [SKILLS, CLAUDE_SKILLS]) {
+      const project = await emptyProject(`other-${sub.replace(/\W/g, "")}`);
+      await mkdir(join(project, sub, "my-own-skill"), { recursive: true });
+      const r = shouldAsk({ env: { INIT_CWD: project }, stdinTty: true, stdoutTty: true });
+      expect(r.ask).toBe(true);
+    }
   });
 });

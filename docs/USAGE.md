@@ -1019,9 +1019,31 @@ crust skills list                       # what's embedded, with descriptions
 crust skills install                    # on a terminal: pick; anywhere else: all of them
 crust skills install --all              # no menu — everything
 crust skills install --select crust-cli,crust-logs
-crust skills install --global           # target ~/.claude/skills/ instead of ./.claude/
-crust skills install --force            # overwrite locally-edited copies
+crust skills install --global           # target ~/.agents/skills/ instead of ./.agents/
+crust skills install --force            # overwrite locally-edited copies, and turn a
+                                        # real .claude/skills/<name> directory into a link
 ```
+
+Each skill is written **once**, to `.agents/skills/<name>/` — the cross-client
+directory Codex, Cursor and OpenCode all read — and then linked into
+`.claude/skills/<name>` as `../../.agents/skills/<name>`, because Claude Code is
+the one mainstream host that does not read the standard path. One file, not four
+copies: edit it in either path and every host sees the same edit. Re-running the
+same command also reconciles links, so an install made by an older crust is
+upgraded in place.
+
+What happens to `.claude/skills/<name>`:
+
+| State there | Result |
+|---|---|
+| absent, or a link crust wrote | created / refreshed — the summary reports `linked 9 into …/.claude/skills for Claude Code` |
+| a **real directory** crust did not write | left untouched and listed on stderr; `--force` is what consents to replacing it with a link |
+| a link pointing somewhere else | left alone **even with** `--force`, and reported |
+| symlinks unsupported (some Windows setups) | falls back to a copy, and says so |
+
+A compat problem never fails the install: the canonical file under
+`.agents/skills` is written first, so the worst case costs Claude Code's
+discovery of that one skill, not the skill itself.
 
 On a terminal, `install` opens a menu instead of writing everything: one row
 per skill with its status **in the target you are about to write to**
@@ -1033,14 +1055,14 @@ everything that is not already current there.
 | `↑` `↓` `j` `k` | move |
 | `space` `x` | toggle this skill |
 | `a` | all / none |
-| `g` | switch target: this project ⇄ `~/.claude/skills` |
+| `g` | switch target: this project ⇄ `~/.agents/skills` — statuses and the `.claude/skills` links follow the target |
 | `f` | toggle overwriting skills you have edited |
 | `enter` | install the selection |
 | `q` `n` `Ctrl-C` | quit without writing |
 
 Statuses matter per scope, so switching target with `g` recomputes them: a
-skill that is current in your project may be missing from `~/.claude`, and
-the menu shows the status of the place it would actually be written.
+skill that is current in your project may be missing from `~/.agents/skills`,
+and the menu shows the status of the place it would actually be written.
 
 Cancel exits `0` — declining is not a failure — as does an empty selection.
 Install is idempotent; a file you've edited locally is refused with exit `1`
@@ -1049,10 +1071,12 @@ globally as the `f` toggle. An unknown `--select` name exits `2` and lists the
 valid ones. Every example line inside the skills is checked against the live
 grammar by the test suite, so they can't silently rot.
 
-When crust is installed from npm, `npm install` asks once whether to install
-the skills (never on CI, never with a piped stdout, never into
-`node_modules`); say no and nothing is written. `CRUST_NO_SKILLS=1` stops the
-question permanently.
+When crust is installed from npm, `npm install` asks once whether to install the
+skills — never on CI, never with a piped stdout, never into `node_modules`, and
+not when `crust-*` skills already sit under `.agents/skills` **or** the older
+`.claude/skills` (an install from before the layout change counts as installed).
+Say no and nothing is written. `CRUST_NO_SKILLS=1` stops the question
+permanently; `npm install --ignore-scripts` skips the launcher hook outright.
 
 ### dotenv
 

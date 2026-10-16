@@ -25,7 +25,7 @@ export interface PickerState {
   entries: PickerEntry[];
   chosen: Set<string>;
   cursor: number;
-  /** true = ~/.claude/skills, false = ./.claude/skills of the current project */
+  /** true = ~/.agents/skills, false = ./.agents/skills of the current project */
   global: boolean;
   /** overwrite copies the user has edited locally */
   force: boolean;
@@ -167,12 +167,12 @@ function ellipsize(text: string, width: number): string {
  * when stdout is redirected.
  */
 export function renderPicker(state: PickerState): string {
-  const target = state.global ? "~/.claude/skills (global)" : "./.claude/skills (this project)";
+  const target = state.global ? "~/.agents/skills (global)" : "./.agents/skills (this project)";
   const selected = state.entries.filter((e) => state.chosen.has(e.name)).length;
   const lines: string[] = [];
   lines.push(`${CSI}1mcrust skills${CSI}0m — pick which agent skills to install`);
   lines.push(
-    `  target ${CSI}1m${target}${CSI}0m    overwrite edited ${state.force ? `${CSI}33mON${CSI}0m` : "off"}`,
+    `  target ${CSI}1m${target}${CSI}0m    overwrite edited ${state.force ? `${CSI}33mON${CSI}0m` : "off"}    ${CSI}2m+ a link per skill in .claude/skills${CSI}0m`,
   );
   lines.push(
     `${CSI}2m↑↓ move · space toggle · a all/none · g target · f overwrite · enter install · q quit${CSI}0m`,

@@ -47,6 +47,28 @@ pre-1.0, so minor versions may carry breaking changes.
 
 ### Changed
 
+- **Skills install to `.agents/skills`, and `.claude/skills` gets a link per
+  skill.** The nine SKILL.md files were written into `.claude/skills`, which
+  only Claude Code reads: a project with Codex, Cursor or OpenCode installed got
+  nothing, even though those three (and the Cursor rules ecosystem) have settled
+  on `.agents/skills` as the cross-client directory. The canonical copy now
+  lives at `.agents/skills/<name>/` — project, or `~/.agents/skills` with
+  `--global` — and each skill is symlinked at `.claude/skills/<name>` as
+  `../../.agents/skills/<name>`, because Claude Code is the one mainstream host
+  that still reads only its own path. One file instead of four copies, so an
+  edit in either path is the same edit. Links are per-skill on purpose: linking
+  the whole `skills/` directory would hide whatever else a host keeps there
+  (Codex stores its built-ins under `.agents/skills/.system`). A real
+  `.claude/skills/<name>` directory crust did not write is reported and left
+  untouched — `--force` is what consents to replacing it with a link — and a
+  link pointing somewhere else is left alone even then. None of it can fail an
+  install: the canonical file is written first, systems that cannot symlink fall
+  back to a copy, and the summary names what was linked. Re-running the same
+  command upgrades an old-layout install in place.
+- **`skills install` answers with a settled line** — `✔ installed 3, up-to-date
+  6 → /path/.agents/skills`, or `✔ 9 skills already current → …` when it wrote
+  nothing — instead of a `skills:`-prefixed log line, so the result of an
+  install reads the same as the rest of the tool's success output.
 - **`skills list` refuses arguments instead of ignoring them.** `skills list
   --global` printed the same list and exited 0 — a flag silently doing nothing.
   It exits 2 now, which is also what `--check` had been saying about it.

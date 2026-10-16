@@ -19,7 +19,12 @@ import { spawn } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
 import path from "node:path";
 
-const SKILLS_SUBDIR = ".claude/skills";
+// Where the skills live. `.agents/skills` is the canonical, cross-client path;
+// `.claude/skills` is where Claude Code looks, and crust keeps a per-skill link
+// there. Both are checked for "already installed" so someone upgrading from a
+// crust that wrote only the Claude path is not asked to start over.
+const SKILLS_SUBDIR = ".agents/skills";
+const OTHER_SKILL_SUBDIRS = [".claude/skills"];
 
 /**
  * Decide whether to ask, and where "this project" is.
@@ -48,7 +53,10 @@ export function shouldAsk({
     return { ask: false, reason: "not run from a project directory" };
   }
   if (!existsSync(dir)) return { ask: false, reason: "project directory is gone" };
-  if (hasCrustSkills(path.join(dir, SKILLS_SUBDIR))) {
+  const installedHere = [SKILLS_SUBDIR, ...OTHER_SKILL_SUBDIRS].some((sub) =>
+    hasCrustSkills(path.join(dir, sub)),
+  );
+  if (installedHere) {
     return { ask: false, reason: "skills already installed" };
   }
   return { ask: true, dir };
@@ -86,12 +94,13 @@ export async function askSkills({ bin, env = {}, log = () => {}, cwd = env.INIT_
   if (!gate.ask) return { asked: false, reason: gate.reason };
 
   log("");
-  log("crust ships agent skills (Claude Code reads them to drive crust correctly).");
-  log(`Install them into ${gate.dir}? [y/N] `);
+  log("crust ships agent skills — the SKILL.md guides Codex, Cursor, Claude Code");
+  log("and OpenCode read to drive crust correctly.");
+  log(`Install them into ${gate.dir}/.agents/skills? [y/N] `);
 
   const answer = await readAnswer();
   if (!/^y(es)?$/i.test(answer.trim())) {
-    log("skipped — `crust skills install` does it later (add --global for ~/.claude).");
+    log("skipped — `crust skills install` does it later (add --global for ~/.agents).");
     log("to stop being asked: CRUST_NO_SKILLS=1");
     return { asked: true, installed: false };
   }

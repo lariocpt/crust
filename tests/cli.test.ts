@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { existsSync, rmSync } from "node:fs";
+import { existsSync, lstatSync, rmSync } from "node:fs";
 
 const ENTRY = `${import.meta.dir}/../src/index.ts`;
 
@@ -484,17 +484,23 @@ describe("crust CLI: a tool builtin as argv[0]", () => {
 
   afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
-  const skillsDir = () => join(dir, ".claude/skills");
+  // Canonical location is the cross-client one; `.claude/skills` gets a link per
+  // skill, so Claude Code and Codex read the same file rather than two copies.
+  const skillsDir = () => join(dir, ".agents/skills");
+  const claudeDir = () => join(dir, ".claude/skills");
 
   test("skills install runs as a command and writes the skills", async () => {
     const r = await runCli(["skills", "install", "--all"], undefined, { cwd: dir });
     expect(r.code).toBe(0);
-    expect(r.stdout).toContain("skills: installed");
+    expect(r.stdout).toContain("✔ installed");
+    expect(r.stdout).toContain("for Claude Code");
     expect(existsSync(join(skillsDir(), "crust-cli/SKILL.md"))).toBe(true);
+    expect(lstatSync(join(claudeDir(), "crust-cli")).isSymbolicLink()).toBe(true);
   });
 
   test("--select installs only the named skills", async () => {
     rmSync(skillsDir(), { recursive: true, force: true });
+    rmSync(claudeDir(), { recursive: true, force: true });
     const r = await runCli(["skills", "install", "--select", "crust-cli"], undefined, { cwd: dir });
     expect(r.code).toBe(0);
     expect(existsSync(join(skillsDir(), "crust-cli/SKILL.md"))).toBe(true);

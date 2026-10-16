@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { rmSync } from "node:fs";
-import { mkdtemp, realpath, rm } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readlink, realpath, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { classify, tokenize } from "../src/lexer";
@@ -84,18 +84,18 @@ describe("embedded skills", () => {
 });
 
 describe("skills builtin", () => {
-  test("install writes SKILL.md files under ./.claude/skills", async () => {
+  test("install writes SKILL.md files under ./.agents/skills", async () => {
     const code = await runSkills(["install"]);
     expect(code).toBe(0);
     for (const s of EMBEDDED_SKILLS) {
-      const content = await Bun.file(join(dir, ".claude", "skills", s.name, "SKILL.md")).text();
+      const content = await Bun.file(join(dir, ".agents", "skills", s.name, "SKILL.md")).text();
       expect(content).toBe(s.content);
     }
   });
 
   test("re-install is idempotent; a locally-edited file is refused without --force", async () => {
     expect(await runSkills(["install"])).toBe(0);
-    const target = join(dir, ".claude", "skills", EMBEDDED_SKILLS[0]!.name, "SKILL.md");
+    const target = join(dir, ".agents", "skills", EMBEDDED_SKILLS[0]!.name, "SKILL.md");
     await Bun.write(target, "# locally edited\n");
     expect(await runSkills(["install"])).toBe(1);
     expect(await Bun.file(target).text()).toBe("# locally edited\n");
@@ -112,21 +112,84 @@ describe("skills builtin", () => {
   });
 });
 
-describe("skills install --select", () => {
-  test("writes only the named skills", async () => {
-    rmSync(join(dir, ".claude"), { recursive: true, force: true });
-    expect(await runSkills(["install", "--select", "crust-cli,crust-logs"])).toBe(0);
-    expect(await Bun.file(join(dir, ".claude/skills/crust-cli/SKILL.md")).text()).toBe(
+describe("the .claude/skills compatibility entry", () => {
+  // Claude Code reads only .claude/skills, so every install has to leave
+  // something there — but a link, never a second copy that can drift, and never
+  // at the cost of something the user put in that path themselves.
+  const canonical = (name: string) => join(dir, ".agents", "skills", name);
+  const compat = (name: string) => join(dir, ".claude", "skills", name);
+
+  test("a per-skill link points at the installed directory, not a copy of it", async () => {
+    expect(await runSkills(["install", "--select", "crust-cli"])).toBe(0);
+    const st = await lstat(compat("crust-cli"));
+    expect(st.isSymbolicLink()).toBe(true);
+    expect(await realpath(compat("crust-cli"))).toBe(await realpath(canonical("crust-cli")));
+    // Relative, so a moved checkout or a synced $HOME keeps the link alive.
+    expect(await readlink(compat("crust-cli"))).toBe("../../.agents/skills/crust-cli");
+    expect(await Bun.file(join(compat("crust-cli"), "SKILL.md")).text()).toBe(
       EMBEDDED_SKILLS.find((s) => s.name === "crust-cli")!.content,
     );
-    expect(await Bun.file(join(dir, ".claude/skills/crust-logs/SKILL.md")).exists()).toBe(true);
-    expect(await Bun.file(join(dir, ".claude/skills/crust-procs/SKILL.md")).exists()).toBe(false);
+  });
+
+  test("re-running does not churn an existing link", async () => {
+    expect(await runSkills(["install", "--select", "crust-cli"])).toBe(0);
+    const before = await readlink(compat("crust-cli"));
+    expect(await runSkills(["install", "--select", "crust-cli"])).toBe(0);
+    expect(await readlink(compat("crust-cli"))).toBe(before);
+  });
+
+  test("a real directory there is left alone, reported, and not an error", async () => {
+    // The pre-`.agents` layout, or a skill the user wrote by hand. Deleting it
+    // would be crust destroying content it did not create.
+    rmSync(compat("crust-logs"), { recursive: true, force: true });
+    await mkdir(compat("crust-logs"), { recursive: true });
+    await Bun.write(join(compat("crust-logs"), "SKILL.md"), "# mine\n");
+    expect(await runSkills(["install", "--select", "crust-logs"])).toBe(0);
+    expect(await Bun.file(join(canonical("crust-logs"), "SKILL.md")).exists()).toBe(true);
+    expect((await lstat(compat("crust-logs"))).isSymbolicLink()).toBe(false);
+    expect(await Bun.file(join(compat("crust-logs"), "SKILL.md")).text()).toBe("# mine\n");
+  });
+
+  test("--force converts that directory into the link", async () => {
+    expect(await runSkills(["install", "--select", "crust-logs", "--force"])).toBe(0);
+    expect((await lstat(compat("crust-logs"))).isSymbolicLink()).toBe(true);
+    expect(await Bun.file(join(compat("crust-logs"), "SKILL.md")).text()).toBe(
+      EMBEDDED_SKILLS.find((s) => s.name === "crust-logs")!.content,
+    );
+  });
+
+  test("a link pointing somewhere else is the user's business, so it stays", async () => {
+    rmSync(compat("crust-procs"), { recursive: true, force: true });
+    await mkdir(join(dir, ".claude", "skills"), { recursive: true });
+    await mkdir(join(dir, "handmade"), { recursive: true });
+    await symlink(join(dir, "handmade"), compat("crust-procs"), "dir");
+    expect(await runSkills(["install", "--select", "crust-procs"])).toBe(0);
+    expect(await readlink(compat("crust-procs"))).toBe(join(dir, "handmade"));
+    // And --force does not quietly repoint it either.
+    expect(await runSkills(["install", "--select", "crust-procs", "--force"])).toBe(0);
+    expect(await readlink(compat("crust-procs"))).toBe(join(dir, "handmade"));
+  });
+});
+
+describe("skills install --select", () => {
+  const wipe = () => {
+    rmSync(join(dir, ".agents"), { recursive: true, force: true });
+    rmSync(join(dir, ".claude"), { recursive: true, force: true });
+  };
+  test("writes only the named skills", async () => {
+    wipe();
+    expect(await runSkills(["install", "--select", "crust-cli,crust-logs"])).toBe(0);
+    expect(await Bun.file(join(dir, ".agents/skills/crust-cli/SKILL.md")).text()).toBe(
+      EMBEDDED_SKILLS.find((s) => s.name === "crust-cli")!.content,
+    );
+    expect(await Bun.file(join(dir, ".agents/skills/crust-logs/SKILL.md")).exists()).toBe(true);
+    expect(await Bun.file(join(dir, ".agents/skills/crust-procs/SKILL.md")).exists()).toBe(false);
   });
 
   test("repeated flags and commas are the same selection", async () => {
-    rmSync(join(dir, ".claude"), { recursive: true, force: true });
+    wipe();
     expect(await runSkills(["install", "--select", "crust-cli", "--select", "crust-logs"])).toBe(0);
-    expect(await Bun.file(join(dir, ".claude/skills/crust-logs/SKILL.md")).exists()).toBe(true);
+    expect(await Bun.file(join(dir, ".agents/skills/crust-logs/SKILL.md")).exists()).toBe(true);
   });
 
   test("an unknown name fails, naming both the offender and the choices", async () => {
@@ -194,7 +257,8 @@ describe("skill picker logic (the part that decides what gets written)", () => {
       global: false,
       force: false,
     });
-    expect(screen).toContain("./.claude/skills (this project)");
+    expect(screen).toContain("./.agents/skills (this project)");
+    expect(screen).toContain("+ a link per skill in .claude/skills");
     expect(screen).toContain("[x] a");
     expect(screen).toContain("[ ] b");
     expect(screen).toContain("EDITED locally");
@@ -207,7 +271,7 @@ describe("skill picker logic (the part that decides what gets written)", () => {
       global: true,
       force: true,
     });
-    expect(globalScreen).toContain("~/.claude/skills (global)");
+    expect(globalScreen).toContain("~/.agents/skills (global)");
     expect(globalScreen).toContain("ON");
   });
 });

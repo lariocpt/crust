@@ -1,4 +1,5 @@
 import { FlagError, type FlagSpec, type ParsedFlags, parseFlags } from "./args";
+import { type CompatOutcome, ensureClaudeLink, summarizeCompat } from "./skillsCompat";
 import {
   EMBEDDED_SKILLS,
   type EmbeddedSkill,
@@ -35,8 +36,15 @@ how to drive crust's pipelines, tests, mocks, and process tooling.
                                  otherwise (piped, CI): install every one
   skills install --all           every skill, no menu
   skills install --select a,b    only the named skills (repeatable)
-  skills install --global        target ~/.claude/skills instead of the project
-  skills install --force         overwrite locally-edited copies
+  skills install --global        target ~/.agents/skills instead of ./.agents/skills
+  skills install --force         overwrite locally-edited copies, and replace a
+                                 real .claude/skills/<name> directory with a link
+
+Each skill is written once, to .agents/skills/<name>/ — the cross-client
+location Codex, Cursor and OpenCode read — and linked into
+.claude/skills/<name>, because Claude Code is the one mainstream host that does
+not read the standard path. A .claude/skills/<name> directory crust did not
+write is left alone and reported; --force says it may become a link.
 
 Run it as \`crust skills install\` from a shell, or type \`skills install\` at the
 crust prompt — both reach the same code.
@@ -46,12 +54,18 @@ interface InstallOutcome {
   wrote: number;
   upToDate: number;
   conflicts: string[];
+  /** Per-skill result of the `.claude/skills` compatibility entry, in install order. */
+  compat: Array<{ name: string; outcome: CompatOutcome }>;
 }
 
 /**
  * Write the chosen skills, never clobbering a locally-edited copy without
  * `force`. Returns what happened so the caller's summary is honest about a
  * partial install instead of claiming success.
+ *
+ * Files land in `.agents/skills/` (the cross-client convention) and each one is
+ * linked into `.claude/skills/` for Claude Code, which does not read the
+ * standard path yet.
  */
 async function installSkills(
   chosen: EmbeddedSkill[],
@@ -59,22 +73,28 @@ async function installSkills(
   force: boolean,
 ): Promise<InstallOutcome> {
   const baseDir = skillsBaseDir(global);
-  const outcome: InstallOutcome = { wrote: 0, upToDate: 0, conflicts: [] };
+  const outcome: InstallOutcome = { wrote: 0, upToDate: 0, conflicts: [], compat: [] };
   for (const skill of chosen) {
     const path = skillPath(baseDir, skill.name);
     const existing = Bun.file(path);
     if (await existing.exists()) {
       if ((await existing.text()) === skill.content) {
         outcome.upToDate++;
-        continue;
-      }
-      if (!force) {
+      } else if (!force) {
         outcome.conflicts.push(path);
         continue;
+      } else {
+        await Bun.write(path, skill.content);
+        outcome.wrote++;
       }
+    } else {
+      await Bun.write(path, skill.content);
+      outcome.wrote++;
     }
-    await Bun.write(path, skill.content);
-    outcome.wrote++;
+    outcome.compat.push({
+      name: skill.name,
+      outcome: await ensureClaudeLink(skill, global, force),
+    });
   }
   return outcome;
 }
@@ -119,9 +139,15 @@ async function install(names: string[], global: boolean, force: boolean): Promis
     );
     return 1;
   }
-  process.stdout.write(
-    `skills: installed ${outcome.wrote}, up-to-date ${outcome.upToDate} → ${skillsBaseDir(global)}\n`,
-  );
+  const base = skillsBaseDir(global);
+  const summary =
+    outcome.wrote === 0
+      ? `✔ ${outcome.upToDate} skill${outcome.upToDate === 1 ? "" : "s"} already current → ${base}`
+      : `✔ installed ${outcome.wrote}, up-to-date ${outcome.upToDate} → ${base}`;
+  process.stdout.write(`${summary}\n`);
+  const compat = summarizeCompat(outcome.compat, global);
+  if (compat.summary) process.stdout.write(`  ${compat.summary}\n`);
+  for (const warning of compat.warnings) process.stderr.write(warning);
   return 0;
 }
 
