@@ -8,6 +8,21 @@ pre-1.0, so minor versions may carry breaking changes.
 
 ### Added
 
+- **`FOO=value` sets the session environment.** It used to be `sh -c 'FOO=value'`
+  — a subprocess that exited **0** and forgot the value on the way out, while
+  `export FOO=value` worked. A line of pure assignments (`FOO=v`, `FOO+=v`,
+  `A=1 B=2`) is session state now and runs the same code `export` runs, so the
+  two spellings cannot drift. Values expand with sh's quoting rules — `'…'`
+  protects `$`, `"…"` expands it, a backslash protects exactly one character so
+  `FOO=C:\temp` survives — and a value that would have to come from a child
+  process (`FOO=$(date)`) is refused with the pipeline route named, because what
+  it used to do was run the command, discard its output, and exit 0. Quoting the
+  substitution or hiding a pipe in it (`FOO=$(date | head -1)`) used to slip past
+  that check onto sh's path, where the answer was the same silent nothing at
+  exit 0; it is refused too, quoting the assignment whole.
+  `FOO=value cmd` stays sh's *transient* prefix on purpose. `export` also no
+  longer ignores a word it does not understand (`export A=1 -p` set `A`, printed
+  nothing, and exited 0); bare `export` and `export -p` still list.
 - **`crust skills install` works from a shell.** The published README leads with
   `bunx crust skills install`, and it did not work: every positional was read as
   a script path, so that command exited **2** (`script arguments are not

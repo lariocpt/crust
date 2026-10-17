@@ -113,6 +113,7 @@ reason). "Checks clean" means *parses*, never *will pass*.
 | `crust --env-file <path> …` | one process, before `init.ts` | yes |
 | `dotenv <path>` / `dotenv --append` / `dotenv status` / `dotenv clear` | the session | yes |
 | `export FOO=bar` | the session | yes |
+| a bare `FOO=bar` line | the session — the same code as `export`, including `+=` | yes |
 | `capture NAME` stage | writes `process.env.NAME` from the stream, for **later lines** | yes |
 
 ## The REPL

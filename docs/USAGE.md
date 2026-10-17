@@ -812,6 +812,49 @@ Builtin lines accept sh-style trailing comments, same as shell stages:
 (outside quotes and brackets) begins a comment — `tail file#1.log`,
 `grep "#tag"`, and `procs({...})` payloads pass through untouched.
 
+### Environment assignments
+
+A line of pure assignments is session state — what `export` does, without the
+word:
+
+```bash
+FOO=bar                # persists: the next line expands $FOO
+PATH=$PATH:/tmp/bin    # $VAR expands, with sh's quoting rules
+TOKEN='$LITERAL'       # '…' protects the $, "…" expands it, \$ escapes one
+CFLAGS+=$EXTRA_FLAGS   # += appends to whatever is already there
+A=1 B=2                # several on one line
+FOO=bar some-command   # NOT this: sh's transient prefix — FOO lives for that command only
+```
+
+`FOO=bar` at a crust prompt used to be `sh -c 'FOO=bar'` — a subprocess that
+exited **0** and forgot the value on the way out, while `export FOO=bar` worked.
+Both spellings now run through one code path, so they cannot disagree, and the
+quoting rules are sh's: `'…'` protects, `"…"` expands, and a backslash protects
+exactly one character (so `FOO=C:\temp` survives, as it does in sh).
+
+A value that would have to come from a child process is refused instead of
+quietly dropped, because the old shape of it ran the command, discarded its
+output and exited 0:
+
+```text
+SHORT_SHA=$(git rev-parse HEAD)
+  → crust: `SHORT_SHA=$(git rev-parse HEAD)`: an assignment sets the session
+    environment in-process, so its value cannot come from a command — that
+    output would have to cross back out of a child process. Run the command as
+    a pipeline stage and capture it instead: <command> | capture SHORT_SHA
+```
+
+Quoting does not change it (`FOO="$(date)"` is refused too), and neither does a
+pipe inside the substitution or a command after it: what crust refuses is a
+`$( … )` in an **assignment value**. Everywhere else the substitution is
+sh's and works — `echo "$(date)"` prints the date, and `A=1 sh -c '…$(…)…'`
+runs with `A` set for that command only.
+
+`export` keeps the sh spellings: bare `export` and `export -p` list the
+environment, and `export A=1 B=2` assigns several. What it no longer does is
+ignore a word it did not understand — `export A=1 -p` used to set `A`, print
+nothing, and exit 0.
+
 ---
 
 ## Shorthand fixture grammar
@@ -865,6 +908,7 @@ string. Expansion is **opt-in per position** — crust expands exactly:
 | `stats --out` paths | yes |
 | Registered-fn args (`sql "…" "$RUN_ID"`) | yes — SQL positionals `$1`/`$2` survive (a digit can't start an env var name) |
 | Tool-builtin args (`mock-server --proxy $UP`, `test-fixture --target $DIR/*.crust.ts`) | yes — expanded after quote-aware splitting, so a var holding spaces stays one argument |
+| Assignment values (`FOO=$BAR`, `export FOO=$BAR`) | yes — `'…'` protects the `$`, `"…"` expands it, `\$` escapes one |
 | Lambda / `assert` / `capture` bodies | **no** — they're JS; use `process.env.TOKEN` |
 | Shell stages | untouched — `sh` does its own expansion |
 
@@ -1002,7 +1046,7 @@ The TS-test ecosystem owns the name `expect`. Crust exports the API name as `exp
 | Builtin | Behaviour |
 |---|---|
 | `cd [dir]` | `process.chdir`. `cd -` returns to `OLDPWD`. `~` expands to `$HOME`. |
-| `export KEY=value` | Sets `process.env[KEY]`. Multiple `KEY=value` pairs accepted. Bare `export` lists. |
+| `export KEY=value` | Sets `process.env[KEY]`. Multiple `KEY=value` pairs accepted; bare `export` and `export -p` list. A bare `FOO=value` line does the same thing without the word — see [Environment assignments](#environment-assignments). |
 | `alias name='cmd'` | Adds an alias. Bare `alias` lists. Quotes optional. Expands at the head of **every stage**, so `range(0,99) \| parallel 50 \| hc` resolves `hc`. Single pass — an expansion is not rescanned, so `alias ls='ls -la'` terminates. |
 | `unalias name` | Removes an alias. |
 | `source file` | `.ts`/`.js`/`.mjs` dynamically imported; anything else (`.crust`) runs line-by-line through the crust parser **in this session** — aliases, `export`s, and `capture`s persist. To run a bash script, run it with `sh` instead. |
@@ -2191,8 +2235,10 @@ Honest about what doesn't work yet:
   130), but there is no `Ctrl-Z` suspend — pressing it suspends crust
   *together with* its child — and no `fg`/`bg`/`&` background jobs.
 - **No multi-line input / heredocs** in the REPL editor.
-- **Plain `FOO=x` assignments don't persist** across lines — each shell line
-  is its own `sh -c`. Use `export FOO=x` (builtin) or `capture`.
+- **`FOO=x cmd` is transient, as in sh.** A bare `FOO=x` line now persists as
+  session state ([Environment assignments](#environment-assignments)); the
+  *prefix* form stays sh's, so the variable lives for that command only — on
+  purpose.
 - **No positional script arguments.** `crust file.crust prod` is rejected —
   there is no `$1`/`$@` plumbing yet; parameterize via environment variables.
   This is only about *scripts*: `crust <tool> [args…]` passes its arguments

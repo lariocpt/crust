@@ -105,6 +105,34 @@ range(0,0) | (_ => JSON.parse(await Bun.file("package.json").text()).name)
 Prefer the registered function when it fits (`salt 16` per item is shorter than
 the `crypto` line); drop to a lambda when you need something crust doesn't ship.
 
+## Session environment
+
+A line of pure assignments *is* the session environment — it runs the same code
+`export` runs, so the two spellings cannot disagree:
+
+```crust
+FOO=bar
+PATH=$PATH:/tmp/bin
+CFLAGS+=$EXTRA_FLAGS
+TOKEN='$literal'
+```
+
+`FOO=bar` used to be `sh -c 'FOO=bar'` — exit **0**, value gone, and the next
+line expanded `$FOO` to nothing. Quoting is sh's: `'…'` protects `$`, `"…"`
+expands it, and a backslash protects exactly one character, so `FOO=C:\temp`
+survives.
+
+Two shapes are deliberately **not** session state:
+
+- `FOO=bar cmd args` is sh's *transient* prefix — the variable lives for that
+  one command — so the line goes to sh untouched and later lines see nothing.
+- `FOO=$(cmd)` is refused rather than run: its value would have to cross back
+  out of a child process. The honest route is a pipeline — `git rev-parse HEAD`
+  piped into a `capture` stage of that name. Quoting doesn't change that, and
+  neither does a pipe inside the substitution (`FOO=$(date | head -1)` is
+  refused too, not quietly dropped); a `$()` anywhere else on a line stays
+  sh's, so `echo "$(date)"` still prints the date.
+
 ## These are not shell commands
 
 `base64`, `sort`, `head`, `wc` and friends exist as **real binaries** too. crust

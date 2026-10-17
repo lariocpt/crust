@@ -1,5 +1,11 @@
 import { hasUnquotedShellMeta, stripTrailingComment } from "./args";
-import { builtinInShellRefusal, builtins, isBuiltin, isToolBuiltin } from "./builtins";
+import {
+  applyBareAssignmentLine,
+  builtinInShellRefusal,
+  builtins,
+  isBuiltin,
+  isToolBuiltin,
+} from "./builtins";
 import { formatItem } from "./format";
 import * as interrupt from "./interrupt";
 import { classify, redirectTail, shellSyntaxPreflight, tokenize } from "./lexer";
@@ -132,6 +138,23 @@ export async function runLine(line: string, ctx: Context, tty?: ReplTty): Promis
     } finally {
       dispose?.();
     }
+  }
+
+  // A line of pure assignments — `FOO=x`, `PATH=$PATH:/x/bin`, `A=1 B=2` — is
+  // session state, and it used to be a subprocess that forgot: `FOO=bar` ran as
+  // `sh -c 'FOO=bar'`, exited 0, and the next line still expanded `$FOO` to
+  // nothing. `export FOO=x` is the same code path; the two spellings now differ
+  // only in typing. `FOO=x cmd` is NOT this (sh's transient prefix — the
+  // variable lives for that command only) and stays sh's, as does anything
+  // carrying a real metacharacter — which is only whether crust may *apply* a
+  // line, not whether it may refuse one: `FOO=$(date | head -1)` has a pipe and
+  // still has to be refused, or the false pass escapes through the carve-out.
+  if (exHead.includes("=")) {
+    const code = applyBareAssignmentLine(
+      stripTrailingComment(expanded),
+      !hasUnquotedShellMeta(expanded),
+    );
+    if (code !== null) return code;
   }
 
   // The gate above steps aside for shell metacharacters so `export DB='…&b=2'`
