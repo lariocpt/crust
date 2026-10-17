@@ -15,6 +15,12 @@ too — the ones sh has its own version of, which is why a redirect on *those* i
 left to sh. `procs`, `range`, `load`, `read`, `tail` and friends are **sources**,
 not builtins.
 
+`source` is the only session builtin with its own argument grammar:
+`source <file> [args…]` — a `.ts`/`.js` file is imported, anything else runs
+line-by-line in this session — and the args become the *sourced file's*
+positional arguments (`$0` is its own path); the caller's positionals are
+restored when the file ends.
+
 The single most common mistake is writing the JS form:
 
 ```
@@ -105,6 +111,34 @@ range(0,0) | (_ => JSON.parse(await Bun.file("package.json").text()).name)
 Prefer the registered function when it fits (`salt 16` per item is shorter than
 the `crypto` line); drop to a lambda when you need something crust doesn't ship.
 
+## Session environment
+
+A line of pure assignments *is* the session environment — it runs the same code
+`export` runs, so the two spellings cannot disagree:
+
+```crust
+FOO=bar
+PATH=$PATH:/tmp/bin
+CFLAGS+=$EXTRA_FLAGS
+TOKEN='$literal'
+```
+
+`FOO=bar` used to be `sh -c 'FOO=bar'` — exit **0**, value gone, and the next
+line expanded `$FOO` to nothing. Quoting is sh's: `'…'` protects `$`, `"…"`
+expands it, and a backslash protects exactly one character, so `FOO=C:\temp`
+survives.
+
+Two shapes are deliberately **not** session state:
+
+- `FOO=bar cmd args` is sh's *transient* prefix — the variable lives for that
+  one command — so the line goes to sh untouched and later lines see nothing.
+- `FOO=$(cmd)` is refused rather than run: its value would have to cross back
+  out of a child process. The honest route is a pipeline — `git rev-parse HEAD`
+  piped into a `capture` stage of that name. Quoting doesn't change that, and
+  neither does a pipe inside the substitution (`FOO=$(date | head -1)` is
+  refused too, not quietly dropped); a `$()` anywhere else on a line stays
+  sh's, so `echo "$(date)"` still prints the date.
+
 ## These are not shell commands
 
 `base64`, `sort`, `head`, `wc` and friends exist as **real binaries** too. crust
@@ -129,6 +163,16 @@ sql "select 1" > one.txt
     text goes to sh as-is — a sql stage would read it as data. to save a
     pipeline, end the line with a shell stage instead: | cat > one.txt
 ```
+
+The refusal also catches a stage the redirect **hides**. Stage patterns match the
+whole text, so `range(1,3) > f` stopped matching as a `range` and fell through to
+`sh -c`, where sh's own syntax error answered at exit 2 (and `parallel 5 > f`
+ran GNU parallel and exited 0 with an empty file). crust strips the tail, sees
+the stage, and refuses. Affected: `range`, `capture`, `parallel`, `expect`,
+`stats`, `stdin`, and `load` — where the tail used to break load's parser first
+and the complaint was about the rate plan. `grep` is the exception: its redirect
+is the shell's and works, so `read **/*.log | grep ERROR > errors.txt` is a
+supported way to save a filtered log.
 
 ```crust
 base64 hello | cat > out.b64

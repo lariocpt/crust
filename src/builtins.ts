@@ -1,4 +1,14 @@
-import { expandEnv, FlagError, type FlagSpec, parseFlags, splitArgs } from "./args";
+import {
+  type AssignError,
+  assignEnv,
+  expandEnv,
+  FlagError,
+  type FlagSpec,
+  parseAssignWords,
+  parseFlags,
+  splitArgs,
+} from "./args";
+import { withPositionals } from "./positionals";
 import type { Context } from "./types";
 
 export type Builtin = (rawArgs: string, ctx: Context) => Promise<number> | number;
@@ -32,20 +42,90 @@ const cdBuiltin: Builtin = (rawArgs, _ctx) => {
   }
 };
 
+/**
+ * Why an assignment word was refused, in terms of what to type instead. Shared
+ * by `export FOO=…` and a bare `FOO=…` line so both spellings say the same
+ * thing the same way.
+ */
+function assignErrorText(err: AssignError): string {
+  if (err.reason === "command-substitution") {
+    return (
+      `\`${err.word}\`: an assignment sets the session environment in-process, so its value ` +
+      `cannot come from a command — that output would have to cross back out of a child ` +
+      `process. Run the command as a pipeline stage and capture it instead: ` +
+      `<command> | capture ${err.name}`
+    );
+  }
+  if (err.reason === "unterminated-quote") {
+    return `\`${err.word}\`: unterminated quote in an assignment value.`;
+  }
+  return `'${err.word}' is not a NAME=value assignment`;
+}
+
+/**
+ * A bare assignment line — `FOO=x`, `FOO+=x`, `A=1 B=2` — applied to the
+ * session, through the same code `export FOO=x` goes through.
+ *
+ * Returns null when the line is not ours: `FOO=x cmd` is sh's *transient*
+ * prefix (the variable lives for that command only) and `FOO` on its own is a
+ * command name, and silently persisting either would be a lie of the opposite
+ * sign.
+ *
+ * `persistable` is false when the line carries a shell metacharacter and so
+ * belongs to sh. That decides what crust *applies*, not what it refuses: a
+ * value that would have to come from a command is a mistake wherever it shows
+ * up, and `FOO=$(date | head -1)` — a word list crust cannot assign — used to
+ * reach `sh -c`, where it set a variable in a shell that exited immediately.
+ * Exit 0, nothing set, the false pass this whole path exists to close.
+ */
+export function applyBareAssignmentLine(text: string, persistable = true): number | null {
+  const parsed = parseAssignWords(text);
+  if ("reason" in parsed) {
+    // A command substitution or an unbalanced quote is a mistake worth naming;
+    // anything else that isn't assignment-shaped is simply not our line.
+    if (parsed.reason === "not-assignment") return null;
+    process.stderr.write(`crust: ${assignErrorText(parsed)}\n`);
+    return 1;
+  }
+  if (!persistable) return null;
+  // A mark-only word (`FOO cmd args`, or a bare `FOO`) means the line is a
+  // command with a prefix, not a line of assignments.
+  if (parsed.some((w) => w.value === null)) return null;
+  for (const word of parsed) assignEnv(word);
+  return 0;
+}
+
 const exportBuiltin: Builtin = (rawArgs, _ctx) => {
   const arg = rawArgs.trim();
-  if (arg === "") {
+  if (arg === "" || arg === "-p" || arg === "--print") {
     for (const [k, v] of Object.entries(process.env)) {
       process.stdout.write(`${k}=${v}\n`);
     }
     return 0;
   }
-  // splitArgs strips quotes, so `export FOO="a b"` arrives as one part `FOO=a b`.
-  const parts = splitArgs(arg);
-  for (const part of parts) {
-    const eq = part.indexOf("=");
-    if (eq === -1) continue;
-    process.env[part.slice(0, eq)] = part.slice(eq + 1);
+  const parsed = parseAssignWords(arg);
+  if ("reason" in parsed) {
+    // sh's own wording is quieter here, but a silently-ignored word was the
+    // false pass: `export FOO=1 -p` set FOO, printed nothing, and exited 0.
+    process.stderr.write(
+      `export: ${assignErrorText(parsed)}${
+        parsed.reason === "not-assignment" && /^-/.test(parsed.word)
+          ? " (crust has no export flags beyond -p)"
+          : ""
+      }\n`,
+    );
+    return 1;
+  }
+  for (const word of parsed) {
+    if (word.value === null && !(word.name in process.env)) {
+      // sh marks a name for export without giving it a value; crust's children
+      // inherit process.env, so there is nothing to mark and nothing set.
+      process.stderr.write(
+        `export: '${word.name}' is not set — crust exports by assigning: ${word.name}=value\n`,
+      );
+      return 1;
+    }
+    assignEnv(word);
   }
   return 0;
 };
@@ -81,7 +161,12 @@ const unaliasBuiltin: Builtin = (rawArgs, ctx) => {
 };
 
 const sourceBuiltin: Builtin = async (rawArgs, ctx) => {
-  const path = rawArgs.trim();
+  // The spec is the rest of the line; the FIRST word is the file, the rest
+  // are that file's positional arguments — `source deploy.crust prod` gives
+  // the sourced file $0 = its path and $1 = prod, and the caller's
+  // positionals are restored when the file ends.
+  const words = splitArgs(rawArgs.trim());
+  const path = words[0];
   if (!path) {
     process.stderr.write("source: missing file\n");
     return 1;
@@ -98,7 +183,9 @@ const sourceBuiltin: Builtin = async (rawArgs, ctx) => {
     // `sh` subprocess, where nothing could persist anyway; to run a bash
     // script, run it with sh.)
     const { runLines } = await import("./runLine");
-    return await runLines(await Bun.file(path).text(), ctx);
+    return await withPositionals(path, words.slice(1), async () =>
+      runLines(await Bun.file(path).text(), ctx),
+    );
   } catch (err) {
     process.stderr.write(`source: ${(err as Error).message}\n`);
     return 1;

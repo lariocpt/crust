@@ -218,7 +218,7 @@ describe("-c fail-fast", () => {
 });
 
 describe("fn-arg env expansion", () => {
-  test("args expand $VARS but keep SQL positional params", async () => {
+  test("args expand $VARS; $N is a positional, empty outside script mode", async () => {
     process.env.FN_ARG_VAL = "expanded";
     const c = ctx();
     const seen: unknown[] = [];
@@ -229,7 +229,9 @@ describe("fn-arg env expansion", () => {
     for await (const _ of parse('capture2 "WHERE x = $1" "val-$FN_ARG_VAL"')(c).lines()) {
       // drain
     }
-    expect(seen[0]).toEqual(["WHERE x = $1", "val-expanded"]);
+    // $1 is a script positional now (G05): no script runs here, so it is "".
+    // The set-argument table lives in tests/script-args.test.ts.
+    expect(seen[0]).toEqual(["WHERE x = ", "val-expanded"]);
   });
 });
 
@@ -260,6 +262,6 @@ describe("expandEnv ${NAME:-default}", () => {
     delete process.env.CRUST_DEF_TEST;
     expect(expandEnv("${CRUST_DEF_TEST:-}")).toBe(""); // empty default is legal
     expect(expandEnv("a $CRUST_DEF_TEST b")).toBe("a  b"); // bare form: still ""
-    expect(expandEnv("id = $1")).toBe("id = $1"); // SQL positionals survive
+    expect(expandEnv("id = $1")).toBe("id = "); // $N is a positional (G05): "" outside script mode
   });
 });

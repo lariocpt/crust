@@ -272,3 +272,140 @@ describe("a crust builtin reaching sh refuses by name", () => {
     expect(r.out).toContain("real-binary-ran");
   });
 });
+
+// A redirect can also HIDE a crust stage from classification. A stage pattern is
+// matched against the whole text, so `range(1,3) > f` stopped being a range
+// pattern the moment `> f` was appended: it fell through to shell, and the
+// answer was sh's own —
+//
+//   sh: -c: line 1: syntax error near unexpected token `1,3'
+//
+// at exit 2, with no `| cat > f` anywhere in it. Same for `capture N > f`,
+// `parallel 5 > f`, `expect 200 > f`, `stats > f`, `stdin > f`, and
+// `load 10s 100/s > f` (where the tail broke load's own parse first, so the
+// complaint was about the rate plan). Every case here was sh's message or a
+// misleading crust one before; the controls are the redirects that genuinely
+// belong to sh and must keep working byte-for-byte.
+describe("a redirect that hides a crust stage refuses as crust", () => {
+  async function run(
+    line: string,
+    opts: { cwd?: string } = {},
+  ): Promise<{ code: number; out: string }> {
+    const proc = Bun.spawn(["bun", ENTRY, "-c", line], {
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+      cwd: opts.cwd,
+      env: {
+        ...process.env,
+        CRUST_CONFIG: "/dev/null",
+        CRUST_GLOBAL_PREFIX: "/tmp/crust-redirect-none",
+      },
+    });
+    const [stdout, stderr] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ]);
+    await proc.exited;
+    return { code: proc.exitCode ?? -1, out: stdout + stderr };
+  }
+
+  // The set measured as leaking, with the stage name each refusal must name.
+  const leaked: Array<[string, string]> = [
+    ["range(1,3) > /tmp/crust-hide-range.txt", "a range stage"],
+    ["range(1,3) >> /tmp/crust-hide-range.txt", "a range stage"],
+    ["capture N > /tmp/crust-hide-cap.txt", "a capture stage"],
+    ["parallel 5 > /tmp/crust-hide-par.txt", "a parallel stage"],
+    ["expect 200 > /tmp/crust-hide-exp.txt", "an expect stage"],
+    ["expect 2xx > /tmp/crust-hide-exp.txt", "an expect stage"],
+    ["stats > /tmp/crust-hide-stats.txt", "a stats stage"],
+    ["stdin > /tmp/crust-hide-stdin.txt", "a stdin stage"],
+    ["load 10s 100/s > /tmp/crust-hide-load.txt", "a load stage"],
+  ];
+  for (const [line, names] of leaked) {
+    test(`classify refuses ${line.replace(/>.*$/, "> …")}`, () => {
+      expect(() => classify(line)).toThrow(new RegExp(`${names} would read it as data`));
+    });
+  }
+
+  test("the refusal replaces sh's syntax error and writes no file", async () => {
+    const fs = await import("node:fs");
+    const dir = fs.mkdtempSync("/tmp/crust-redirect-hide-");
+    const file = `${dir}/o.txt`;
+    const r = await run(`range(1,3) > ${file}`);
+    expect(r.code).toBe(1);
+    expect(r.out).toMatch(/a range stage would read it as data/);
+    expect(r.out).toMatch(/\| cat/);
+    // Not sh's error, which was the whole point: it names no way out and exits 2.
+    expect(r.out).not.toMatch(/syntax error near unexpected token/);
+    expect(fs.existsSync(file)).toBe(false);
+  });
+
+  test("a hidden stage mid-pipeline refuses before any stage runs", async () => {
+    // `range(1,3) | stats > f` used to run the range and hand the redirect to sh
+    // as `sh -c 'stats > f'` — command-not-found, but the empty file was there.
+    const fs = await import("node:fs");
+    const dir = fs.mkdtempSync("/tmp/crust-redirect-hide-");
+    const file = `${dir}/stats.txt`;
+    const r = await run(`range(1,3) | stats > ${file}`);
+    expect(r.code).toBe(1);
+    expect(r.out).toMatch(/a stats stage would read it as data/);
+    expect(fs.existsSync(file)).toBe(false);
+  });
+
+  test("load: the redirect is the problem, not the rate plan", async () => {
+    // `load 10s 100/s > f` used to fail inside load's own parser, quoting the
+    // redirect back as part of the rate — a message about the wrong thing.
+    const r = await run("load 10s 100/s > /tmp/crust-redirect-hide-load.txt");
+    expect(r.code).toBe(1);
+    expect(r.out).toMatch(/a load stage would read it as data/);
+    expect(r.out).not.toMatch(/expected "<dur> <rate>/);
+  });
+
+  test("CONTROL: a stage whose own parse is broken keeps its own error", async () => {
+    // The tail-strip must never INVENT a redirect refusal where the stage is
+    // simply malformed: `load 10s` has no rate with or without the tail.
+    const r = await run("load 10s > /tmp/crust-redirect-hide-badload.txt");
+    expect(r.code).toBe(1);
+    expect(r.out).toMatch(/expected "<dur> <rate>/);
+    expect(r.out).not.toMatch(/would read it as data/);
+  });
+
+  test("CONTROL: `range(1,3) | cat > f` still saves the pipeline", async () => {
+    const fs = await import("node:fs");
+    const dir = fs.mkdtempSync("/tmp/crust-redirect-hide-");
+    const file = `${dir}/nums.txt`;
+    const r = await run(`range(1,3) | cat > ${file}`);
+    expect(r.code).toBe(0);
+    expect(fs.readFileSync(file, "utf8")).toBe("1\n2\n3\n");
+  });
+
+  test("CONTROL: a grep stage's redirect keeps working (the carve-out)", async () => {
+    // grep counts as shell for pipeline decisions, so its redirect is sh's and
+    // is real. `read … | grep … > f` is a documented way to save a filtered log.
+    const fs = await import("node:fs");
+    const dir = fs.mkdtempSync("/tmp/crust-redirect-hide-");
+    fs.mkdirSync(`${dir}/logs`);
+    fs.writeFileSync(`${dir}/logs/app.log`, "ERROR boom\nok line\n");
+    const r = await run(`read logs/*.log | grep ERROR > errors.txt`, { cwd: dir });
+    expect(r.code).toBe(0);
+    expect(r.out).not.toMatch(/would read it as data/);
+    expect(fs.readFileSync(`${dir}/errors.txt`, "utf8")).toBe("ERROR boom\n");
+  });
+
+  test("CONTROL: ordinary shell redirects are untouched", async () => {
+    const fs = await import("node:fs");
+    const dir = fs.mkdtempSync("/tmp/crust-redirect-hide-");
+    fs.writeFileSync(`${dir}/in.txt`, "b\na\n");
+    // cwd so the listing is this directory's — the assertion has to be able to
+    // fail, which a listing of the repo's cwd never was.
+    expect((await run("ls -1 > listing.txt", { cwd: dir })).code).toBe(0);
+    expect(fs.readFileSync(`${dir}/listing.txt`, "utf8")).toContain("in.txt");
+    const both = await run("ls -1 2>&1 > merged.txt", { cwd: dir });
+    expect(both.code).toBe(0);
+    expect(fs.readFileSync(`${dir}/merged.txt`, "utf8")).toContain("in.txt");
+    const input = await run("sort < in.txt > sorted.txt", { cwd: dir });
+    expect(input.code).toBe(0);
+    expect(fs.readFileSync(`${dir}/sorted.txt`, "utf8")).toBe("a\nb\n");
+  });
+});

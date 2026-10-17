@@ -1,4 +1,5 @@
 // Shared argument helpers for shell-line parsing.
+import { getPositionals } from "./positionals";
 
 // Split a string on whitespace, honoring single/double quotes and STRIPPING
 // them — `sql "SELECT count(*) FROM x" 42` → ['sql', 'SELECT count(*) FROM x', '42'].
@@ -266,16 +267,225 @@ export function hasUnquotedShellMeta(text: string): boolean {
 // become the empty string; the `:-` form falls back to its default when the
 // var is unset OR empty (POSIX semantics — package.json scripts lean on it,
 // and before this the whole `${VAR:-…}` passed through verbatim and became
-// a "valid-looking" broken URL). Applied ONLY where crust explicitly opts
-// in (URLs, -H values, JSON-literal sources, tool-builtin args) — shell
-// stages keep sh's own expansion.
+// a "valid-looking" broken URL).
+//
+// The same call also expands the script's positional arguments, sh's set:
+// $0, $1..$9 (a second digit after a single one is literal — `$10` is `$1`
+// followed by `0`, as in sh), ${N} / ${N:-default} with the same unset-OR-
+// empty rule, and $@ / $* (all args, space-joined) and $# (count). Values
+// come from the positionals module (src/positionals.ts), which is EMPTY
+// outside script mode — there the tokens expand to "" and "0" rather than
+// passing through verbatim, because a `$1` crust could not answer was a lie
+// the user had to find by reading the docs. Shell stages never call this
+// function: there, $1 is sh's own and is always empty under `sh -c`.
+// Applied ONLY where crust explicitly opts in (URLs, -H values,
+// JSON-literal sources, tool-builtin args) — see the call sites.
 export function expandEnv(s: string): string {
   return s.replace(
-    /\$(?:\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}|([A-Za-z_][A-Za-z0-9_]*))/g,
-    (_m, braced, def, bare) => {
-      const val = process.env[(braced ?? bare) as string];
+    /\$(?:\{([A-Za-z_][A-Za-z0-9_]*|\d)(?::-([^}]*))?\}|([A-Za-z_][A-Za-z0-9_]*|\d)|([@*#]))/g,
+    (_m, braced, def, bare, special) => {
+      const pos = getPositionals();
+      if (special === "#") return String(pos.args.length);
+      if (special === "@" || special === "*") return pos.args.join(" ");
+      const key = (braced ?? bare) as string;
+      if (key.length === 1 && key >= "0" && key <= "9") {
+        const val = key === "0" ? pos.argv0 : pos.args[Number(key) - 1];
+        if (def !== undefined && (val === undefined || val === "")) return def;
+        return val ?? "";
+      }
+      const val = process.env[key];
       if (def !== undefined && (val === undefined || val === "")) return def;
       return val ?? "";
     },
   );
+}
+
+// ---------------------------------------------------------------------------
+// Assignment words: the shape shared by `export FOO=x`, `export FOO=x BAR=y`
+// and a bare `FOO=x` line.
+//
+// The value is NOT run through splitArgs first. The quotes the user typed are
+// the only remaining record of which `$` were protected, and `FOO='$BAR'`
+// staying literal while `FOO="$BAR"` expands is exactly the difference between
+// a value that is set and one that merely looks set.
+// ---------------------------------------------------------------------------
+
+/** One `NAME=value`, `NAME+=value` or bare `NAME` word. */
+export interface AssignWord {
+  name: string;
+  /** null for a bare name — `export FOO`, mark-for-export, no value. */
+  value: string | null;
+  /** `NAME+=value`: append to whatever is already there. */
+  append: boolean;
+}
+
+export type AssignError =
+  /** The line has a word that is not `NAME=…` — a command, a flag, a prefix. */
+  | { reason: "not-assignment"; word: string; name?: undefined }
+  /** `FOO=$(date)` — the value would have to come from a child process. */
+  | { reason: "command-substitution"; word: string; name: string }
+  /** `FOO="a` — sh calls this a syntax error; crust must not call it a value. */
+  | { reason: "unterminated-quote"; word: string; name: string };
+
+/**
+ * Scan assignment words, applying sh's quoting rules to each value: `'…'`
+ * protects `$`, `"…"` expands it, `\$` escapes it, and `$NAME` / `${NAME}` /
+ * `${NAME:-default}` come from process.env (the same reference grammar as
+ * `expandEnv`).
+ *
+ * A bare `NAME` word (`export FOO`, sh's mark-for-export) parses with
+ * `value: null`. Anything else that is not assignment-shaped comes back as
+ * `reason: "not-assignment"`, which is how callers keep `FOO=x cmd` on sh's
+ * transient path instead of persisting it by accident.
+ */
+export function parseAssignWords(text: string): AssignWord[] | AssignError {
+  const trimmed = text.trim();
+  if (!trimmed) return { reason: "not-assignment", word: "" };
+  const words: AssignWord[] = [];
+  let quote: '"' | "'" | null = null;
+  let i = 0;
+  while (i < trimmed.length) {
+    while (i < trimmed.length && /\s/.test(trimmed[i]!)) i++;
+    if (i >= trimmed.length) break;
+    const start = i;
+    // Consume one whitespace-delimited word with its quotes still attached, so
+    // a quoted space (`FOO="a b"`) is one word and its quoting survives. A
+    // backslash escapes too — sh reads `FOO=a\ b` as ONE word, and splitting it
+    // here would hand sh a line where `b` is a command and nothing persists.
+    quote = null;
+    let sub = 0;
+    for (; i < trimmed.length; i++) {
+      const ch = trimmed[i]!;
+      if (ch === "\\") {
+        i++;
+        continue;
+      }
+      if (quote) {
+        if (ch === quote) quote = null;
+        continue;
+      }
+      if (ch === '"' || ch === "'") {
+        quote = ch;
+        continue;
+      }
+      // `$( … )` holds spaces, and a refused value has to be quoted back to the
+      // user whole: cutting `FOO=$(date | head -1)` at its first space would
+      // report `FOO=$(date`. Only `$(` opens a run — a lone `(` stays a normal
+      // character, so `FOO=a(b` is still split the way sh splits it.
+      if (sub > 0) {
+        if (ch === "(") sub++;
+        else if (ch === ")") sub--;
+        continue;
+      }
+      if (ch === "$" && trimmed[i + 1] === "(") {
+        sub = 1;
+        continue;
+      }
+      // The old backtick form likewise runs to its partner.
+      if (ch === "`") {
+        i++;
+        while (i < trimmed.length && trimmed[i] !== "`") i++;
+        continue;
+      }
+      if (/\s/.test(ch)) break;
+    }
+    if (quote) {
+      return {
+        reason: "unterminated-quote",
+        word: trimmed.slice(start, i),
+        name: trimmed.slice(start).split("=")[0]!,
+      };
+    }
+    const raw = trimmed.slice(start, i);
+    const m = /^([A-Za-z_][A-Za-z0-9_]*)(\+?)=([\s\S]*)$/.exec(raw);
+    if (m) {
+      const scanned = scanAssignValue(m[3]!, raw, m[1]!);
+      if ("error" in scanned) return scanned.error;
+      words.push({ name: m[1]!, value: scanned.value, append: m[2] === "+" });
+      continue;
+    }
+    // `export FOO` alone is sh for "mark FOO for export" — no value.
+    const bare = /^([A-Za-z_][A-Za-z0-9_]*)$/.exec(raw);
+    if (bare) {
+      words.push({ name: bare[1]!, value: null, append: false });
+      continue;
+    }
+    return { reason: "not-assignment", word: raw };
+  }
+  return words.length ? words : { reason: "not-assignment", word: trimmed };
+}
+
+/**
+ * Expand one assignment value with the user's quotes still on it. `$(` and a
+ * backtick are refused, not silently dropped: the command would have to run in
+ * a child process, and the honest answer is that its output comes from a
+ * pipeline (`date | capture FOO`), not from an assignment.
+ */
+function scanAssignValue(
+  raw: string,
+  word: string,
+  name: string,
+): { value: string } | { error: AssignError } {
+  let out = "";
+  let quote: '"' | "'" | null = null;
+  for (let i = 0; i < raw.length; i++) {
+    const ch = raw[i]!;
+    if (quote === "'") {
+      // Single quotes protect everything — the only thing that ends them is
+      // another single quote. `FOO='$BAR'` is the literal text.
+      if (ch === "'") quote = null;
+      else out += ch;
+      continue;
+    }
+    if (ch === "\\" && i + 1 < raw.length && "\\$`\"' \t\n".includes(raw[i + 1]!)) {
+      // A backslash protects one character — the `$` of `FOO=\$BAR`, a quote
+      // inside a value. Before anything else it stays literal, so a Windows
+      // path (`FOO=C:\temp`) survives, exactly as it does in sh.
+      out += raw[++i]!;
+      continue;
+    }
+    if (ch === "'" && quote === null) {
+      quote = "'";
+      continue;
+    }
+    if (ch === '"') {
+      // Inside `"…"` a bare `'` is literal, so `FOO="it's $OK"` works.
+      if (quote === '"') {
+        quote = null;
+        continue;
+      }
+      if (quote === null) {
+        quote = '"';
+        continue;
+      }
+    }
+    if (ch === "`" || (ch === "$" && raw[i + 1] === "(")) {
+      return { error: { reason: "command-substitution", word, name } };
+    }
+    if (ch === "$") {
+      const ref = /^\$(?:\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}|([A-Za-z_][A-Za-z0-9_]*))/.exec(
+        raw.slice(i),
+      );
+      if (!ref) {
+        out += ch; // `$$`, `$1`, a lone `$` — not a name, left alone
+        continue;
+      }
+      const val = process.env[(ref[1] ?? ref[3]) as string];
+      out += ref[2] !== undefined && (val === undefined || val === "") ? ref[2] : (val ?? "");
+      i += ref[0].length - 1;
+      continue;
+    }
+    out += ch;
+  }
+  if (quote) return { error: { reason: "unterminated-quote", word, name } };
+  return { value: out };
+}
+
+/**
+ * Apply one assignment to the session environment. `export FOO=x` and a bare
+ * `FOO=x` line share this so the two spellings can never drift.
+ */
+export function assignEnv(word: AssignWord): void {
+  if (word.value === null) return;
+  process.env[word.name] = word.append ? (process.env[word.name] ?? "") + word.value : word.value;
 }

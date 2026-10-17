@@ -1,0 +1,2 @@
+# Positional arguments: $0 is this file's path, $1/$2 the rest, $# the count.
+{"zero": "$0", "one": "$1", "two": "$2", "def": "${2:-dev}", "n": "$#", "all": "$@"}

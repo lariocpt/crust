@@ -8,6 +8,42 @@ pre-1.0, so minor versions may carry breaking changes.
 
 ### Added
 
+- **Scripts take positional arguments.** `crust script.crust prod staging`
+  used to exit **2** (`script arguments are not supported`) — parameterizing a
+  script meant the environment. Now the extra arguments are the script's
+  positionals, the way `sh script.sh prod staging` carries them: `$0` is the
+  script's path, `$1`…`$9` the rest, `$#` the count, `$@`/`$*` all of them
+  space-joined, and a leading `--` after the path is a separator, not an
+  argument. They expand exactly where an env var does — URLs, `-H` header
+  strings, JSON-literal sources, `stats --out` paths, registered-fn args,
+  tool-builtin args — and nowhere else; outside script mode (the REPL, `-c`,
+  piped stdin) they are empty, never the literal text, so `$#` is the guard.
+  The edges are the sh ones: sh stages see sh's own (empty) `$1`, source
+  patterns (`read $1`) don't expand, `range(N,M)` takes literal integers so
+  `range($1)` is a shell stage, and assignment values expand env names only —
+  `FOO=$1` stores the literal. Carry a positional across with a crust stage
+  that pipes its value in (`{"v": "$1"} | (x => x.v) | tr -d '\n'`) or into the
+  environment with `capture`. One break to know about: `$N` in a registered-fn
+  argument is now a positional, so a SQL query's placeholder is `?`
+  (`sql "… WHERE name = ?" "Court"`), not `$1`. `source file.crust a b` hands
+  the args to the sourced file — whose `$0` is its own path — and restores the
+  caller's positionals when it ends.
+
+- **`FOO=value` sets the session environment.** It used to be `sh -c 'FOO=value'`
+  — a subprocess that exited **0** and forgot the value on the way out, while
+  `export FOO=value` worked. A line of pure assignments (`FOO=v`, `FOO+=v`,
+  `A=1 B=2`) is session state now and runs the same code `export` runs, so the
+  two spellings cannot drift. Values expand with sh's quoting rules — `'…'`
+  protects `$`, `"…"` expands it, a backslash protects exactly one character so
+  `FOO=C:\temp` survives — and a value that would have to come from a child
+  process (`FOO=$(date)`) is refused with the pipeline route named, because what
+  it used to do was run the command, discard its output, and exit 0. Quoting the
+  substitution or hiding a pipe in it (`FOO=$(date | head -1)`) used to slip past
+  that check onto sh's path, where the answer was the same silent nothing at
+  exit 0; it is refused too, quoting the assignment whole.
+  `FOO=value cmd` stays sh's *transient* prefix on purpose. `export` also no
+  longer ignores a word it does not understand (`export A=1 -p` set `A`, printed
+  nothing, and exited 0); bare `export` and `export -p` still list.
 - **`crust skills install` works from a shell.** The published README leads with
   `bunx crust skills install`, and it did not work: every positional was read as
   a script path, so that command exited **2** (`script arguments are not
@@ -41,12 +77,42 @@ pre-1.0, so minor versions may carry breaking changes.
 
 ### Fixed
 
+- **A redirect no longer gets to decide what your stage is.** A stage pattern is
+  matched against the whole text, so appending `> f` to `range(1,3)` made it stop
+  matching as a `range`, fall through to shell, and die with sh's own
+  `syntax error near unexpected token \`1,3'` at exit 2 — an error that mentions
+  no way out. Measured leaks, all refused now, each naming the stage it really
+  was: `range(1,3) > f`, `capture N > f`, `parallel 5 > f`, `expect 200 > f`,
+  `expect 2xx > f`, `stats > f`, `stdin > f`. `load 10s 100/s > f` failed
+  *inside* load's parser and complained about the rate plan, quoting the redirect
+  back as part of it; it now refuses as a redirect. `grep` keeps its redirect —
+  that one is the shell's and genuinely works — and a stage that is malformed
+  with or without the tail keeps its own error, so the strip never invents a
+  refusal. Refusals are grammatical now too: `an expect stage`, `an http stage`.
+- **The limits section said scripts starve their shell stages, and they don't.**
+  It claimed shell stages see EOF on stdin "in script/piped mode". Only `cmd |
+  crust` drains stdin — there the *program* arrives on fd 0, so crust reads it to
+  EOF before running anything. `crust file.crust` never touches stdin: with data
+  piped in, a `wc -l` stage measured **2** piped lines, not 0. The false half
+  hides the actual rule, which is one stdin per run — the program, the `stdin`
+  source, or the shell stages, never two of them. The wording is corrected in the
+  limits list and the run-mode table, and all four mode/behaviour pairs are
+  pinned in `tests/stdin.test.ts`. No guard was added: detecting whether an
+  arbitrary `sh -c` text reads fd 0 is not decidable, and a wrong guess is a
+  false alarm on scripts that work.
 - **`--check` now lints `skills install`.** The line had nothing declarative to
   check, so a wrong flag surfaced only at run time; `skills install --bogus` is
   caught at parse time alongside the other tools.
 
 ### Changed
 
+- **`|>` and `[0..9]` are no longer promised.** The limits list said "Need a Bun
+  loader; v0.2" and `docs/PLAN.md` carried the wish three times, so both read as
+  shipping soon. They are decisions now, in a **Syntax we deliberately did not
+  add** section: crust's `|` already *is* the pipe (TS uses `.pipe()`), and a
+  `[a..b]` literal collides with the JSON-array literal and with the shell's
+  `[ … ]` test — precedence rules over both, with a silent wrong answer as the
+  failure mode. `range(0, 9)` is inclusive and occupies the same call site.
 - **Skills install to `.agents/skills`, and `.claude/skills` gets a link per
   skill.** The nine SKILL.md files were written into `.claude/skills`, which
   only Claude Code reads: a project with Codex, Cursor or OpenCode installed got

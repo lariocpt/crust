@@ -192,10 +192,15 @@ describe("script files and piped stdin", () => {
     expect(r.stderr).toContain("nope.crust");
   });
 
-  test("script arguments are rejected with exit 2", async () => {
-    const r = await runCli([script, "prod"]);
-    expect(r.code).toBe(2);
-    expect(r.stderr).toContain("not supported");
+  test("script arguments are accepted and reach the script", async () => {
+    // The old exit-2 refusal is gone: `crust file.crust prod` runs, and $1 is
+    // "prod" in every place crust expands $-names. The full expansion table
+    // lives in tests/script-args.test.ts — this pins that the refusal died.
+    const probe = join(dir, "argprobe.crust");
+    writeFileSync(probe, '{"one": "$1"}\n');
+    const r = await runCli([probe, "prod"]);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toBe('{"one":"prod"}\n');
   });
 
   test("piped stdin runs lines and exits 0 — no prompt bytes on stdout", async () => {
@@ -468,8 +473,8 @@ describe("shell syntax preflight on the exec path (F19)", () => {
 describe("crust CLI: a tool builtin as argv[0]", () => {
   // Why this exists: every positional was read as a script path, so the verbs the
   // docs and the published README lead with were unreachable from a shell.
-  // `crust skills install` exited 2 (`script arguments are not supported`) and a
-  // bare `crust verify-web-links` exited 127 (`cannot read verify-web-links`) — a
+  // `crust skills install` hit the old script-argument refusal, and a bare
+  // `crust verify-web-links` exited 127 (`cannot read verify-web-links`) — a
   // code that reads as "the binary is not installed" while the binary was the
   // thing printing it.
   let dir: string;
@@ -563,8 +568,10 @@ describe("crust CLI: a tool builtin as argv[0]", () => {
 
   test("a script FILE named after a tool still runs as a script", async () => {
     // The one ambiguity in the rule, resolved toward the file: what the user
-    // pointed at exists, so it runs. Only with extra arguments — which script
-    // mode could never accept — is the tool reading the only possible one.
+    // pointed at exists and all that was given, so it runs — even though
+    // `skills` is also a tool builtin name. With extra arguments present the
+    // file reading is not attempted (asScript requires a single argv), so the
+    // tool reading is the only possible one there.
     const { writeFile } = await import("node:fs/promises");
     await writeFile(join(dir, "skills"), "range(1,2)\n");
     const r = await runCli(["skills"], undefined, { cwd: dir });
