@@ -64,7 +64,7 @@ crust -c 'src/**/*.ts | wc -l'
 | Flag | Effect |
 |---|---|
 | `crust` | Interactive REPL (default, when stdin is a TTY). |
-| `crust <file.crust>` | Run a script file and exit. Blank lines and `#` comments are skipped (so a `#!/usr/bin/env crust` shebang works), and execution is **fail-fast**: crust stops at the first failing line and exits with *its* code. Positional script arguments are not supported — extra arguments are rejected (exit 2), unless the first argument names a tool builtin, which is a command instead (next row). An unreadable file exits 127. A line ending in `\` continues on the next line (see [Continuing a line](#continuing-a-line)). This mode never reads stdin itself, so a shell stage inherits your pipe and consumes it — don't pipe data into a script that also wants it. |
+| `crust <file.crust> [args…]` | Run a script file and exit. Blank lines and `#` comments are skipped (so a `#!/usr/bin/env crust` shebang works), and execution is **fail-fast**: crust stops at the first failing line and exits with *its* code. Extra arguments are the script's **positional arguments** — `$0` is the path, `$1`…`$9` the rest, plus `$#`, `$@`/`$*` — expanded wherever an env var is ([Script arguments](#script-arguments)). A file is a script only when it is the **first** argument and no extra argument selects a command instead (next row). An unreadable file exits 127. A line ending in `\` continues on the next line (see [Continuing a line](#continuing-a-line)). This mode never reads stdin itself, so a shell stage inherits your pipe and consumes it — don't pipe data into a script that also wants it. |
 | `crust <tool> [args…]` | Run a **tool builtin** as a shell command: `crust skills install`, `crust mock-server openapi.yaml -p4000`, `crust test-fixture 'fixtures/*.crust.ts' -j8`. The flags are the ones documented under each builtin in [Builtins](#builtins), and `crust <tool> --help` prints them. The names that work are the ones that need nothing from a live session: `skills`, `test-fixture`, `test-pipes`, `gen-fixtures`, `mock-server`, `verify-web-links`. The session builtins (`cd`, `export`, `alias`, `unalias`, `source`, `dotenv`, `exit`, `help`, `history`) are deliberately **not** reachable this way — a one-shot process has no session to change, and a command that quietly does nothing is worse than one that refuses. `logs` is refused too, for a different reason: its argument is the rest of the line **verbatim** (a `procs({...})` literal), which argv cannot carry without re-lexing it. Either refusal is exit 2 and names the builtin — not `cannot read cd`, which in a binary printing its own name reads as a broken install. A file that exists wins when it is the only argument, so `crust skills` runs `./skills`; adding any flag selects the tool. |
 | `cmd \| crust` | With stdin piped, crust reads it to EOF and runs the lines exactly like a script file — same comment handling, same fail-fast exit codes, same `\` continuation. Because stdin is drained up front — **only in this mode** — shell stages inside the script see EOF on their stdin. Piping **data** (not a program) is the [`stdin` source](#reading-piped-stdin-stdin-source)'s job: `docker logs -f app \| crust -c 'stdin \| grep ERROR'`. |
 | `crust -c <line>` | Run one line and exit. Multi-line strings split on `\n`, skip blanks and `#` comments, honour `\` continuation, and are **fail-fast**: crust stops at the first failing line and exits with *its* code (previously a later success masked an earlier failure). |
@@ -111,6 +111,51 @@ was a bug: a trailing backslash is a shell metacharacter, so the line was
 classified `shell`, handed to `sh -c`, and answered `syntax error near
 unexpected token` — while both doc linters joined `\`+newline before parsing,
 which is exactly how those examples stayed green in CI and died in a terminal.
+
+### Script arguments
+
+`crust deploy.crust prod staging` takes positional arguments the way `sh
+deploy.sh prod staging` does — `$0` is the script's path, `$1`…`$9` the rest,
+`$#` the count, `$@`/`$*` all of them space-joined. They expand **exactly where
+an env var does** ([Where `$VAR` expands](#where-var-expands)): URLs, `-H`
+header strings, JSON-literal sources, `stats --out` paths, registered-fn args,
+tool-builtin args — and nowhere else.
+
+```crust
+# deploy.crust — the whole table in one line
+{"zero": "$0", "one": "$1", "two": "$2", "def": "${2:-dev}", "n": "$#", "all": "$@"}
+```
+
+```bash
+crust deploy.crust prod staging
+# {"zero":"deploy.crust","one":"prod","two":"staging","def":"staging","n":"2","all":"prod staging"}
+crust deploy.crust -- prod
+# `--` after the path separates crust's argv from the script's; prod is $1
+```
+
+Outside script mode — the REPL, `-c`, piped stdin — the positionals are
+**empty, not absent**: `$0`/`$N` expand to `""` and `$#` to `"0"`, never the
+literal text; a position you didn't pass is empty for the same reason, and `$#`
+is the guard, the way it is in sh. Quoting is sh's too: `crust s.crust "a b"`
+is one `$1`, and `$10` is `$1` followed by `0`, as in sh.
+
+The edges, all measured:
+
+- **Shell stages** never call the expander: `sh -c` runs without positionals,
+  so there `$1` is sh's own and always empty. Carry one across by expanding it
+  on a crust stage and piping the value in: `{"v": "$1"} | (x => x.v) | tr -d
+  '\n'`.
+- **Source patterns** don't expand either: `read $1` looks for a file named
+  `$1` and fails loudly; `range(N,M)` takes lexer-level literal integers, so
+  `range($1)` is a shell stage, not a range.
+- **Assignment values** expand env names only: `FOO=$1` stores the literal
+  `$1`. Move a positional into the environment with `capture` instead —
+  `{"v": "$1"} | (x => x.v) | capture ENV` — then use `$ENV`.
+- **Fn args are positionals, not SQL placeholders**: `sql "… WHERE name = $1"`
+  expands the script's `$1` into the query; the bound-parameter placeholder is
+  `?` — `sql "… WHERE name = ?" "Court"`.
+- **`source <file> [args…]`** hands the args to the *sourced* file — its `$0`
+  is its own path — and restores the caller's positionals when the file ends.
 
 ### Checking a line without running it
 
@@ -774,7 +819,7 @@ export FOO=bar    # set env var
 alias g=git       # define alias (also: alias g='git status')
 alias             # list aliases
 unalias g
-source <file>     # .ts/.js imported; anything else runs line-by-line in this session
+source <file> [args…]   # .ts/.js imported; anything else runs line-by-line in this session, [args…] as its $1…
 history           # list this session's lines
 exit [code]
 help
@@ -866,7 +911,7 @@ and it works identically at the prompt and in `crust -c`:
 ```bash
 {"name": "Court", "floors": 3} | POST $BASE/api/buildings -H "authorization: Bearer $TOKEN" | assert (r => r.status === 201) | (r => r.json()) | capture BID (b => b.building.id)
 GET $BASE/api/buildings/$BID -H "authorization: Bearer $TOKEN" | expect 200
-sql "SELECT count(*)::int AS c FROM buildings WHERE name = $1" "Court" | assert (r => r.c === 1)
+sql "SELECT count(*)::int AS c FROM buildings WHERE name = ?" "Court" | assert (r => r.c === 1)
 read fixtures/*.json | POST :3000/users | expect 201
 GET :3000/api/buildings -H "authorization: Bearer $TOKEN" | (r => r.json()) | assert (b => b.items.length > 0)
 ```
@@ -906,7 +951,7 @@ string. Expansion is **opt-in per position** — crust expands exactly:
 | `-H` header strings (name and value) | yes — one `$VAR` can hold the whole header line |
 | JSON-literal sources | yes |
 | `stats --out` paths | yes |
-| Registered-fn args (`sql "…" "$RUN_ID"`) | yes — SQL positionals `$1`/`$2` survive (a digit can't start an env var name) |
+| Registered-fn args (`sql "…" "$RUN_ID"`) | yes — including script positionals ([Script arguments](#script-arguments)), so a SQL query's `$1` is the script's, and the bound-parameter placeholder is `?` |
 | Tool-builtin args (`mock-server --proxy $UP`, `test-fixture --target $DIR/*.crust.ts`) | yes — expanded after quote-aware splitting, so a var holding spaces stays one argument |
 | Assignment values (`FOO=$BAR`, `export FOO=$BAR`) | yes — `'…'` protects the `$`, `"…"` expands it, `\$` escapes one |
 | Lambda / `assert` / `capture` bodies | **no** — they're JS; use `process.env.TOKEN` |
@@ -2239,11 +2284,6 @@ Honest about what doesn't work yet:
   session state ([Environment assignments](#environment-assignments)); the
   *prefix* form stays sh's, so the variable lives for that command only — on
   purpose.
-- **No positional script arguments.** `crust file.crust prod` is rejected —
-  there is no `$1`/`$@` plumbing yet; parameterize via environment variables.
-  This is only about *scripts*: `crust <tool> [args…]` passes its arguments
-  through to the builtin, and `crust skills install` is a command, not a script
-  named `skills` that happens to be given an argument.
 - **Shell stages see EOF on stdin when the *program* is piped in** (`cmd |
   crust`): crust reads stdin to EOF before the first line runs, so a shell
   stage's stdin is that exhausted pipe. `crust file.crust` does **not** drain

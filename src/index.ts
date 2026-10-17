@@ -15,6 +15,7 @@ import { onInterrupt, readLine, suspendEditor } from "./editor";
 import { appendHistory, loadHistory } from "./history";
 import { shellSyntaxPreflight, tokenize } from "./lexer";
 import { HelpExit, parse } from "./parser";
+import { setPositionals } from "./positionals";
 import { defaultPrompt } from "./prompt";
 import { runLine, runLines, splitLines } from "./runLine";
 import { markStdinConsumed } from "./sources";
@@ -229,8 +230,8 @@ async function main(): Promise<void> {
     // hooks behave identically whichever spelling was used.
     // A real file wins when it is ALL that was given, so an existing script
     // named after a tool (or a builtin) keeps running as a script. With extra
-    // arguments present the file reading was never available — script mode
-    // rejects them — so the command reading is the only possible one.
+    // arguments present the file reading is not even attempted, so the command
+    // reading is the only possible one.
     const asScript = argv.length === 1 && (await Bun.file(flag).exists());
     const tool = standaloneTools[flag];
     if (tool && !asScript) {
@@ -241,21 +242,21 @@ async function main(): Promise<void> {
     }
     // `crust cd /tmp`, `crust export FOO=1`, `crust logs tail app.log` — named
     // at argv[0] but not runnable as a command. Letting script mode answer would
-    // say `cannot read export` (127) or `script arguments are not supported`
-    // (2), and both read as a broken installation in a binary that is printing
-    // its own name. This is the half of the rule the session builtins need.
+    // say `cannot read export` (127), which reads as a broken installation in a
+    // binary that is printing its own name. This is the half of the rule the
+    // session builtins need.
     const misuse = notACommandReason(flag);
     if (misuse && !asScript) {
       process.stderr.write(`crust: ${misuse}\n`);
       process.exit(2);
     }
-    // Script mode: `crust file.crust`. Positional args are not supported —
-    // rejecting (not ignoring) them keeps `crust deploy.crust prod` from
-    // silently doing nothing prod-related, and surfaces shebang operands.
-    if (argv.length > 1) {
-      process.stderr.write(`crust: script arguments are not supported — got "${argv[1]}"\n`);
-      process.exit(2);
-    }
+    // Script mode: `crust file.crust a b` — the extras are the script's
+    // positional arguments ($0..$#), not a feature we refuse. They are
+    // module state read by expandEnv (src/positionals.ts), never process.env.
+    // A leading `--` separates crust's argv from the script's, as in sh.
+    const posArgv = argv.slice(1);
+    if (posArgv[0] === "--") posArgv.splice(0, 1);
+    setPositionals(flag, posArgv);
     let source: string;
     try {
       source = await Bun.file(flag).text();

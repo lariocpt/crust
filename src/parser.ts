@@ -197,8 +197,10 @@ function resolveKind(text: string, ctx?: Context): StageKind {
       // this stage stops being a shell stage.
       rejectRedirect(text, head);
       // Env-expand fn args so `sql "..." "prefix $RUN_ID"` works in .pipes
-      // files. SQL positional params ($1, $2) survive — a digit can't start
-      // an env var name.
+      // files. Since script arguments, `$N` in an fn arg is a POSITIONAL: a
+      // query's `$1` is the script's first argument ("" when none passed) —
+      // a driver that uses `$1` as a parameter placeholder gets the
+      // expansion, not the literal. USAGE.md carries the caveat.
       return { kind: "function", name: head, args: parts.slice(1).map(expandEnv) };
     }
   }

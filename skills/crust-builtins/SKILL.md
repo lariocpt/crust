@@ -15,6 +15,12 @@ too — the ones sh has its own version of, which is why a redirect on *those* i
 left to sh. `procs`, `range`, `load`, `read`, `tail` and friends are **sources**,
 not builtins.
 
+`source` is the only session builtin with its own argument grammar:
+`source <file> [args…]` — a `.ts`/`.js` file is imported, anything else runs
+line-by-line in this session — and the args become the *sourced file's*
+positional arguments (`$0` is its own path); the caller's positionals are
+restored when the file ends.
+
 The single most common mistake is writing the JS form:
 
 ```

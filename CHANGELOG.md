@@ -8,6 +8,27 @@ pre-1.0, so minor versions may carry breaking changes.
 
 ### Added
 
+- **Scripts take positional arguments.** `crust script.crust prod staging`
+  used to exit **2** (`script arguments are not supported`) — parameterizing a
+  script meant the environment. Now the extra arguments are the script's
+  positionals, the way `sh script.sh prod staging` carries them: `$0` is the
+  script's path, `$1`…`$9` the rest, `$#` the count, `$@`/`$*` all of them
+  space-joined, and a leading `--` after the path is a separator, not an
+  argument. They expand exactly where an env var does — URLs, `-H` header
+  strings, JSON-literal sources, `stats --out` paths, registered-fn args,
+  tool-builtin args — and nowhere else; outside script mode (the REPL, `-c`,
+  piped stdin) they are empty, never the literal text, so `$#` is the guard.
+  The edges are the sh ones: sh stages see sh's own (empty) `$1`, source
+  patterns (`read $1`) don't expand, `range(N,M)` takes literal integers so
+  `range($1)` is a shell stage, and assignment values expand env names only —
+  `FOO=$1` stores the literal. Carry a positional across with a crust stage
+  that pipes its value in (`{"v": "$1"} | (x => x.v) | tr -d '\n'`) or into the
+  environment with `capture`. One break to know about: `$N` in a registered-fn
+  argument is now a positional, so a SQL query's placeholder is `?`
+  (`sql "… WHERE name = ?" "Court"`), not `$1`. `source file.crust a b` hands
+  the args to the sourced file — whose `$0` is its own path — and restores the
+  caller's positionals when it ends.
+
 - **`FOO=value` sets the session environment.** It used to be `sh -c 'FOO=value'`
   — a subprocess that exited **0** and forgot the value on the way out, while
   `export FOO=value` worked. A line of pure assignments (`FOO=v`, `FOO+=v`,

@@ -8,6 +8,7 @@ import {
   parseFlags,
   splitArgs,
 } from "./args";
+import { withPositionals } from "./positionals";
 import type { Context } from "./types";
 
 export type Builtin = (rawArgs: string, ctx: Context) => Promise<number> | number;
@@ -160,7 +161,12 @@ const unaliasBuiltin: Builtin = (rawArgs, ctx) => {
 };
 
 const sourceBuiltin: Builtin = async (rawArgs, ctx) => {
-  const path = rawArgs.trim();
+  // The spec is the rest of the line; the FIRST word is the file, the rest
+  // are that file's positional arguments — `source deploy.crust prod` gives
+  // the sourced file $0 = its path and $1 = prod, and the caller's
+  // positionals are restored when the file ends.
+  const words = splitArgs(rawArgs.trim());
+  const path = words[0];
   if (!path) {
     process.stderr.write("source: missing file\n");
     return 1;
@@ -177,7 +183,9 @@ const sourceBuiltin: Builtin = async (rawArgs, ctx) => {
     // `sh` subprocess, where nothing could persist anyway; to run a bash
     // script, run it with sh.)
     const { runLines } = await import("./runLine");
-    return await runLines(await Bun.file(path).text(), ctx);
+    return await withPositionals(path, words.slice(1), async () =>
+      runLines(await Bun.file(path).text(), ctx),
+    );
   } catch (err) {
     process.stderr.write(`source: ${(err as Error).message}\n`);
     return 1;

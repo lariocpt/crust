@@ -1,4 +1,5 @@
 // Shared argument helpers for shell-line parsing.
+import { getPositionals } from "./positionals";
 
 // Split a string on whitespace, honoring single/double quotes and STRIPPING
 // them — `sql "SELECT count(*) FROM x" 42` → ['sql', 'SELECT count(*) FROM x', '42'].
@@ -266,14 +267,33 @@ export function hasUnquotedShellMeta(text: string): boolean {
 // become the empty string; the `:-` form falls back to its default when the
 // var is unset OR empty (POSIX semantics — package.json scripts lean on it,
 // and before this the whole `${VAR:-…}` passed through verbatim and became
-// a "valid-looking" broken URL). Applied ONLY where crust explicitly opts
-// in (URLs, -H values, JSON-literal sources, tool-builtin args) — shell
-// stages keep sh's own expansion.
+// a "valid-looking" broken URL).
+//
+// The same call also expands the script's positional arguments, sh's set:
+// $0, $1..$9 (a second digit after a single one is literal — `$10` is `$1`
+// followed by `0`, as in sh), ${N} / ${N:-default} with the same unset-OR-
+// empty rule, and $@ / $* (all args, space-joined) and $# (count). Values
+// come from the positionals module (src/positionals.ts), which is EMPTY
+// outside script mode — there the tokens expand to "" and "0" rather than
+// passing through verbatim, because a `$1` crust could not answer was a lie
+// the user had to find by reading the docs. Shell stages never call this
+// function: there, $1 is sh's own and is always empty under `sh -c`.
+// Applied ONLY where crust explicitly opts in (URLs, -H values,
+// JSON-literal sources, tool-builtin args) — see the call sites.
 export function expandEnv(s: string): string {
   return s.replace(
-    /\$(?:\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}|([A-Za-z_][A-Za-z0-9_]*))/g,
-    (_m, braced, def, bare) => {
-      const val = process.env[(braced ?? bare) as string];
+    /\$(?:\{([A-Za-z_][A-Za-z0-9_]*|\d)(?::-([^}]*))?\}|([A-Za-z_][A-Za-z0-9_]*|\d)|([@*#]))/g,
+    (_m, braced, def, bare, special) => {
+      const pos = getPositionals();
+      if (special === "#") return String(pos.args.length);
+      if (special === "@" || special === "*") return pos.args.join(" ");
+      const key = (braced ?? bare) as string;
+      if (key.length === 1 && key >= "0" && key <= "9") {
+        const val = key === "0" ? pos.argv0 : pos.args[Number(key) - 1];
+        if (def !== undefined && (val === undefined || val === "")) return def;
+        return val ?? "";
+      }
+      const val = process.env[key];
       if (def !== undefined && (val === undefined || val === "")) return def;
       return val ?? "";
     },
