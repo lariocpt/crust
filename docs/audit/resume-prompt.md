@@ -16,10 +16,18 @@ Master plan: `docs/audit/CRUST_GAPS_PLAN.md`. Original audit prompt (scope sourc
 
 ## EXACT POSITION (rolling — update this block after EVERY unit; verified on disk 2026-10-18)
 
-- Last row on disk: **M17** (FeatureCard — the 8-component pass is COMPLETE; M1–M17, all
-  verdicts on disk: 15 C/R-C, M1+M4 probes queued in (b), no X).
-- Component rows live in full-audit.md under `### website components` (between the W602
-  row and the `### parity check:` heading): M1–M6 Hero · M7–M11 InstallBlock+site.ts ·
+- Last row on disk: **T7** (parity check — pipelines pair complete; 2 of 10 units done).
+- Parity rows live in full-audit.md under `### parity check:` (prefix **T1+**): T1 =
+  index.mdx `skills list` block vs the nine SKILL.md frontmatters (X → **G17**);
+  T2–T7 = pipelines pair (site `agent-skills/pipelines.mdx` 108 L ↔
+  `skills/crust-pipelines/SKILL.md` 148 L, both fully read 2026-10-18) — T3 = the sql
+  `$1`-safe sentence (X → **G18**).
+- Parity queue (remaining 8 pairs, in order): **api-testing** (site 102 L ↔ SKILL.md
+  136 L) · load-testing · mock-server · procs · cli · builtins · logs · verify-web-links.
+  Remaining focal points: G01–G05 topics, builtins-list coverage (8 builtins incl.
+  `test-fixture`), logs-boot-line format (W344 vs W446).
+- Component rows (M1–M17) live under `### website components` between the W602 row and
+  the `### parity check:` heading: M1–M6 Hero · M7–M11 InstallBlock+site.ts ·
   M12 CodeSwitcher · M13 Header · M14 Sidebar · M15 Footer · M16 RecipeCard · M17
   FeatureCard.
 - Page boundaries (recipe queue, historical): stress-testing **W549–W568** (L1–315) · dev-tail
@@ -182,13 +190,14 @@ and the session was restarted):
 
 ## Next move (first unit of a resuming session)
 
-Start the **skills↔site parity check** (NOT-done item 2, full spec there): write rows into
-the currently-empty `### parity check: skills/*/SKILL.md ↔ src/pages/docs/agent-skills/*.mdx`
-section of full-audit.md (immediately after the M17 row). New prefix: **T1+** (T = parity;
-`T` verified free by grep 2026-10-18 — taken letters are R/U/I/A/C/P/S/AG/SK/W/M). Method
-unchanged: work one skill pair per window (a site `agent-skills/*.mdx` ↔ its repo
-`skills/*/SKILL.md`), rows per window, window ≤160 L, update the audit STATUS block after
-each pair. Focal points per item 2: G01–G05 topics, W184's nine skill descriptions vs
-SKILL.md frontmatter, builtins-list coverage (now includes `test-fixture`), logs-boot-line
-format parity (W344 vs W446). Then code review (item 3), then fresh build + probes (item 4)
+Continue the **skills↔site parity check** (NOT-done item 2; T1–T7 already on disk): next
+unit = the **api-testing pair** — site `src/pages/docs/agent-skills/api-testing.mdx`
+(102 L) ↔ repo `skills/crust-api-testing/SKILL.md` (136 L). Read both in ≤160 L windows,
+write T8+ rows into the `### parity check:` section of full-audit.md immediately after
+the T7 row (prefix **T1+** continues), then: load-testing, mock-server, procs, cli,
+builtins, logs, verify-web-links. Method unchanged: one pair per unit, rows per window,
+update the audit STATUS block + this EXACT POSITION after each pair, commit
+`docs/audit/` (md-only) and push after each unit. Remaining focal points: G01–G05
+topics, builtins-list coverage (8 builtins incl. `test-fixture`), logs-boot-line format
+parity (W344 vs W446). Then code review (item 3), then fresh build + probes (item 4)
 → (b)–(e).

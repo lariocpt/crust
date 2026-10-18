@@ -14,15 +14,17 @@ Structure:
 Status legend for claims: `V` verified by probe, `C` confirmed in code (no probe needed),
 `X` claim contradicted (finding opened), `?` unresolved.
 
-**STATUS (2026-10-18 checkpoint — audit PAUSED mid-(a), diverted into fix work; NOT closed).**
+**STATUS (2026-10-18 checkpoint — audit IN PROGRESS at skills↔site parity check, T1–T7 on disk; NOT closed).**
 (a) page-level complete: R1–R26, U1–U134, I1–I5, A1, C1–C24, P1–P17, S1–S10, AG1–AG11,
 SK1–SK94, W1–W602 (all 29 website pages; W602 = verify-web-links recipe L185–188, page end).
 (a) NOT done: skills↔site parity check · full code review (close every `?`) · fresh build +
 full probe list → (b). 8 components DONE 2026-10-18 (claim prefix **M1+**, chosen per the
 chunking protocol: M1–M17 across Hero/InstallBlock+site.ts/CodeSwitcher/Header/Sidebar/
 Footer/RecipeCard/FeatureCard — 15 C/R-C, M1+M4 probes queued in (b), no X).
-**Exact position: components pass complete (M17 on disk); next unit = skills↔site parity
-check** (the `### parity check:` section, currently empty, immediately after the M-rows).
+**Exact position: skills↔site parity check IN PROGRESS — T1–T7 on disk** (T1 index
+`skills list` block vs the nine frontmatters → G17; T2–T7 = pipelines pair, T3 → G18;
+8 of 10 units left: api-testing, load-testing, mock-server, procs, cli, builtins,
+logs, verify-web-links).
 Page-level (a) unchanged: W602 was the last W-row (recipe boundaries: stress-testing
 W549–W568 · dev-tail W569–W582 · heap-snapshots W583–W591 · verify-web-links recipe
 W592–W602).
@@ -37,7 +39,9 @@ X census (claim contradicted / X-candidate): R24 (stale FOO=x prose — FIXED `0
 (init.ts npm-resolution clash), W153 (range(0,3) comment), W235 (5-vs-8 builtin list — FIXED `d68665c`/`0ab04b0`),
 P15 (PLAN.md job control — G10 owns), W581 (`live` stream set → G14), W586 (elapsed comma pin → G15),
 W600 (incomplete CI gate → CONFIRMED, G16), T1 (agent-skills index: crust-cli
-`skills list` block lags SKILL.md frontmatter → G17). → G13–G17 files created
+`skills list` block lags SKILL.md frontmatter → G17), T3 (pipelines page: "SQL
+placeholders survive untouched" sentence omits the script-positional rule → G18).
+→ G13–G18 files created
 (gaps/, listed in (e)); plan lines in CRUST_GAPS_PLAN.md.
 Known in-place items not in X census: W561 stale forward refs; npm-packages drift
 (fixed earlier, SHA to log in (d)).
@@ -1310,7 +1314,18 @@ Usage census (grep, 2026-10-18): 13 pages — db-drivers, intro, npm-packages, p
 
 | # | pair / claim | status |
 |---|-------|--------|
-| T1 | index.mdx "## See what's embedded" — the `skills list` text block (L23–42) duplicates the nine SKILL.md frontmatter `description:` fields | X (crust-cli only). Mechanical diff 2026-10-18 (python: extracted the ` ```text ` block after "## See what's embedded" and compared each entry to `skills/<name>/SKILL.md` frontmatter, stripped): **8/9 verbatim identical** (api-testing, builtins, load-testing, logs, mock-server, pipelines, procs, verify-web-links). **crust-cli drifts**: site block reads "the run modes (`-c`, script file, piped stdin, REPL), what each exit code…" — frontmatter reads "the run modes (`-c`, script file, piped stdin, REPL, **tool subcommands like `crust skills install`**), what each exit code…". History: clause added in crust `1581fcd`; the site-side sync `dbc6fed` touched index.mdx (34 lines) but the text block is absent from its diff (`git show dbc6fed -- …/index.mdx | grep -c 'tool subcommands'` → 0) — the hand-copied duplicate was missed. Direction: SKILL.md is canonical (embedded in the binary, linted by `tests/skills.test.ts`); the site block is hand-copied with no generation step (Jenkinsfile Grammar comment) — the site is BEHIND. → **G17** (`gaps/G17-cli-skill-desc-drift.md`), website PR, one-line sync.) |
+| T1 | index.mdx "## See what's embedded" — the `skills list` text block (L23–42) duplicates the nine SKILL.md frontmatter `description:` fields | X (crust-cli only). Mechanical diff 2026-10-18 (python: extracted the ` ```text ` block after "## See what's embedded" and compared each entry to `skills/<name>/SKILL.md` frontmatter, stripped): **8/9 verbatim identical** (api-testing, builtins, load-testing, logs, mock-server, pipelines, procs, verify-web-links). **crust-cli drifts**: site block reads "the run modes (`-c`, script file, piped stdin, REPL), what each exit code…" — frontmatter reads "the run modes (`-c`, script file, piped stdin, REPL, **tool subcommands like `crust skills install`**), what each exit code…". History: clause added in crust `1581fcd`; the site-side sync `dbc6fed` touched index.mdx (34 lines) but the text block is absent from its diff (`git show dbc6fed -- …/index.mdx | grep -c 'tool subcommands'` → 0) — the hand-copied duplicate was missed. Direction: SKILL.md is canonical (embedded in the binary, linted by `tests/skills.test.ts`); the site block is hand-copied with no generation step (Jenkinsfile Grammar comment) — the site is BEHIND. → **G17** (`gaps/G17-cli-skill-desc-drift.md`), website PR, one-line sync. (W184's queued `skills list` verbatim probe is the runtime twin of this static diff.) |
+
+#### pair: pipelines — site `agent-skills/pipelines.mdx` (108 L) ↔ `skills/crust-pipelines/SKILL.md` (148 L), both fully displayed 2026-10-18
+
+| # | pair / claim | status |
+|---|-------|--------|
+| T2 | "A stage is classified by its first token" — the site's 17-row classification table vs SKILL.md's 21-row table | C (row-by-row 2026-10-18: every site row is a strict subset of its SKILL.md twin — no contradiction. Site-omitted detail (fine on a condensed page): `lines`/`read` "sorted; zero matches = error", `stdin` script-vs-data caveat, `grep` fallback-to-system rules, `load`/`POST`/`--timeout`/`sql` rows, `parallel` "anything else errors". No site-only row. The `:3000/path` → `http://localhost:3000/path` line is identical.) |
+| T3 | "Where `$VAR` expands" — site L43–49 vs SKILL.md L41–55 | **X (site behind)**. Both agree on the position list (URLs, `-H`, JSON literals, `stats --out` paths, registered-fn args), the JS-body negative, and shell-stage exclusion. Divergence: the site's closing sentence — "SQL placeholders survive untouched: `$1` and `$2` inside a `sql "…"` string are safe, because a digit can't start an environment variable name" — omits the script-context rule SKILL.md L46–50 states: in a script, **positional arguments** expand in those same positions, so `$1` in a `sql "…"` string is the script's `$1`, NOT a SQL bind; the bound-parameter placeholder is `?` (`sql "… WHERE id = ?" "$MY_ID"`). Canonical usage rows agree with SKILL.md: U8 (positionals "expand exactly where env vars do … fn args"), U9 (non-script positionals are `""`, "never literal"), U10 ("fn args are positionals not SQL placeholders (bound param is `?`)"), U57 ("a SQL query's `$1` is the script's, bound param placeholder is `?`"). The site's "safe because a digit can't start an env-var name" reasoning confuses env-var expansion with positional expansion. → **G18** (`gaps/G18-pipelines-sql-placeholder-drift.md`), website PR (qualify the sentence + add the script caveat, mirroring SKILL.md L46–50). **CROSS-REF (not closed by G18):** the same `$1`-as-bind example (`sql "… WHERE email = $1" "a@b.c"`) appears in SKILL.md L90 itself, the site's worked examples (W264(4)), and the api-smoke recipe (W460(4), "the positional survives env-expansion") — if the (b) probe (W260: "must bind `a@b.c`, not expand"; W264(4); W460(4)) shows `$1` expanding per U9, BOTH the skill and the site examples need the `?` form → additional finding then; code-review group (a) owns the sql binding semantics. |
+| T4 | "Request chaining with capture" — the two-line Court example (site L55–58) | C (verbatim identical to SKILL.md L63–66; the "last item wins / nullish fails immediately" contract = W263's capture-contract row, already C-adjacent; SKILL.md's extra "omit the lambda to capture the item itself" + "don't capture into TOKEN/BASE/PATH" bullets are omissions, not contradictions.) |
+| T5 | Worked examples — six ` ```crust ` blocks (site L64–86) | C (all six identical to SKILL.md L79–96, comments aside: log-mining, squares `sort -rn`, one-line HTTP fixture, the sql count check, parallel POST, live tail. The sql block carries the same `$1`-vs-`?` question as T3 — settled by the (b) probe, cross-ref there.) |
+| T6 | "The traps it warns about" — site's 8 traps vs SKILL.md's 11 | C (each site trap is consistent with its SKILL.md twin; site-omitted: parallel-before-non-verb parse error, no-redirect-on-crust-stage, stdin single-shot, npm-run-style PATH — all omissions, none contradicted on the site page. The two sharpest site traps (lambda-maps, filter/assert empty-asymmetry) are word-for-word the same deliberate-design claims as SKILL.md L110–115.) |
+| T7 | "Exit codes" (site L101–103) | C (identical fail-fast contract to SKILL.md L142–148; SKILL.md's extra "blank lines and `#` comments skipped → shebang works" is an omission on the site, consistent with W-rows on comment handling.) |
 
 ---
 
@@ -1380,3 +1395,4 @@ verify-web-links exit=2
 - **G15** procs-elapsed-comma (W586) → `gaps/G15-procs-elapsed-comma.md`
 - **G16** vwl-ci-gate-incomplete (W600, probe-confirmed) → `gaps/G16-vwl-ci-gate-incomplete.md`
 - **G17** cli-skill-desc-drift (T1 — site `skills list` block lags the crust-cli SKILL.md frontmatter) → `gaps/G17-cli-skill-desc-drift.md`
+- **G18** pipelines-sql-placeholder-drift (T3 — site "SQL placeholders survive untouched" sentence omits the script-positional rule SKILL.md states) → `gaps/G18-pipelines-sql-placeholder-drift.md`
