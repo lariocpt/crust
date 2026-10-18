@@ -151,8 +151,9 @@ piped, for a global install, or when crust skills already sit in either path;
 
 Not a login shell and not a bash replacement — plain shell lines are
 delegated to `sh -c` untouched; `Ctrl-C` cancels the running line but there
-is no `Ctrl-Z`/`fg`/`bg`/`&` job control, and plain `FOO=x` assignments
-don't persist (use `export` or `capture`). The full list lives in
+is no `Ctrl-Z`/`fg`/`bg`/`&` job control; a plain `FOO=x` line is session
+state that persists, the same code `export` runs (only the `FOO=x cmd`
+prefix is transient). The full list lives in
 [Limits](docs/USAGE.md#limits-in-v02).
 
 ## Docs
