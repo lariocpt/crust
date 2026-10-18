@@ -16,8 +16,9 @@ Master plan: `docs/audit/CRUST_GAPS_PLAN.md`. Original audit prompt (scope sourc
 
 ## EXACT POSITION (rolling — update this block after EVERY unit; verified on disk 2026-10-18)
 
-- Last row on disk: **T33** (parity check — procs pair complete, NO X; T33
-  C-PENDING on the redirect-mechanism probes W364(4)+SK86; 6 of 10 units done).
+- Last row on disk: **T39** (parity check — cli pair WINDOW 1 of 2 complete,
+  NO X; T38 C-PENDING on the --check sh-line-shape probes — the SAME probe
+  already queued at W217+SK31; 6 of 10 pairs done, cli in progress).
 - Parity rows live in full-audit.md under `### parity check:` (prefix **T1+**): T1 =
   index.mdx `skills list` block vs the nine SKILL.md frontmatters (X → **G17**);
   T2–T7 = pipelines pair (T3 → **G18**); T8–T14 = api-testing pair (CLEAN all C);
@@ -28,10 +29,19 @@ Master plan: `docs/audit/CRUST_GAPS_PLAN.md`. Original audit prompt (scope sourc
   both places, L482/L521); T28–T33 = procs pair (NO X — all C; T33 C-PENDING:
   site "evaluated as JavaScript" ×2 pages vs SKILL "read as data by a pipeline
   stage" for bare `procs(...) > file` — settled by the W364(4) + SK86 (b) probes;
-  no G until they land).
-- Parity queue (remaining 4 pairs, in order): **cli** (site
-  `agent-skills/cli.mdx` 256 L ↔ `skills/crust-cli/SKILL.md` 175 L — TWO ≤160 L
-  windows each: 1–160, 161–end) · builtins · logs · verify-web-links.
+  no G until they land); T34–T39 = cli pair WINDOW 1 of 2 (intro / run modes /
+  exit codes / --check / Environment head — NO X; T38 C-PENDING: site 2-line
+  --check failure block + "the `sh:` line after that" vs SKILL L93 inline
+  `: sh: …` on line 1 — settled by the SAME probe queued at W217 + SK31;
+  SKILL.md's Environment section is ONLY L109–118 = the 5-row table, so the
+  site's env elaborations W221/W222 are site-only expansions, verified).
+- Parity queue (4 pairs left, in order): **cli** IN PROGRESS — window 2:
+  site `agent-skills/cli.mdx` L161–256 (REPL L172–201 = W223–W226, globals
+  L203–212 = W227, auto-discovered L214–231 = W228–W232, Traps L232–245 =
+  W233, Related L247–256 = W234; site L161–171 = env tail, W220–W222 already
+  compared in T39) ↔ SKILL.md L119–175 (REPL = SK34, globals = SK35,
+  auto-discovered = next SK row — verify its ID at unit start). Then:
+  builtins · logs · verify-web-links.
   Remaining focal points: G01–G05 topics, builtins-list coverage (8 builtins incl.
   `test-fixture`), logs-boot-line format (W344 vs W446).
 - Component rows (M1–M17) live under `### website components` between the W602 row and
@@ -198,14 +208,19 @@ and the session was restarted):
 
 ## Next move (first unit of a resuming session)
 
-Continue the **skills↔site parity check** (NOT-done item 2; T1–T33 already on disk):
-next unit = the **cli pair** — site
-`src/pages/docs/agent-skills/cli.mdx` (256 L) ↔ repo
-`skills/crust-cli/SKILL.md` (175 L). Read each in TWO ≤160 L windows
-(1–160, then 161–end), writing rows after each window is safe; write T34+
-rows into the `### parity check:` section of full-audit.md immediately after the T33
-row (prefix **T1+** continues), then: builtins, logs,
-verify-web-links. Method unchanged: one pair per unit, rows per window,
+Continue the **skills↔site parity check** (NOT-done item 2; T1–T39 already on disk):
+next unit = **cli pair, WINDOW 2** — site `src/pages/docs/agent-skills/cli.mdx`
+L161–256 (96 L, one window) ↔ repo `skills/crust-cli/SKILL.md` L119–175 (57 L,
+one window). RE-READ both ranges fresh (SKILL's REPL/globals sit at L119–152,
+inside window 1's line range but NOT yet compared). Write T40+ rows after the
+T39 row: REPL (site L172–201 W223–W226 ↔ SKILL L119–142 SK34), globals
+(site L203–212 W227 ↔ SKILL L146–152 SK35), auto-discovered stages (site
+L214–231 W228–W232 ↔ SKILL L154–175 — next SK row, verify its ID at unit
+start), Traps (site L232–245 W233, five bullets — SKILL.md has NO Traps
+section; check the bullets against SKILL claims on disk, e.g. bullet 1 "Read
+`$?`, never after a pipe" vs SK30 last-command-wins), Related (site L247–256
+W234 — page links only). Then the pair summary line, STATUS + resume update,
+commit/push. Then: builtins, logs, verify-web-links. Method unchanged: one pair per unit, rows per window,
 update the audit STATUS block + this EXACT POSITION after each pair, commit
 `docs/audit/` (md-only) and push after each unit. Remaining focal points: G01–G05
 topics, builtins-list coverage (8 builtins incl. `test-fixture`), logs-boot-line format
