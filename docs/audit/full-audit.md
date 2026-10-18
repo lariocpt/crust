@@ -17,9 +17,13 @@ Status legend for claims: `V` verified by probe, `C` confirmed in code (no probe
 **STATUS (2026-10-18 checkpoint — audit PAUSED mid-(a), diverted into fix work; NOT closed).**
 (a) page-level complete: R1–R26, U1–U134, I1–I5, A1, C1–C24, P1–P17, S1–S10, AG1–AG11,
 SK1–SK94, W1–W602 (all 29 website pages; W602 = verify-web-links recipe L185–188, page end).
-(a) NOT done: 8 components (Hero/InstallBlock/CodeSwitcher/Header/Sidebar/Footer/RecipeCard/
-FeatureCard) · skills↔site parity check · full code review (close every `?`) · fresh build +
-full probe list → (b). **Exact pause point: W602** (recipe boundaries: stress-testing
+(a) NOT done: skills↔site parity check · full code review (close every `?`) · fresh build +
+full probe list → (b). 8 components DONE 2026-10-18 (claim prefix **M1+**, chosen per the
+chunking protocol: M1–M17 across Hero/InstallBlock+site.ts/CodeSwitcher/Header/Sidebar/
+Footer/RecipeCard/FeatureCard — 15 C/R-C, M1+M4 probes queued in (b), no X).
+**Exact position: components pass complete (M17 on disk); next unit = skills↔site parity
+check** (the `### parity check:` section, currently empty, immediately after the M-rows).
+Page-level (a) unchanged: W602 was the last W-row (recipe boundaries: stress-testing
 W549–W568 · dev-tail W569–W582 · heap-snapshots W583–W591 · verify-web-links recipe
 W592–W602).
 Full resume plan (remaining steps in order, full probe list, compaction-safe method,
@@ -1235,6 +1239,71 @@ load 30s 100/s \| parallel 50 \| GET :3000/health \| stats --out load/last.json 
 
 | W601 | L177–183 "## Exit codes" → table: `0` All checks pass / `1` "One or more failures (broken link, missing anchor, redirect chain, OG image issue, meta mismatch). With `--strict`: also a run that finished having left discovered links unchecked." / `2` "Bad args, sitemap unreachable, or fixtures malformed." | ? probes: 0 — clean scratch site; 1 — one probe per named failure class (broken link W594(1), missing anchor W594(4), redirect chain W594(5), OG image W595(3), meta mismatch W599(2)) — fold exit-code capture into those probes; 2 — three twins: bad args (unknown flag, message verbatim), sitemap unreachable (a dead origin), fixtures malformed (a .crust.ts exporting a number — the "fixtures malformed" message verbatim) |
 | W602 | L185–188 "## Related" → [API smoke tests](/docs/recipes/api-smoke-tests/) "`test-fixture` for the API surface; `verify-web-links` for the public site" · [Mock server](/docs/recipes/mock-server/) "pair with `verify-web-links http://localhost:PORT` to smoke-test rendered pages against mocked backends." | R (internal links → check-links). Cross-ref: the mock-server Related (W527) points back here with the same localhost:PORT pairing ✓. verify-web-links.mdx page COMPLETE (W592–W602) — all 10 recipe pages now recorded |
+
+### website components (`src/components/*.astro` — 8 files, 938 L; claim prefix **M1+** chosen 2026-10-18 — recorded here per the chunking protocol; windows ≤160 L, rows per window; focus: install-command claims + version numbers)
+
+#### components/Hero.astro (182 L, windows L1–160 + L161–182, both fully displayed; 2026-10-18)
+
+| # | claim | status |
+|---|-------|--------|
+| M1 | L9 eyebrow "v0.2 · the whole test stack" — version-number claim | ? (probe (b): fresh `bin/crust-bin --version` — repo `package.json` is `0.2.0-dev` (read 2026-10-18); per AG10 the shipped version is stamped from the `v*` tag into package.json before compile, so record the exact printed string; the "v0.2" claim = major.minor of whatever it prints). Cross-ref AG10/I2. |
+| M2 | L11–13 h1: "Mock it, test it, load it, tail it — the whole test stack, baked into one binary" | C (same tagline as AGENTS.md L3 "The whole test stack — … — baked into one Bun binary with zero dependencies"; the four verbs = the four tool builtins: mock-server (W484+), test-fixture (W453+), load (W549+), logs (W228+)). |
+| M3 | L14–20 lede: "Spec-driven mocks, fixture suites generated from your OpenAPI spec, load gates CI can fail on, and every process log in one stream — all composing on the same `|` / `.pipe()`, from the REPL, a `crust -c` one-liner, or a `.crust` script. Zero dependencies, one compiled binary — and it never reports a false pass." | C (condensed W15 intro lede — "the whole test stack baked into one Bun binary … driven from REPL, `crust -c`, or `.crust` script" — + W2/W71 (`.pipe()` = the TypeScript door onto the same `Pipeline<T>`) + AGENTS design rule 1 ("must never report a false pass" — honest-failure contract). Sub-claims each already carry their own rows: OpenAPI→fixture suites (W390), CI load gates (W528–W548), "every process log in one stream" (logs — W228+; "one stream" is marketing compression of the logs session; the code-review group (l) ring-buffer/procs details close any residue). No claim here beyond W15/W2/W71/AG1. |
+| M4 | L38–43 demo pre (HTML spans — NOT a fenced block, so lint-examples.mjs does not run it): (1) `range(0, 10000) \| parallel 100 \| GET :3000/health \| expect 200 \| stats` + illustrative output comment `# { count: 10001, durationMs: 814, p50: 5, p95: 17, p99: 41 }`; (2) `read fixtures/*.json \| POST :3000/users \| expect 201`; (3) `lines **/*.log \| grep ERROR \| filter (l => !l.includes('healthcheck')) \| wc -l`; (4) `sql "select email from users limit 5" \| (r => r.email)` | ? (probe (b), four `CRUST_CONFIG=/dev/null bin/crust --check '<line>'` (exit codes captured; (4) parses only — its runtime needs `$DATABASE_URL` per W475). Shape claims: (1) the stats output keys `{count, durationMs, p50, p95, p99}` — cross-ref the W545–W568 stats probes (if the W545 family already pins the exact stats key set, this half closes C on cross-ref; the illustrative `count: 10001` is consistent with range-inclusive, W153 probe `range(0,3) | wc -l` → 4); (2) `read` glob source → POST → `expect 201` (read source family W531; POST/expect documented pages); (3) `lines` glob source verb + lambda filter + `wc -l` shell tail (each documented individually — the line as a whole gets --check only); (4) sql stage family W460/W475). |
+| M5 | L26–29 CTAs: "Quickstart →" `/docs/quickstart/` · "Read the docs" `/docs/intro/` | R (internal links → check-links; both target pages exist and are audited — quickstart W520+, intro W499+). |
+| M6 | L22–24: `<InstallBlock />` — the install-command claims render from the child component (audited in the InstallBlock rows below, not here) | cross-ref (M7+). |
+
+#### components/InstallBlock.astro (143 L, single window, fully displayed) + `src/lib/site.ts` (83 L, fully displayed — the install-command source) (2026-10-18)
+
+Usage census (grep, 2026-10-18): `<InstallBlock />` default ×5 (Hero L23, docs/index L13, intro L133, binary-vs-npm L16, quickstart L18) · `command={NPM_INSTALL_COMMAND} label="npm install"` ×1 (binary-vs-npm L18) · `isPublic && <InstallBlock command={CLONE_COMMAND} label="Clone and build" />` ×1 (binary-vs-npm L82). No install-command literal anywhere in `src/pages/` except binary-vs-npm L91 `CRUST_SOURCE=github npm i -g @lariocpt/crust` (the documented override, I2/AG10/W102) — **no drift surface**: every rendered command reduces to the four `site.ts` constants. W90's deferral ("component claims → InstallBlock.astro at component pass") closes here.
+
+| # | claim | status |
+|---|-------|--------|
+| M7 | site.ts L67–69 `INSTALL_COMMAND` — public: `curl -fsSL https://raw.githubusercontent.com/lariocpt/crust/main/install.sh \| bash` · LAN (default): `curl -fsSL https://apps.in.drlario.org/install.sh \| bash -s -- crust`; comment: "Both verify the published sha256 before installing, and neither needs a clone or Bun on the target machine" | C (LAN string verbatim = I1 (INTERNAL.md L11–15, same two LAN one-liners); the sha256/no-clone/no-Bun half is R1/R2/AG10 territory (verify-then-rename in `install.sh` + `npm/lib/install.mjs`) — those rows carry the probes (b). Noted as a fact, not a finding: the public form fetches `main` (mutable URL, no tag pin) — the README R1 channel is the same install.sh; nothing claims a pin. LAN `-s -- crust` name arg vs public bare `bash` = the multi-artifact apps host vs single-repo script (AG10/I2 plane split).) |
+| M8 | site.ts L75–77 `NPM_INSTALL_COMMAND` — public: `npm i -g @lariocpt/crust` · LAN: `npm i -g crust --registry https://npm.in.drlario.org` | C (package name `@lariocpt/crust` = AG10/I2 (npmjs plane); the LAN line verbatim = I1. "The npm channel, per plane: the public scope vs the LAN registry" — matches the two-plane model.) |
+| M9 | site.ts L83 `CLONE_COMMAND` — `git clone https://github.com/lariocpt/crust.git ~/.crust && ~/.crust/scripts/install-from-source.sh`, comment "Public-mode ONLY — it embeds REPO_URL, and the LAN Gate fails the build on any github.com string in dist/" | C (shape = R4 source-install claim (`git clone … && ~/.crust/scripts/install-from-source.sh`); R4's probe (script exists + what it does) rides (b); the "public-mode only" half matches the sole usage, binary-vs-npm L82's `isPublic && …` gate, AND the Jenkinsfile Gate below — all three agree.) |
+| M10 | Build-mode claim (site.ts L3–7 + InstallBlock L8–11): "LAN is the DEFAULT, deliberately — an unadorned `bun run build` — which is what the Jenkins job runs — must produce exactly what it always did. Its Gate stage fails the build if 'github.com' appears anywhere in dist/ and requires the canonical to be the LAN host … Set PUBLIC_SITE=1 to build the public variant." | C (website-repo `Jenkinsfile` Gate stage, L67–80, read 2026-10-18: `grep -rlE 'github\.com\|larioborges-timbuk2\|crust\.sh' dist` → exit 1 on any match + `grep -q 'rel="canonical" href="https://crust.in.drlario.org/"' dist/index.html` else fail. The live gate is a SUPERSET of the comment (two extra patterns) and pins the canonical LAN host — consistent, comment is not false. `isPublic` = `envVar('PUBLIC_SITE') === '1'` (site.ts L18) matches "Set PUBLIC_SITE=1".) |
+| M11 | InstallBlock.astro itself (L15–33 markup, L108–143 script): renders `$` + command + copy button; on clipboard failure it never shows the success tick — falls back to selecting the command text and a "Select + copy" label (1600/2400 ms resets) | C (UI behavior, matches its own comments; no doc row promises copy-button behavior, so no cross-doc claim to check. The `data-copy` value is the same string rendered in `.cmd` — copy = display, no second source.) |
+
+#### components/CodeSwitcher.astro (181 L, windows L1–160 + L161–181, both fully displayed; 2026-10-18)
+
+Usage census (grep, 2026-10-18): 13 pages — db-drivers, intro, npm-packages, pipes-vs-typescript, quickstart + 8 recipe pages (api-smoke-tests, ci-load-gates, gen-fixtures, heap-snapshots, log-mining, mock-server, stress-testing, verify-web-links).
+
+| # | claim | status |
+|---|-------|--------|
+| M12 | The component is the bash↔TS duality carrier: two panes per block, side-by-side ≥1024px, tabs below; tab labels are props (default `bsh`/`ts`), pane labels hardcoded `bash`/`typescript`; chosen language persisted in `localStorage['crust-codeswitcher-lang']` across all blocks on the page | C (pure UI — the "two front doors onto the same engine" CLAIM is W71/W2 (both C); the component only renders the pair. Noted as facts, not findings: the L104–109 comment documents a real bug fix (UA `[hidden]` rule made the TS pane unreachable on desktop — the `min-width: 1024px .pane[hidden] { display: block }` override); tab-label (`bsh`) vs pane-label (`bash`) casing is cosmetic. Each page's two panes were audited as separate content in the page rows (the ts halves are named in the W-rows, e.g. W475 "the ts half of the switcher").) |
+
+#### components/Header.astro (103 L, single window, fully displayed; 2026-10-18)
+
+| # | claim | status |
+|---|-------|--------|
+| M13 | Nav links: Docs → `/docs/intro/` · Quickstart → `/docs/quickstart/` · Recipes → `/docs/recipes/` · GitHub icon link `{isPublic && …}` → `REPO_URL` (public-mode only) | R + C (the three internal links → check-links; all three targets exist and are audited — intro W499+, quickstart W520+, recipes/index W681+. The public-only GitHub link is what keeps the LAN build Gate-passing: `REPO_URL` embeds `github.com`, and the M10 Gate grep fails any LAN dist/ containing it — the `isPublic &&` gate is load-bearing, not decorative. Consistent.) |
+
+#### components/Sidebar.astro (130 L, single window, fully displayed; 2026-10-18)
+
+| # | claim | status |
+|---|-------|--------|
+| M14 | Nav map, 4 sections / 27 links: Getting started (Overview `/docs/`, Intro, Quickstart, npm packages, DB drivers) · Concepts (pipes-vs-typescript, binary-vs-npm) · AI agent skills (Overview + all nine skill pages) · Recipes (All recipes + all nine recipe pages) | C + R (coverage census 2026-10-18: `find src/pages` = 29 files; the sidebar's 27 hrefs map 1:1 onto the 27 `/docs/…` pages — NO orphaned page, NO dangling href; the only unlinked pages are the homepage (reachable via the Header brand link, M13) and `404.astro` (unlinked by design). All 27 also ride check-links as internal links. Labels vs page titles: "One dev tail", "Mock server (OpenAPI)", "Verify web links + SEO", "Generated negative fixtures", "Heap snapshots in tests" — cosmetic display names, checked against the audited page titles in the W-rows, no contradiction noted.) |
+
+#### components/Footer.astro (72 L, single window, fully displayed; 2026-10-18)
+
+| # | claim | status |
+|---|-------|--------|
+| M15 | Footer: "🥖 crust — the whole test stack, baked into one binary" · links Docs/Quickstart/Recipes + GitHub (`isPublic &&` only) · "© {year} · MIT licensed" | C + R (tagline = M2/AGENTS tagline, already C; the three links → check-links + same targets as M13 (all exist, audited); GitHub public-only = same load-bearing Gate reasoning as M13. License claim: crust repo `LICENSE` is MIT (head read 2026-10-18: "MIT License") — the site's own LICENSE is MIT too. `{year}` = build-time `new Date().getFullYear()` = 2026 this year, a fact, not a claim.) |
+
+#### components/RecipeCard.astro (77 L, single window, fully displayed; 2026-10-18)
+
+| # | claim | status |
+|---|-------|--------|
+| M16 | Presentational card (`href`/`title`/`tag` props + slot body + "Read recipe →" CTA) — rendered once per recipe from `docs/recipes/index.mdx` | C (no claims of its own: every rendered claim is a prop/slot value supplied by the recipes index page, audited in its own rows (W681+). The card's hrefs are exactly the nine `/docs/recipes/<name>/` links already censused in M14's coverage check.) |
+
+#### components/FeatureCard.astro (50 L, single window, fully displayed; 2026-10-18)
+
+| # | claim | status |
+|---|-------|--------|
+| M17 | Presentational card (`icon`/`title` props + slot body) — used only by the homepage `index.astro` | C (no claims of its own: icon/title/slot values are supplied by `index.astro`, audited in its own rows (W1+). Usage census 2026-10-18: single consumer, the homepage.) |
+
+**8-component pass COMPLETE (2026-10-18): Hero (M1–M6) · InstallBlock+site.ts (M7–M11) · CodeSwitcher (M12) · Header (M13) · Sidebar (M14) · Footer (M15) · RecipeCard (M16) · FeatureCard (M17).** Verdicts: 15 C/R-C, 2 `?` with probes queued in (b) (M1 version string via fresh-build `--version`; M4 four `--check` grammar probes + stats key-set cross-ref W545+). No X — no component contradicts a doc claim; the install-command surface reduces to the four `site.ts` constants, all matching the I1/AG10/R-rows verbatim or by design.
 
 ### parity check: `skills/*/SKILL.md` ↔ `src/pages/docs/agent-skills/*.mdx`
 

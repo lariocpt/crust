@@ -16,18 +16,25 @@ Master plan: `docs/audit/CRUST_GAPS_PLAN.md`. Original audit prompt (scope sourc
 
 ## EXACT POSITION (rolling — update this block after EVERY unit; verified on disk 2026-10-18)
 
-- Last row on disk: **W602** (verify-web-links recipe `## Related`, L185–188 — the page ends
-  at L188, so the page is complete).
-- Page boundaries (recipe queue): stress-testing **W549–W568** (L1–315) · dev-tail
+- Last row on disk: **M17** (FeatureCard — the 8-component pass is COMPLETE; M1–M17, all
+  verdicts on disk: 15 C/R-C, M1+M4 probes queued in (b), no X).
+- Component rows live in full-audit.md under `### website components` (between the W602
+  row and the `### parity check:` heading): M1–M6 Hero · M7–M11 InstallBlock+site.ts ·
+  M12 CodeSwitcher · M13 Header · M14 Sidebar · M15 Footer · M16 RecipeCard · M17
+  FeatureCard.
+- Page boundaries (recipe queue, historical): stress-testing **W549–W568** (L1–315) · dev-tail
   **W569–W582** (L1–236) · heap-snapshots **W583–W591** (L1–195) · verify-web-links recipe
   **W592–W602** (L1–188).
 - **DONE (a, page-level):** repo docs — README R1–R26, USAGE U1–U134, CHANGELOG, PLAN
   P1–P17, spec C1–C24, INTERNAL I1–I5, AGENTS AG1–AG11, A1, nine skills SK1–SK94,
   examples/args.crust — plus **all 29 website pages W1–W602** (all 10 recipe pages included).
 - **NOT done (a), in order:**
-  1. **8 components** (install-command claims): Hero (182 L), InstallBlock (143),
-     CodeSwitcher (181), Header (103), Sidebar (130), Footer (72), RecipeCard (77),
-     FeatureCard (50) — in the website repo `src/components/`.
+  1. ~~**8 components**~~ — **DONE 2026-10-18** (M1–M17 on disk). Note: the files are
+     `.astro`, not `.tsx`: Hero 182 L, InstallBlock 143, CodeSwitcher 181, Header 103,
+     Sidebar 130, Footer 72, RecipeCard 77, FeatureCard 50 — in the website repo
+     `src/components/`. The install-command surface reduces to the four `src/lib/site.ts`
+     constants (INSTALL_COMMAND ×2 modes, NPM_INSTALL_COMMAND, CLONE_COMMAND) — all C vs
+     I1/AG10/R-rows; the Jenkins Gate claim verified against the live Jenkinsfile.
   2. **Skills↔site parity check** — `src/pages/docs/agent-skills/*.mdx` ↔ repo
      `skills/*/SKILL.md`; esp. G01–G05 topics, W184's nine skill descriptions vs SKILL.md
      frontmatter, builtins-list coverage (now includes `test-fixture`), logs-boot-line format
@@ -175,8 +182,13 @@ and the session was restarted):
 
 ## Next move (first unit of a resuming session)
 
-Start the 8-component pass: `src/components/Hero.tsx` (182 L) → rows with a new prefix
-(continue the claim numbering; suggested `M1…` for "components", or next free W-block —
-record the choice in the STATUS block), window ≤160 L, rows written per window, focus:
-install-command claims + version numbers. Then InstallBlock, CodeSwitcher, Header, Sidebar,
-Footer, RecipeCard, FeatureCard. Update the audit STATUS block after each page.
+Start the **skills↔site parity check** (NOT-done item 2, full spec there): write rows into
+the currently-empty `### parity check: skills/*/SKILL.md ↔ src/pages/docs/agent-skills/*.mdx`
+section of full-audit.md (immediately after the M17 row). New prefix: **T1+** (T = parity;
+`T` verified free by grep 2026-10-18 — taken letters are R/U/I/A/C/P/S/AG/SK/W/M). Method
+unchanged: work one skill pair per window (a site `agent-skills/*.mdx` ↔ its repo
+`skills/*/SKILL.md`), rows per window, window ≤160 L, update the audit STATUS block after
+each pair. Focal points per item 2: G01–G05 topics, W184's nine skill descriptions vs
+SKILL.md frontmatter, builtins-list coverage (now includes `test-fixture`), logs-boot-line
+format parity (W344 vs W446). Then code review (item 3), then fresh build + probes (item 4)
+→ (b)–(e).
