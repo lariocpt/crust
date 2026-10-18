@@ -16,14 +16,33 @@ Master plan: `docs/audit/CRUST_GAPS_PLAN.md`. Original audit prompt (scope sourc
 
 ## EXACT POSITION (rolling — update this block after EVERY unit; verified on disk 2026-10-18)
 
-- Last row on disk: **T81** (parity check — verify-web-links pair COMPLETE,
-  the LAST pair; T72–T81, 0 of 10 rows X — cleanest of the ten: code blocks +
-  check/exit-code/symptom tables agree cell-for-cell; the site's only structural
-  differences are expansions (intro, verbatim note strings, anchor-honesty
-  block, Traps, Related) and the SKILL's is the 4th tuning bullet — all
-  carried by their W/SK rows). **skills↔site parity check COMPLETE — all 10
-  pairs, T1–T81 on disk.** T50 + the T54 lambda example still C-PENDING at the
-  W240+SK14 / W245+SK19 probes.)
+- Last unit on disk: **code review group (a) sql, COMPLETE 2026-10-18**
+  (src/builtinFns/sql.ts, 90 L, read in full): W477 **X → G22** (page L335
+  "the upstream item is *not* auto-bound, so reach for a lambda…" contradicted
+  by `sqlStage` L66–74 — the item binds as the FIRST parameter when the line
+  declares none (L72); the L68–71 comment records the pre-fix "dropped on the
+  floor" behavior the page still describes; the builtins SKILL L54 + the
+  builtins-page item table (W241) already state the current contract; G22 file
+  in gaps/ + census + plan line all on disk). W107 C (the `sql` builtin
+  EXISTS — the sql row family's existence gate is lifted), W118 C ("no
+  Bun.SQL" = leading fragment of the exact L33 string), W132 C (all three
+  error strings byte-exact: L21/L33/L40), W305 C (code half; the
+  offline-sqlite runtime probe stays (b)), W475 C (code half — the
+  shared-client question resolves per the page's "or at least the shared
+  DATABASE_URL source" hedge; the scratch-DB runtime probe stays (b)), W241
+  sql cell C (bind-as-first-parameter = L72 verbatim; the other five cells
+  close in their file-reading groups — base64 → (h), salt/jwt/bundle → (d),
+  wait → (l); the row stays `?` overall). The `$1`-vs-`?` placeholder
+  question (page L345 `$1` vs SKILL L65 `?`) is NOT settled here — it stays
+  with the (b) probe. Last ROW on disk before this unit: **T81** (parity
+  check — verify-web-links pair COMPLETE, the LAST pair; T72–T81, 0 of 10
+  rows X — cleanest of the ten: code blocks + check/exit-code/symptom tables
+  agree cell-for-cell; the site's only structural differences are expansions
+  (intro, verbatim note strings, anchor-honesty block, Traps, Related) and
+  the SKILL's is the 4th tuning bullet — all carried by their W/SK rows).
+  **skills↔site parity check COMPLETE — all 10 pairs, T1–T81 on disk.** T50 +
+  the T54 lambda example still C-PENDING at the W240+SK14 / W245+SK19
+  probes.)
 - Parity rows live in full-audit.md under `### parity check:` (prefix **T1+**): T1 =
   index.mdx `skills list` block vs the nine SKILL.md frontmatters (X → **G17**);
   T2–T7 = pipelines pair (T3 → **G18**); T8–T14 = api-testing pair (CLEAN all C);
@@ -217,10 +236,13 @@ and the session was restarted):
 
 ## Next move (first unit of a resuming session)
 
-**The parity check is DONE (T1–T81, all 10 pairs).** Next unit = the
-**FULL CODE REVIEW** (NOT-done item 3) — a review, NOT a fix gate: close every
-open `?` row to C/V/X in place, with the verdict carrying `file:line`
-evidence; an X row becomes a NEW G task file (G22+, same shape as G13–G16) +
+**The parity check is DONE (T1–T81, all 10 pairs) and code review group
+(a) sql is DONE (W477 X → G22; W107/W118/W132/W305/W475 C-code; W241 sql
+cell C).** Next unit = **code review group (b) auto-dispatch** (NOT-done item
+3, group (b): W134–W168, W228–W232 — includes W237's dispatch-table grep) —
+a review, NOT a fix gate: close every open `?` row to C/V/X in place, with
+the verdict carrying `file:line` evidence; an X row becomes a NEW G task file
+(next free = G23, same shape as G13–G22) +
 a plan line — no code fixes while reviewing (a fix landing mid-audit would
 make later findings stale). Method (same discipline as the pair units,
 adapted): work the priority groups **(a)–(n)** in the item-3 list below, ONE
@@ -231,10 +253,11 @@ use line numbers); checkpoint the completed group letter into the audit
 STATUS block + this file after each unit; commit `docs/audit/` (md-only) and
 push after each unit. FIRST re-read item 3's group map from "NOT done (a)"
 below (it carries the exact W-row inventory per group). Groups: (a) sql
-builtin — W107/W118/W132/W241/W305 error strings, W475/W477 stage modes,
-`$DATABASE_URL`, AND the open `$1`-as-bind question (SKILL L90 example +
-W264(4) + W460(4) vs U9/U57 — if a probe later shows `$1` expanding, BOTH
-sides get the `?` form; G18 deliberately does not close it); (b) auto-dispatch
+builtin — **DONE 2026-10-18** (W477 X → G22; W107/W118/W132/W305/W475 C-code;
+W241 sql cell C; the open `$1`-as-bind question — page L345 `$1` vs SKILL
+L65 `?`, W264(4) + W460(4) vs U9/U57 — deliberately NOT closed, stays with
+the (b) probe; if a probe later shows `$1` expanding, BOTH sides get the
+`?` form; G18 does not close it either); (b) auto-dispatch
 (W134–W168, W228–W232) — includes W237's dispatch-table grep; (c) init.ts
 loading; (d) export surface + runtime globals; (e) source-fn array flattening;
 (f) stage-error index preservation (W158 vs W266); (g) skills subsystem; (h)
