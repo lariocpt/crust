@@ -16,12 +16,12 @@ Master plan: `docs/audit/CRUST_GAPS_PLAN.md`. Original audit prompt (scope sourc
 
 ## EXACT POSITION (rolling — update this block after EVERY unit; verified on disk 2026-10-18)
 
-- Last row on disk: **T63** (parity check — builtins pair COMPLETE, both
-  windows; T46–T63, 1 of 18 rows X: T62 → **G21** (site Traps bullet 1
-  measured table, row 1 — `YjY0aW4udHh0` decodes to "b64in.txt", not the
-  annotated "in.ts"; SKILL's `aW4udHM=` is the correct encoding, settled by
-  computation); T50 + the T54 lambda example C-PENDING, carried at the W240+SK14
-  and W245+SK19 probes; 8 of 10 pairs done).
+- Last row on disk: **T71** (parity check — logs pair COMPLETE; T64–T71,
+  0 of 8 rows X; focal settled: the boot-line format `logs: <cmd> — buffering
+  last 10000 items` is the same on all three surfaces, no third variant (T66);
+  one delta — the `search` "reads" vs "interprets" regex adverb (T71) — carried
+  at W348/SK53 pending the (b) probe; T50 + the T54 lambda example still
+  C-PENDING at the W240+SK14 / W245+SK19 probes; 9 of 10 pairs done).
 - Parity rows live in full-audit.md under `### parity check:` (prefix **T1+**): T1 =
   index.mdx `skills list` block vs the nine SKILL.md frontmatters (X → **G17**);
   T2–T7 = pipelines pair (T3 → **G18**); T8–T14 = api-testing pair (CLEAN all C);
@@ -38,21 +38,19 @@ Master plan: `docs/audit/CRUST_GAPS_PLAN.md`. Original audit prompt (scope sourc
   `: sh: …` on line 1 — settled by the SAME probe queued at W217 + SK31;
   SKILL.md's Environment section is ONLY L109–118 = the 5-row table, so the
   site's env elaborations W221/W222 are site-only expansions, verified).
-- Parity queue (2 pairs left, in order): **logs** (site
-  `agent-skills/logs.mdx` ↔ `skills/crust-logs/SKILL.md` — read fresh, sizes at
-  unit start; resolve the site page's W rows via grep `title: crust-logs` and
-  the SK rows via the logs-skill section header; focal item: boot-line format
-  W344 vs W446 — `logs: <cmd>`, 10000-item buffer — check the pair is not a
-  third variant) · **verify-web-links** (site
-  `agent-skills/verify-web-links.mdx` ↔ `skills/crust-verify-web-links/SKILL.md`;
-  SK rows SK87–SK94 on disk: L10–16 check matrix, L18–22 exit codes,
-  L33–37 sitemap discovery, L39–54 "Green does not mean checked", L56–77 CI
-  `--strict`, L84–106 meta fixtures, L108–126 tuning). Then per pair: summary
-  line, STATUS + resume, commit/push. builtins pair DONE (T46–T63, 1 of 18 X):
-  T62 → G21; T50 + T54-lambda C-PENDING carried; both files list the same EIGHT
-  tool builtins (6-vs-8 resolves: AGENTS.md's six = the `parseFlags` CLI set,
-  T47); W237's dispatch-table grep stays open for the CODE REVIEW.
-  Remaining focal points: G01–G05 topics, logs-boot-line format (W344 vs W446).
+- Parity queue (1 pair left): **verify-web-links** (site
+  `agent-skills/verify-web-links.mdx` ↔ `skills/crust-verify-web-links/SKILL.md` —
+  read fresh, sizes at unit start; the SK rows are already on disk as SK87–SK94:
+  L10–16 check matrix, L18–22 exit codes, L33–37 sitemap discovery,
+  L39–54 "Green does not mean checked", L56–77 CI `--strict`, L84–106 meta
+  fixtures, L108–126 tuning; resolve the site page's W rows by grep). Then per
+  pair: summary line, STATUS + resume, commit/push — that CLOSES the parity
+  check (all 10 pairs). logs pair DONE (T64–T71, 0 of 8 X — the pair agrees on
+  every quoted message; the boot-line focal found no third variant, T66; the
+  `search` adverb delta T71 is carried, not an X). builtins pair DONE (T46–T63,
+  1 of 18 X): T62 → G21; T50 + T54-lambda C-PENDING carried; both files list the
+  same EIGHT tool builtins (6-vs-8 resolves: AGENTS.md's six = the `parseFlags`
+  CLI set, T47); W237's dispatch-table grep stays open for the CODE REVIEW.
 - Component rows (M1–M17) live under `### website components` between the W602 row and
   the `### parity check:` heading: M1–M6 Hero · M7–M11 InstallBlock+site.ts ·
   M12 CodeSwitcher · M13 Header · M14 Sidebar · M15 Footer · M16 RecipeCard · M17
@@ -217,25 +215,20 @@ and the session was restarted):
 
 ## Next move (first unit of a resuming session)
 
-Continue the **skills↔site parity check** (NOT-done item 2; T1–T63 already on disk):
-next unit = **logs pair** (8 of 10 pairs done) — site
-`src/pages/docs/agent-skills/logs.mdx` ↔ repo
-`skills/crust-logs/SKILL.md`, read fresh (get both sizes at unit start; one or
-two ≤160 L windows each). FIRST resolve row IDs on disk: the site page's W rows
-(grep `title: crust-logs` in the W-section of full-audit.md) and SKILL.md's
-SK rows (grep the logs-skill section header under the nine-skills area of
-`### crust repo docs`). Write T64+ rows immediately after the builtins pair
-summary in the `### parity check:` section (the **T1+** prefix continues).
-Focal item: boot-line format parity — W344 vs W446 (`logs: <cmd>`, the
-10000-item buffer): both page-level rows are on disk; check the site↔skill
-pair is not a third variant of the format. Then the pair summary line, STATUS
-+ resume update, commit/push. Then the LAST pair: verify-web-links (site
-`agent-skills/verify-web-links.mdx` ↔
-`skills/crust-verify-web-links/SKILL.md`; SK rows SK87–SK94 on disk:
-L10–16 check matrix, L18–22 exit codes, L33–37 sitemap discovery,
-L39–54 "Green does not mean checked", L56–77 CI `--strict`, L84–106 meta
-fixtures, L108–126 tuning). Method unchanged: one pair per unit, rows per window,
+Continue the **skills↔site parity check** (NOT-done item 2; T1–T71 already on disk):
+next unit = **verify-web-links pair — the LAST pair** (9 of 10 pairs done) — site
+`src/pages/docs/agent-skills/verify-web-links.mdx` ↔ repo
+`skills/crust-verify-web-links/SKILL.md`, read fresh (get both sizes at unit
+start; one or two ≤160 L windows each). FIRST resolve row IDs on disk: the site
+page's W rows (grep `title: crust-verify-web-links` in the W-section of
+full-audit.md) — the SK rows are already on disk as SK87–SK94 (L10–16 check
+matrix, L18–22 exit codes, L33–37 sitemap discovery, L39–54 "Green does not
+mean checked", L56–77 CI `--strict`, L84–106 meta fixtures, L108–126 tuning).
+Write T72+ rows immediately after the logs pair summary in the `### parity
+check:` section (the **T1+** prefix continues). Cross-ref on disk: W600 (site
+recipe page, the 4-line pre-deploy gate — CONFIRMED, **G16**) and the G16 file.
+Then the pair summary line, STATUS + resume update, commit/push — that CLOSES
+the parity check (all 10 pairs done). Method unchanged: one pair per unit, rows per window,
 update the audit STATUS block + this EXACT POSITION after each pair, commit
 `docs/audit/` (md-only) and push after each unit. Remaining focal points: G01–G05
-topics, logs-boot-line format parity (W344 vs W446). Then code review (item 3), then
-fresh build + probes (item 4) → (b)–(e).
+topics. Then code review (item 3), then fresh build + probes (item 4) → (b)–(e).
