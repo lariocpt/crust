@@ -16,33 +16,28 @@ Master plan: `docs/audit/CRUST_GAPS_PLAN.md`. Original audit prompt (scope sourc
 
 ## EXACT POSITION (rolling — update this block after EVERY unit; verified on disk 2026-10-18)
 
-- Last unit on disk: **code review group (a) sql, COMPLETE 2026-10-18**
-  (src/builtinFns/sql.ts, 90 L, read in full): W477 **X → G22** (page L335
-  "the upstream item is *not* auto-bound, so reach for a lambda…" contradicted
-  by `sqlStage` L66–74 — the item binds as the FIRST parameter when the line
-  declares none (L72); the L68–71 comment records the pre-fix "dropped on the
-  floor" behavior the page still describes; the builtins SKILL L54 + the
-  builtins-page item table (W241) already state the current contract; G22 file
-  in gaps/ + census + plan line all on disk). W107 C (the `sql` builtin
-  EXISTS — the sql row family's existence gate is lifted), W118 C ("no
-  Bun.SQL" = leading fragment of the exact L33 string), W132 C (all three
-  error strings byte-exact: L21/L33/L40), W305 C (code half; the
-  offline-sqlite runtime probe stays (b)), W475 C (code half — the
-  shared-client question resolves per the page's "or at least the shared
-  DATABASE_URL source" hedge; the scratch-DB runtime probe stays (b)), W241
-  sql cell C (bind-as-first-parameter = L72 verbatim; the other five cells
-  close in their file-reading groups — base64 → (h), salt/jwt/bundle → (d),
-  wait → (l); the row stays `?` overall). The `$1`-vs-`?` placeholder
-  question (page L345 `$1` vs SKILL L65 `?`) is NOT settled here — it stays
-  with the (b) probe. Last ROW on disk before this unit: **T81** (parity
-  check — verify-web-links pair COMPLETE, the LAST pair; T72–T81, 0 of 10
-  rows X — cleanest of the ten: code blocks + check/exit-code/symptom tables
-  agree cell-for-cell; the site's only structural differences are expansions
-  (intro, verbatim note strings, anchor-honesty block, Traps, Related) and
-  the SKILL's is the 4th tuning bullet — all carried by their W/SK rows).
-  **skills↔site parity check COMPLETE — all 10 pairs, T1–T81 on disk.** T50 +
-  the T54 lambda example still C-PENDING at the W240+SK14 / W245+SK19
-  probes.)
+- Last unit on disk: **code review group (b) auto-dispatch, COMPLETE 2026-10-18**
+  (sources read in full: src/discover.ts 170 L, src/config.ts 109 L; plus
+  parser.ts dispatch/buildSource/applyStage regions, runLine.ts dispatch head,
+  index.ts bootstrap, builtins.ts record, lexer.ts time region, builtinFns/):
+  all 40 rows adjudicated — W134–W168 + W228–W232 + W237. C: W134–W140,
+  W142, W145–W146, W148–W151, W154, W155 (bash half), W157, W159–W162,
+  W165–W167, W228–W232, W237 (subs 1–3); W168 R. Deliberately `?`
+  (probe-owned halves, queued in (b)): W137 (slugify canonical loop), W143
+  (bash tour), W147 (glob-as-source + bare `read`), W152 (bare `[` bracket
+  token — lexer/G02 territory; the row goes X if the grammar refuses), W158
+  (stage-error index — the (f) group W158-vs-W266), W163 (npm-resolution at
+  scale), W164 (prettier output). X: W141 → **G23** (npm-packages L37–40/
+  L183–185 source position `pkg(undefined, "arg1")` — parser.ts L298–313
+  invokes `fn(...staticArgs)`, item slot ABSENT; transform half C; W154
+  duplicate covered); W144's X cell extended with the case sub-claim
+  (severity still pending U129). G23 file in gaps/ + census + (e) + plan line
+  all on disk. Last unit before this one: **group (a) sql, COMPLETE** (W477
+  X → G22; W107/W118/W132/W305/W475 C-code; W241 sql cell C; the
+  `$1`-vs-`?` placeholder question — page L345 `$1` vs SKILL L65 `?` —
+  deliberately NOT closed, stays with the (b) probe). The skills↔site parity
+  check remains COMPLETE (T1–T81, all 10 pairs; T50 + the T54 lambda example
+  still C-PENDING at the W240+SK14 / W245+SK19 probes).
 - Parity rows live in full-audit.md under `### parity check:` (prefix **T1+**): T1 =
   index.mdx `skills list` block vs the nine SKILL.md frontmatters (X → **G17**);
   T2–T7 = pipelines pair (T3 → **G18**); T8–T14 = api-testing pair (CLEAN all C);
@@ -236,13 +231,14 @@ and the session was restarted):
 
 ## Next move (first unit of a resuming session)
 
-**The parity check is DONE (T1–T81, all 10 pairs) and code review group
-(a) sql is DONE (W477 X → G22; W107/W118/W132/W305/W475 C-code; W241 sql
-cell C).** Next unit = **code review group (b) auto-dispatch** (NOT-done item
-3, group (b): W134–W168, W228–W232 — includes W237's dispatch-table grep) —
-a review, NOT a fix gate: close every open `?` row to C/V/X in place, with
-the verdict carrying `file:line` evidence; an X row becomes a NEW G task file
-(next free = G23, same shape as G13–G22) +
+**The parity check is DONE (T1–T81, all 10 pairs) and code review groups
+(a) sql (W477 X → G22; W107/W118/W132/W305/W475 C-code; W241 sql cell C)
+and (b) auto-dispatch (all 40 rows; W141 X → G23) are DONE.** Next unit =
+**code review group (c) init.ts loading** (NOT-done item 3, group (c):
+W129/W131/W146/W150/W160/W162 + W465) — a review, NOT a fix gate: close every
+open `?` row to C/V/X in place, with the verdict carrying `file:line`
+evidence; an X row becomes a NEW G task file (next free = G24, same shape as
+G13–G23) +
 a plan line — no code fixes while reviewing (a fix landing mid-audit would
 make later findings stale). Method (same discipline as the pair units,
 adapted): work the priority groups **(a)–(n)** in the item-3 list below, ONE
@@ -257,9 +253,15 @@ builtin — **DONE 2026-10-18** (W477 X → G22; W107/W118/W132/W305/W475 C-code
 W241 sql cell C; the open `$1`-as-bind question — page L345 `$1` vs SKILL
 L65 `?`, W264(4) + W460(4) vs U9/U57 — deliberately NOT closed, stays with
 the (b) probe; if a probe later shows `$1` expanding, BOTH sides get the
-`?` form; G18 does not close it either); (b) auto-dispatch
-(W134–W168, W228–W232) — includes W237's dispatch-table grep; (c) init.ts
-loading; (d) export surface + runtime globals; (e) source-fn array flattening;
+`?` form; G18 does not close it either); (b) auto-dispatch (W134–W168,
+W228–W232) — **DONE 2026-10-18** (all 40 rows; W141 X → G23; the 7
+probe-owned `?` halves — W137/W143/W147/W152/W158/W163/W164 — land in the (b)
+probe run); (c) init.ts loading → W129/W131/W146/W150/W160/W162 + W465 (NOTE:
+the load mechanism is already on disk — config.ts L101–108 dynamic import,
+silent `MODULE_NOT_FOUND`/`ENOENT`, warn+continue otherwise — so (c) is the
+npm-resolution adjudication against that mechanism, W131/G13 family; W146/
+W150/W160/W162 closed C in (b) with exactly this half deferred here; do NOT
+re-read settled files); (d) export surface + runtime globals; (e) source-fn array flattening;
 (f) stage-error index preservation (W158 vs W266); (g) skills subsystem; (h)
 base64 `--file`/`--out` main-vs-published (W244/W252); (i) tool-builtin
 redirect refusal + `&` refusal; (j) genFixtures subpath export; (k)
