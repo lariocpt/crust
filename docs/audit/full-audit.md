@@ -14,7 +14,7 @@ Structure:
 Status legend for claims: `V` verified by probe, `C` confirmed in code (no probe needed),
 `X` claim contradicted (finding opened), `?` unresolved.
 
-**STATUS (2026-10-18 checkpoint — audit IN PROGRESS at skills↔site parity check, T1–T27 on disk; NOT closed).**
+**STATUS (2026-10-18 checkpoint — audit IN PROGRESS at skills↔site parity check, T1–T33 on disk; NOT closed).**
 (a) page-level complete: R1–R26, U1–U134, I1–I5, A1, C1–C24, P1–P17, S1–S10, AG1–AG11,
 SK1–SK94, W1–W602 (all 29 website pages; W602 = verify-web-links recipe L185–188, page end).
 (a) NOT done: skills↔site parity check · full code review (close every `?`) · fresh build +
@@ -24,7 +24,10 @@ Footer/RecipeCard/FeatureCard — 15 C/R-C, M1+M4 probes queued in (b), no X).
 **Exact position: skills↔site parity check IN PROGRESS — T1–T27 on disk** (T1 index
 `skills list` block vs the nine frontmatters → G17; T2–T7 = pipelines pair, T3 → G18;
 T8–T14 = api-testing pair, CLEAN; T15–T21 = load-testing pair, T20 → G19;
-T22–T27 = mock-server pair, T26 → G20; 5 of 10 units left: procs, cli, builtins,
+T22–T27 = mock-server pair, T26 → G20; T28–T33 = procs pair, NO X — T33
+C-PENDING: the redirect-mechanism wording conflict (site "evaluated as
+JavaScript" ×2 pages vs SKILL "read as data by a pipeline stage") is settled by
+the W364(4) + SK86 probes queued in (b); 4 of 10 units left: cli, builtins,
 logs, verify-web-links).
 Page-level (a) unchanged: W602 was the last W-row (recipe boundaries: stress-testing
 W549–W568 · dev-tail W569–W582 · heap-snapshots W583–W591 · verify-web-links recipe
@@ -1379,6 +1382,23 @@ is missing the required `(r => r.json())` decode stage; the skill calls it
 rows C: every semantic matches the SKILL.md condensed, every omission is
 carried by a page-level row (U102–U106, SK59/SK61/SK65/SK66, W521–W524) with
 its probe queued.
+
+#### pair: procs — site `agent-skills/procs.mdx` (62 L) ↔ `skills/crust-procs/SKILL.md` (108 L), both fully read 2026-10-18
+
+| # | pair / claim | status |
+|---|-------|--------|
+| T28 | Intro + `procs()` one-tail example + the stream set (site L7–15 vs SKILL L8–16) | C (the example line `procs({web: "bun run dev", api: "bun api.ts"}) \| (l => l.proc + " \| " + l.line)` is verbatim-identical (site L12 = SKILL L11). "Every stdout and stderr line becomes `{proc, stream, line}` — a **pipeline item, not text** … Streams are `stdout`, `stderr`, `exit`, `ready` and `live`" = SKILL L14–16 with the IDENTICAL stream set — note the site skill page includes `live` (the dev-tail recipe page's Knobs section omits it; that is W581 → G14, a page-level finding, not a parity one). The site intro sentence is page framing, consistent.) |
+| T29 | Full spec form + the five spec bullets (site L17–27 vs SKILL L18–59) | C (the full-spec line (site L20) is verbatim-identical to SKILL L21. All five site bullets condense their SKILL twins without contradiction: `ready:` (timeout → restartable kill+respawn / non-restartable FAILS the pipeline = SKILL L34–42), `live:` (arms once up; the three `live`-stream line shapes named verbatim = SKILL L43–53), `after:` (name or list; unknown names / self-deps / cycles throw before anything spawns = SKILL L54–57), `restart: true` (250ms→2s backoff; >10s uptime **while ready** resets; Ctrl-C never respawns = SKILL L25–33), Teardown (own process groups; SIGTERM, 3s grace, SIGKILL = SKILL L58–59). Omissions, all carried page-level with probes queued: the `env` bullet (W571); `ready:` long form + defaults + the `timeoutMs`-inside-the-object trap — "a `timeoutMs` next to `cmd` is silently ignored → waits full 30s" (U27 + W574 + SK81); `live:` long form + the "use `url:` here — a `port:` probe can't see a wedged listener (503-for-4s run exited 0)" trap + fatal-streak semantics (U27 + W572 + SK82); `after:`'s "no `ready:` on the dep = ready at spawn" + one-shot gate (W575 + SK83); **`restart: {max: N}`'s "Giving up is not a failure" — `giving up after N restart(s)` is an `exit`-stream line and the line still exits 0, plus the CI gate one-liner** (U26 + SK80, probe queued: `restart: {max: 1}` over a child that exits 1 → `giving up` line + exit 0; W573's probe (3) covers the post-give-up pipeline behaviour). No contradiction; the site is a faithful condensation.) |
+| T30 | "Log mining on the merged stream" — the mining example + the `logs` session (site L29–43 vs SKILL L61–78) | C (the mining line (site L34) is verbatim-identical to SKILL L64 (the `JSON.parse(l.line)`-with-fallback → `filter (e => e.level >= 40)` → `"WARN+ " + …` chain). "Note the `filter` — a plain lambda returning `null` … would print a literal `null` line" = SKILL L67–68. The `logs` session block (site L42 `logs procs({api: "bun api.ts", worker: "bun worker.ts"})`) = SKILL L74–75. Omissions carried: "Objects printed to stdout are JSON lines — pipe into `pino-pretty` via a shell stage" (W580 + SK84); the `logs` session's example queries, "Items stay `{proc, stream, line}` objects", "`exit`/Ctrl-D tears the group down (SIGTERM→SIGKILL)" (W578/W579 + SK84). No contradiction.) |
+| T31 | "wait — readiness as a one-liner" (site L45–51 vs SKILL L80–93) | C (the example line `wait :3001/api/health --timeout 40s --interval 2s` is verbatim-identical (site L48 = SKILL L83). "emits `{target, ready: true, ms, attempts}` and exits 0; not ready in time is an error and exit 1" = SKILL L86–88; "replaces hand-rolled curl-and-sleep retry loops in CI" = SKILL L91–92. Omissions carried: the `port:5432` TCP form, durations `300ms`/`30s`/`2m` (defaults 30s/500ms), `--probe-timeout` (W576/W577 + SK85); "works in the REPL, `crust -c`, and `.pipes` files" + env-expanded args (W577 + SK85). No contradiction.) |
+| T32 | "Traps" — bullets 1–3 (site L53–57 vs SKILL L95–104) | C (bullet 1: site "it must be the first stage, and spec keys must be unique names" vs SKILL "source-only (first stage). Spec keys are JS object-literal keys, so a duplicate collapses BEFORE crust sees it (`{a: "x", a: "y"}` runs only `y`) — nothing warns you": the site states the requirement, SKILL adds the silent-collapse mechanism (no contradiction — the requirement is true either way; the mechanism probe is queued at SK86 "duplicate-key collapse" and W364(1)). Bullet 2 never-ends/bound/Ctrl-C = SKILL L100–103 condensed (site omits "consume it with `for await`/pipe" and the REPL group-teardown detail). Bullet 3 `FORCE_COLOR=0` = verbatim. SK86 + W364 carry both sides' probes. Related (site L60–62): internal links to dev-tail + log-mining — both targets exist and are audited; check-links covers them.) |
+| T33 | "Traps" — bullet 4, the redirect/capture trap (site L58 vs SKILL L105–108) | C-PENDING (the two pages state DIFFERENT mechanisms for why a bare `procs(...) > file` fails, and both site pages agree with each other: site (L58, verbatim from the dev-tail recipe's Traps — W364(4) quotes it): "the `>` lands inside the `procs(...)` expression and is evaluated as JavaScript" vs SKILL L106–108: "crust has no redirect on its own stages (the `>` would be read as data by a pipeline stage); the outer shell can still wrap the whole invocation". The page-level audit already holds the settling probes on BOTH sides: W364(4) — run bare `procs({x:"echo hi"}) > file`, "capture what actually happens (a `false` item? an error? and the file's content if any)" — and SK86 — "the `> file` refusal message" (W250 carries crust's own refusal text for the `sql` variant: "crust has no redirect except on a shell stage … a sql stage would read it as data"). Parity between the two SITE pages holds verbatim; the site↔SKILL wording conflict is a live mechanism question, NOT a settled X — no G until the (b) probes land. If the probe shows JS-evaluation is the real behaviour, SKILL.md L106–108 needs the fix; if "read as data", both site pages (skill page L58 + dev-tail Traps) need it.) |
+
+**procs pair: 0 of 6 rows X** — all C; T33 is C-PENDING with the
+mechanism question cross-referenced to W364(4) + SK86 (+ W250), whose (b)
+probes settle which redirect-mechanism wording is real. Every other omission
+is carried by a page-level row (U25–U28, W570–W580, SK80–SK86) with its probe
+queued. No new G.
 
 ---
 

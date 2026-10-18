@@ -16,8 +16,8 @@ Master plan: `docs/audit/CRUST_GAPS_PLAN.md`. Original audit prompt (scope sourc
 
 ## EXACT POSITION (rolling — update this block after EVERY unit; verified on disk 2026-10-18)
 
-- Last row on disk: **T27** (parity check — mock-server pair complete, T26 → G20;
-  5 of 10 units done).
+- Last row on disk: **T33** (parity check — procs pair complete, NO X; T33
+  C-PENDING on the redirect-mechanism probes W364(4)+SK86; 6 of 10 units done).
 - Parity rows live in full-audit.md under `### parity check:` (prefix **T1+**): T1 =
   index.mdx `skills list` block vs the nine SKILL.md frontmatters (X → **G17**);
   T2–T7 = pipelines pair (T3 → **G18**); T8–T14 = api-testing pair (CLEAN all C);
@@ -25,10 +25,13 @@ Master plan: `docs/audit/CRUST_GAPS_PLAN.md`. Original audit prompt (scope sourc
   short-circuit; same sentence in ci-load-gates.mdx L163, W543 `?` pending its (b)
   probe); T22–T27 = mock-server pair (T26 → **G20** — conformance-gate line missing
   the required `(r => r.json())` decode stage; the site's own recipe page has it in
-  both places, L482/L521).
-- Parity queue (remaining 5 pairs, in order): **procs** (site
-  `agent-skills/procs.mdx` 62 L ↔ `skills/crust-procs/SKILL.md` 108 L, both single
-  windows) · cli · builtins · logs · verify-web-links.
+  both places, L482/L521); T28–T33 = procs pair (NO X — all C; T33 C-PENDING:
+  site "evaluated as JavaScript" ×2 pages vs SKILL "read as data by a pipeline
+  stage" for bare `procs(...) > file` — settled by the W364(4) + SK86 (b) probes;
+  no G until they land).
+- Parity queue (remaining 4 pairs, in order): **cli** (site
+  `agent-skills/cli.mdx` 256 L ↔ `skills/crust-cli/SKILL.md` 175 L — TWO ≤160 L
+  windows each: 1–160, 161–end) · builtins · logs · verify-web-links.
   Remaining focal points: G01–G05 topics, builtins-list coverage (8 builtins incl.
   `test-fixture`), logs-boot-line format (W344 vs W446).
 - Component rows (M1–M17) live under `### website components` between the W602 row and
@@ -195,12 +198,13 @@ and the session was restarted):
 
 ## Next move (first unit of a resuming session)
 
-Continue the **skills↔site parity check** (NOT-done item 2; T1–T27 already on disk):
-next unit = the **procs pair** — site
-`src/pages/docs/agent-skills/procs.mdx` (62 L) ↔ repo
-`skills/crust-procs/SKILL.md` (108 L). Read both in ≤160 L windows, write T28+
-rows into the `### parity check:` section of full-audit.md immediately after the T27
-row (prefix **T1+** continues), then: cli, builtins, logs,
+Continue the **skills↔site parity check** (NOT-done item 2; T1–T33 already on disk):
+next unit = the **cli pair** — site
+`src/pages/docs/agent-skills/cli.mdx` (256 L) ↔ repo
+`skills/crust-cli/SKILL.md` (175 L). Read each in TWO ≤160 L windows
+(1–160, then 161–end), writing rows after each window is safe; write T34+
+rows into the `### parity check:` section of full-audit.md immediately after the T33
+row (prefix **T1+** continues), then: builtins, logs,
 verify-web-links. Method unchanged: one pair per unit, rows per window,
 update the audit STATUS block + this EXACT POSITION after each pair, commit
 `docs/audit/` (md-only) and push after each unit. Remaining focal points: G01–G05
