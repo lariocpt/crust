@@ -16,7 +16,18 @@ Master plan: `docs/audit/CRUST_GAPS_PLAN.md`. Original audit prompt (scope sourc
 
 ## EXACT POSITION (rolling — update this block after EVERY unit; verified on disk 2026-10-18)
 
-- Last unit on disk: **G13 investigation (user-directed, 2026-10-18) — COMPLETE** —
+- Last unit on disk: **code review group (c) REMAINDER (W465), COMPLETE 2026-10-18** —
+  src/testPipes/runner.ts read in full (180 L): W465 code-half C (per-file
+  hermeticity — `freshContext()` L33–41 called inside the per-file loop (L133):
+  fresh `aliases`/`functions` Maps + `registerBuiltinFns` (L39) = "builtin fns
+  registered, no shared alias state"; the init.ts import (config.ts L101–108) is
+  a bootstrap job the test-pipes path never enters = "no init.ts"; env snapshot
+  L128 before `runSetup` (L130) + FULL restore in the `finally` (L166–171) per
+  file even on failure = "snapshotted before setup and restored when the file
+  finishes"; probe trio stays in (b); row remains ? overall). **Group (c)
+  COMPLETE** (W129 X, W131 C, W146/W150/W163/W164 consumed, W160/W162 C, W465
+  code-half C). No new G; next free = G24.
+  Last unit before this one: **G13 investigation (user-directed, 2026-10-18) — COMPLETE** —
   the two pending questions (is the no-npm-resolution constraint empirical? does
   any channel make the page's pattern work?) answered by fresh probes on a fresh
   build (`bin/crust-bin` 21:36, sha256 `947d2f4dd62e6705…`, Bun v1.4.3; full
@@ -111,7 +122,7 @@ Master plan: `docs/audit/CRUST_GAPS_PLAN.md`. Original audit prompt (scope sourc
      (honest-failure controls intact?) + `npm/` (read-only) — **close every `?` row**.
      Priorities: (a) sql builtin existence + W107/W118/W132/W241/W305 error strings +
      W475/W477 sql stage modes, sql reads `$DATABASE_URL`; (b) auto-dispatch subsystem
-     (W134–W168, W228–W232); (c) init.ts loading → W129 X CONFIRMED + W131 C + W146/W150/W163/W164 halves consumed (G13 investigation 2026-10-18) — REMAINING: W465 (per-file hermeticity: runner context EXCLUDES init.ts, env snapshot/restore; probe trio queued in (b));
+     (W134–W168, W228–W232); (c) init.ts loading — **DONE 2026-10-18** (W129 X CONFIRMED + W131 C + W146/W150/W163/W164 halves consumed via the G13 investigation; W465 code-half C — src/testPipes/runner.ts in full; its probe trio queued in (b));
      (d) export surface + runtime globals (W227, U129) — wait/logs/search/buffer/clear session
      commands + test-pipes/test-fixture/gen-fixtures/verify-web-links/mock-server dispatch
      entries + exact flag sets + expectStage/expect export names (W474) + readAll export
@@ -249,22 +260,23 @@ and the session was restarted):
 
 ## Next move (first unit of a resuming session)
 
-**The parity check is DONE (T1–T81, all 10 pairs), code review groups
-(a) sql (W477 X → G22; W107/W118/W132/W305/W475 C-code; W241 sql cell C)
-and (b) auto-dispatch (all 40 rows; W141 X → G23) are DONE, and group (c)'s
-CORE IS CONSUMED: the user-directed G13 investigation (2026-10-18, fresh
-build `bin/crust-bin` sha256 `947d2f4dd62e6705…`, Bun v1.4.3) answered W129
-(X CONFIRMED — the npm package has NO importable entry: no exports/main/index,
-only `bin`; P5 + controls C1/C2) and W131 (C — the AGENTS.md "no npm
-resolution" line is empirically refuted: the compiled binary does standard
-node_modules resolution walking up from the user file; P1b/P2 green, P4 the
-standard negative, P1a the CJS named-import caveat) with fresh probes, and
-consumed the parked npm-resolution halves at W146/W150/W163/W164.**
-Next unit = **code review group (c) REMAINDER = W465** (per-file hermeticity:
-does the test-pipes runner context EXCLUDE init.ts, and where is the
-process.env snapshot/restore — the code half reads src/testPipes/runner.ts and
-whatever owns the snapshot; its probe trio stays queued in (b)) — a review,
-NOT a fix gate: close every
+**The parity check is DONE (T1–T81, all 10 pairs) and code review groups
+(a) sql (W477 X → G22; W107/W118/W132/W305/W475 C-code; W241 sql cell C),
+(b) auto-dispatch (all 40 rows; W141 X → G23) and (c) init.ts loading
+(W129 X CONFIRMED + W131 C via the user-directed G13 investigation 2026-10-18,
+fresh build `bin/crust-bin` sha256 `947d2f4dd62e6705…`, Bun v1.4.3, probes
+P1a/P1b/P2/P3a/P4/P5 + C1/C2 in full-audit.md §(b); W146/W150/W163/W164
+halves consumed; W160/W162 C; W465 code-half C in the W465 unit —
+src/testPipes/runner.ts in full: per-file freshContext L33–41 at L133, env
+snapshot L128 + full finally-restore L166–171; probe trio stays in (b)) are
+ALL DONE.**
+Next unit = **code review group (d) export surface + runtime globals**
+(item-3 group (d): W227, U129 — wait/logs/search/buffer/clear session commands
++ test-pipes/test-fixture/gen-fixtures/verify-web-links/mock-server dispatch
+entries + exact flag sets + expectStage/expect export names (W474) + readAll
+export (W455) + Pipeline.of (W476) + arity hard error since 0.2.4 (W468) +
+timedGet/statsStage/load-as-array-source (W531) + sort-stage presence (W551))
+— a review, NOT a fix gate: close every
 open `?` row to C/V/X in place, with the verdict carrying `file:line`
 evidence; an X row becomes a NEW G task file (next free = G24, same shape as
 G13–G23) +
@@ -285,12 +297,11 @@ the (b) probe; if a probe later shows `$1` expanding, BOTH sides get the
 `?` form; G18 does not close it either); (b) auto-dispatch (W134–W168,
 W228–W232) — **DONE 2026-10-18** (all 40 rows; W141 X → G23; the 7
 probe-owned `?` halves — W137/W143/W147/W152/W158/W163/W164 — land in the (b)
-probe run); (c) init.ts loading → W129 X CONFIRMED / W131 C / W146+W150(+
-W163/W164) halves consumed by the G13 investigation 2026-10-18 (load
-mechanism on disk — config.ts L101–108; full probe record P1a/P1b/P2/P3a/P4/
-P5 + C1/C2 in full-audit.md §(b); the stale AGENTS.md line is now part of
-G13's fix) — REMAINDER: W465 (per-file hermeticity — runner context EXCLUDES
-init.ts + env snapshot/restore; probe trio in (b)); (d) export surface +
+probe run); (c) init.ts loading — **DONE 2026-10-18** (W129 X CONFIRMED /
+W131 C via the G13 investigation 2026-10-18; W146+W150(+W163/W164) halves
+consumed; W160/W162 C; W465 code-half C — runner.ts in full: freshContext
+L33–41 at L133, env snapshot L128 + finally-restore L166–171, no init.ts
+(bootstrap only); probe trio in (b)); (d) export surface +
 runtime globals; (e) source-fn array flattening;
 (f) stage-error index preservation (W158 vs W266); (g) skills subsystem; (h)
 base64 `--file`/`--out` main-vs-published (W244/W252); (i) tool-builtin
