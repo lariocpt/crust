@@ -16,7 +16,25 @@ Master plan: `docs/audit/CRUST_GAPS_PLAN.md`. Original audit prompt (scope sourc
 
 ## EXACT POSITION (rolling — update this block after EVERY unit; verified on disk 2026-10-18)
 
-- Last unit on disk: **code review group (b) auto-dispatch, COMPLETE 2026-10-18**
+- Last unit on disk: **G13 investigation (user-directed, 2026-10-18) — COMPLETE** —
+  the two pending questions (is the no-npm-resolution constraint empirical? does
+  any channel make the page's pattern work?) answered by fresh probes on a fresh
+  build (`bin/crust-bin` 21:36, sha256 `947d2f4dd62e6705…`, Bun v1.4.3; full
+  commands/outputs/exit codes in full-audit.md §(b) "G13 investigation probes"):
+  (1) the AGENTS.md constraint is REFUTED — plain dynamic `import(absolutePath)`
+  (testFixture/runner.ts L20; config.ts L101–108) + the compiled binary's standard
+  node_modules resolution walking UP from the user file (P2 init.ts `left-pad` →
+  `000hi` exit 0; P1b fixture PASS exit 0; P4 standard location-dependent negative;
+  P1a CJS named-import caveat); (2) `import "crust"` has NO importable entry
+  (npm/package.json: no exports/main/module/index, only `bin`) — P5 + no-entry
+  control C2 vs positive control C1. Verdicts: W129 X CONFIRMED (claim 1; claim 2
+  C-by-delegation), W131 C (clash resolves in the page's favor; the stale
+  AGENTS.md line joins G13's fix scope), the four parked npm-resolution halves at
+  W146/W150/W163/W164 consumed (addenda in-cell). G13 file rewritten (Q1–Q3
+  answered; Fix revised to include AGENTS.md + the two page edits + db-drivers if
+  repeated). Census updated. No new G (G13 absorbs; next free = G24).
+  Last unit before this one: **code review group (b) auto-dispatch, COMPLETE
+  2026-10-18**
   (sources read in full: src/discover.ts 170 L, src/config.ts 109 L; plus
   parser.ts dispatch/buildSource/applyStage regions, runLine.ts dispatch head,
   index.ts bootstrap, builtins.ts record, lexer.ts time region, builtinFns/):
@@ -93,7 +111,7 @@ Master plan: `docs/audit/CRUST_GAPS_PLAN.md`. Original audit prompt (scope sourc
      (honest-failure controls intact?) + `npm/` (read-only) — **close every `?` row**.
      Priorities: (a) sql builtin existence + W107/W118/W132/W241/W305 error strings +
      W475/W477 sql stage modes, sql reads `$DATABASE_URL`; (b) auto-dispatch subsystem
-     (W134–W168, W228–W232); (c) init.ts loading → W129/W131/W146/W150/W160/W162 + W465;
+     (W134–W168, W228–W232); (c) init.ts loading → W129 X CONFIRMED + W131 C + W146/W150/W163/W164 halves consumed (G13 investigation 2026-10-18) — REMAINING: W465 (per-file hermeticity: runner context EXCLUDES init.ts, env snapshot/restore; probe trio queued in (b));
      (d) export surface + runtime globals (W227, U129) — wait/logs/search/buffer/clear session
      commands + test-pipes/test-fixture/gen-fixtures/verify-web-links/mock-server dispatch
      entries + exact flag sets + expectStage/expect export names (W474) + readAll export
@@ -231,11 +249,22 @@ and the session was restarted):
 
 ## Next move (first unit of a resuming session)
 
-**The parity check is DONE (T1–T81, all 10 pairs) and code review groups
+**The parity check is DONE (T1–T81, all 10 pairs), code review groups
 (a) sql (W477 X → G22; W107/W118/W132/W305/W475 C-code; W241 sql cell C)
-and (b) auto-dispatch (all 40 rows; W141 X → G23) are DONE.** Next unit =
-**code review group (c) init.ts loading** (NOT-done item 3, group (c):
-W129/W131/W146/W150/W160/W162 + W465) — a review, NOT a fix gate: close every
+and (b) auto-dispatch (all 40 rows; W141 X → G23) are DONE, and group (c)'s
+CORE IS CONSUMED: the user-directed G13 investigation (2026-10-18, fresh
+build `bin/crust-bin` sha256 `947d2f4dd62e6705…`, Bun v1.4.3) answered W129
+(X CONFIRMED — the npm package has NO importable entry: no exports/main/index,
+only `bin`; P5 + controls C1/C2) and W131 (C — the AGENTS.md "no npm
+resolution" line is empirically refuted: the compiled binary does standard
+node_modules resolution walking up from the user file; P1b/P2 green, P4 the
+standard negative, P1a the CJS named-import caveat) with fresh probes, and
+consumed the parked npm-resolution halves at W146/W150/W163/W164.**
+Next unit = **code review group (c) REMAINDER = W465** (per-file hermeticity:
+does the test-pipes runner context EXCLUDE init.ts, and where is the
+process.env snapshot/restore — the code half reads src/testPipes/runner.ts and
+whatever owns the snapshot; its probe trio stays queued in (b)) — a review,
+NOT a fix gate: close every
 open `?` row to C/V/X in place, with the verdict carrying `file:line`
 evidence; an X row becomes a NEW G task file (next free = G24, same shape as
 G13–G23) +
@@ -256,12 +285,13 @@ the (b) probe; if a probe later shows `$1` expanding, BOTH sides get the
 `?` form; G18 does not close it either); (b) auto-dispatch (W134–W168,
 W228–W232) — **DONE 2026-10-18** (all 40 rows; W141 X → G23; the 7
 probe-owned `?` halves — W137/W143/W147/W152/W158/W163/W164 — land in the (b)
-probe run); (c) init.ts loading → W129/W131/W146/W150/W160/W162 + W465 (NOTE:
-the load mechanism is already on disk — config.ts L101–108 dynamic import,
-silent `MODULE_NOT_FOUND`/`ENOENT`, warn+continue otherwise — so (c) is the
-npm-resolution adjudication against that mechanism, W131/G13 family; W146/
-W150/W160/W162 closed C in (b) with exactly this half deferred here; do NOT
-re-read settled files); (d) export surface + runtime globals; (e) source-fn array flattening;
+probe run); (c) init.ts loading → W129 X CONFIRMED / W131 C / W146+W150(+
+W163/W164) halves consumed by the G13 investigation 2026-10-18 (load
+mechanism on disk — config.ts L101–108; full probe record P1a/P1b/P2/P3a/P4/
+P5 + C1/C2 in full-audit.md §(b); the stale AGENTS.md line is now part of
+G13's fix) — REMAINDER: W465 (per-file hermeticity — runner context EXCLUDES
+init.ts + env snapshot/restore; probe trio in (b)); (d) export surface +
+runtime globals; (e) source-fn array flattening;
 (f) stage-error index preservation (W158 vs W266); (g) skills subsystem; (h)
 base64 `--file`/`--out` main-vs-published (W244/W252); (i) tool-builtin
 redirect refusal + `&` refusal; (j) genFixtures subpath export; (k)
