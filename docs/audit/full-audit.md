@@ -36,7 +36,8 @@ is NOT done.
 X census (claim contradicted / X-candidate): R24 (stale FOO=x prose — FIXED `0b15108`), W129/W131
 (init.ts npm-resolution clash), W153 (range(0,3) comment), W235 (5-vs-8 builtin list — FIXED `d68665c`/`0ab04b0`),
 P15 (PLAN.md job control — G10 owns), W581 (`live` stream set → G14), W586 (elapsed comma pin → G15),
-W600 (incomplete CI gate → CONFIRMED, G16). → G13–G16 files created
+W600 (incomplete CI gate → CONFIRMED, G16), T1 (agent-skills index: crust-cli
+`skills list` block lags SKILL.md frontmatter → G17). → G13–G17 files created
 (gaps/, listed in (e)); plan lines in CRUST_GAPS_PLAN.md.
 Known in-place items not in X census: W561 stale forward refs; npm-packages drift
 (fixed earlier, SHA to log in (d)).
@@ -1305,7 +1306,11 @@ Usage census (grep, 2026-10-18): 13 pages — db-drivers, intro, npm-packages, p
 
 **8-component pass COMPLETE (2026-10-18): Hero (M1–M6) · InstallBlock+site.ts (M7–M11) · CodeSwitcher (M12) · Header (M13) · Sidebar (M14) · Footer (M15) · RecipeCard (M16) · FeatureCard (M17).** Verdicts: 15 C/R-C, 2 `?` with probes queued in (b) (M1 version string via fresh-build `--version`; M4 four `--check` grammar probes + stats key-set cross-ref W545+). No X — no component contradicts a doc claim; the install-command surface reduces to the four `site.ts` constants, all matching the I1/AG10/R-rows verbatim or by design.
 
-### parity check: `skills/*/SKILL.md` ↔ `src/pages/docs/agent-skills/*.mdx`
+### parity check: `skills/*/SKILL.md` ↔ `src/pages/docs/agent-skills/*.mdx` (prefix **T1+**; T = parity — chosen 2026-10-18, verified free by grep; work one skill pair per unit, rows per window)
+
+| # | pair / claim | status |
+|---|-------|--------|
+| T1 | index.mdx "## See what's embedded" — the `skills list` text block (L23–42) duplicates the nine SKILL.md frontmatter `description:` fields | X (crust-cli only). Mechanical diff 2026-10-18 (python: extracted the ` ```text ` block after "## See what's embedded" and compared each entry to `skills/<name>/SKILL.md` frontmatter, stripped): **8/9 verbatim identical** (api-testing, builtins, load-testing, logs, mock-server, pipelines, procs, verify-web-links). **crust-cli drifts**: site block reads "the run modes (`-c`, script file, piped stdin, REPL), what each exit code…" — frontmatter reads "the run modes (`-c`, script file, piped stdin, REPL, **tool subcommands like `crust skills install`**), what each exit code…". History: clause added in crust `1581fcd`; the site-side sync `dbc6fed` touched index.mdx (34 lines) but the text block is absent from its diff (`git show dbc6fed -- …/index.mdx | grep -c 'tool subcommands'` → 0) — the hand-copied duplicate was missed. Direction: SKILL.md is canonical (embedded in the binary, linted by `tests/skills.test.ts`); the site block is hand-copied with no generation step (Jenkinsfile Grammar comment) — the site is BEHIND. → **G17** (`gaps/G17-cli-skill-desc-drift.md`), website PR, one-line sync.) |
 
 ---
 
@@ -1374,3 +1379,4 @@ verify-web-links exit=2
 - **G14** procs-live-stream (W581) → `gaps/G14-procs-live-stream.md`
 - **G15** procs-elapsed-comma (W586) → `gaps/G15-procs-elapsed-comma.md`
 - **G16** vwl-ci-gate-incomplete (W600, probe-confirmed) → `gaps/G16-vwl-ci-gate-incomplete.md`
+- **G17** cli-skill-desc-drift (T1 — site `skills list` block lags the crust-cli SKILL.md frontmatter) → `gaps/G17-cli-skill-desc-drift.md`

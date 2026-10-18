@@ -86,6 +86,7 @@ Cheapest and least risky first; the two doc-only ones open the branch.
 - [ ] **G14** — procs page: Knobs stream set omits `live` → [file](gaps/G14-procs-live-stream.md)
 - [ ] **G15** — procs page: `elapsed: 1,842 ms` pin vs `toFixed(0)` → [file](gaps/G15-procs-elapsed-comma.md)
 - [ ] **G16** — verify-web-links page: 4-line pre-deploy gate incomplete as written → [file](gaps/G16-vwl-ci-gate-incomplete.md)
+- [ ] **G17** — agent-skills index: crust-cli description in the `skills list` block lags the SKILL.md frontmatter (missing "tool subcommands" clause) → [file](gaps/G17-cli-skill-desc-drift.md)
 
 Audit X census disposition (2026-10-18): R24 FIXED `0b15108` · W235 FIXED
 `d68665c`/`0ab04b0` · W153 → V (probe artifact, no finding) · W561 refs already
