@@ -16,9 +16,9 @@ Master plan: `docs/audit/CRUST_GAPS_PLAN.md`. Original audit prompt (scope sourc
 
 ## EXACT POSITION (rolling — update this block after EVERY unit; verified on disk 2026-10-18)
 
-- Last row on disk: **T39** (parity check — cli pair WINDOW 1 of 2 complete,
-  NO X; T38 C-PENDING on the --check sh-line-shape probes — the SAME probe
-  already queued at W217+SK31; 6 of 10 pairs done, cli in progress).
+- Last row on disk: **T45** (parity check — cli pair COMPLETE, both windows,
+  0 of 12 rows X; T38 C-PENDING on the --check sh-line-shape probe — the SAME
+  probe as W217+SK31; 7 of 10 pairs done).
 - Parity rows live in full-audit.md under `### parity check:` (prefix **T1+**): T1 =
   index.mdx `skills list` block vs the nine SKILL.md frontmatters (X → **G17**);
   T2–T7 = pipelines pair (T3 → **G18**); T8–T14 = api-testing pair (CLEAN all C);
@@ -35,13 +35,17 @@ Master plan: `docs/audit/CRUST_GAPS_PLAN.md`. Original audit prompt (scope sourc
   `: sh: …` on line 1 — settled by the SAME probe queued at W217 + SK31;
   SKILL.md's Environment section is ONLY L109–118 = the 5-row table, so the
   site's env elaborations W221/W222 are site-only expansions, verified).
-- Parity queue (4 pairs left, in order): **cli** IN PROGRESS — window 2:
-  site `agent-skills/cli.mdx` L161–256 (REPL L172–201 = W223–W226, globals
-  L203–212 = W227, auto-discovered L214–231 = W228–W232, Traps L232–245 =
-  W233, Related L247–256 = W234; site L161–171 = env tail, W220–W222 already
-  compared in T39) ↔ SKILL.md L119–175 (REPL = SK34, globals = SK35,
-  auto-discovered = next SK row — verify its ID at unit start). Then:
-  builtins · logs · verify-web-links.
+- Parity queue (3 pairs left, in order): **builtins** (site
+  `agent-skills/builtins.mdx` 256 L — TWO ≤160 L windows: 1–160, 161–256;
+  site sections: two namespaces L11, what-the-item-means-per-function L44,
+  -h/--help-at-parse-time L76, a-lambda-cannot-call-them L96, session
+  environment L119, these-are-not-shell-commands L147, Traps L205, Related
+  L247) ↔ `skills/crust-builtins/SKILL.md` 198 L (two windows: 1–160,
+  161–198). Focal item (checkpoint): confirm the tool-builtin list — the
+  checkpoint says "all eight tool builtins incl. `test-fixture` (W235 area)"
+  while AGENTS.md says six — resolve against the two files; page-level
+  carriers on disk: W239 (subcommand split), W244 (-h/--help exit 0 vs
+  no-args exit 2 usage). Then: logs · verify-web-links.
   Remaining focal points: G01–G05 topics, builtins-list coverage (8 builtins incl.
   `test-fixture`), logs-boot-line format (W344 vs W446).
 - Component rows (M1–M17) live under `### website components` between the W602 row and
@@ -208,19 +212,21 @@ and the session was restarted):
 
 ## Next move (first unit of a resuming session)
 
-Continue the **skills↔site parity check** (NOT-done item 2; T1–T39 already on disk):
-next unit = **cli pair, WINDOW 2** — site `src/pages/docs/agent-skills/cli.mdx`
-L161–256 (96 L, one window) ↔ repo `skills/crust-cli/SKILL.md` L119–175 (57 L,
-one window). RE-READ both ranges fresh (SKILL's REPL/globals sit at L119–152,
-inside window 1's line range but NOT yet compared). Write T40+ rows after the
-T39 row: REPL (site L172–201 W223–W226 ↔ SKILL L119–142 SK34), globals
-(site L203–212 W227 ↔ SKILL L146–152 SK35), auto-discovered stages (site
-L214–231 W228–W232 ↔ SKILL L154–175 — next SK row, verify its ID at unit
-start), Traps (site L232–245 W233, five bullets — SKILL.md has NO Traps
-section; check the bullets against SKILL claims on disk, e.g. bullet 1 "Read
-`$?`, never after a pipe" vs SK30 last-command-wins), Related (site L247–256
-W234 — page links only). Then the pair summary line, STATUS + resume update,
-commit/push. Then: builtins, logs, verify-web-links. Method unchanged: one pair per unit, rows per window,
+Continue the **skills↔site parity check** (NOT-done item 2; T1–T45 already on disk):
+next unit = **builtins pair, WINDOW 1** — site
+`src/pages/docs/agent-skills/builtins.mdx` L1–160 ↔ repo
+`skills/crust-builtins/SKILL.md` L1–160 (one ≤160 L window each, read fresh).
+Write T46+ rows immediately after the cli pair summary in the `### parity
+check:` section of full-audit.md (the **T1+** prefix continues). Site sections
+in this window: The two namespaces (L11), What the item means per function
+(L44), `-h`/`--help` at parse time (L76), A lambda cannot call them (L96),
+Session environment (L119, starts here). SK-side section map: `grep -n '^#'`
+on the SKILL.md at unit start. Focal items: the tool-builtin list (checkpoint
+says "eight incl. `test-fixture`", W235 area; AGENTS.md says six — resolve
+against the two files) + the W239/W244 page-level claims (subcommand split;
+`-h`/`--help` exit 0 vs no-args exit 2). Then WINDOW 2 (site 161–256 ↔ SKILL
+161–198: These are not shell commands, Traps, Related), pair summary, STATUS +
+resume update, commit/push. Then: logs, verify-web-links. Method unchanged: one pair per unit, rows per window,
 update the audit STATUS block + this EXACT POSITION after each pair, commit
 `docs/audit/` (md-only) and push after each unit. Remaining focal points: G01–G05
 topics, builtins-list coverage (8 builtins incl. `test-fixture`), logs-boot-line format
