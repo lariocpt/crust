@@ -1,6 +1,6 @@
 ---
 name: crust-builtins
-description: crust has two separate namespaces — tool builtins (`mock-server`, `test-fixture`, `verify-web-links`, `logs`, `dotenv`) that need a line of their own, and registered functions (`base64`, `salt`, `jwt`, `bundle`, `sql`, `wait`) that are space-separated stages usable as a source or mid-pipeline. Explains what the upstream item means to each one, why `bundle(5)` is a shell syntax error, and how to reach crypto/FS from a lambda. Use when a crust stage exits 2 with `syntax error near unexpected token`, when a mid-pipeline function eats the wrong argument, or when a lambda says `salt is not defined`.
+description: crust has two separate namespaces — tool builtins (`mock-server`, `test-fixture`, `test-pipes`, `gen-fixtures`, `verify-web-links`, `logs`, `dotenv`, `skills`) that need a line of their own, and registered functions (`base64`, `salt`, `jwt`, `bundle`, `sql`, `wait`) that are space-separated stages usable as a source or mid-pipeline. Explains what the upstream item means to each one, why `bundle(5)` is a shell syntax error, and how to reach crypto/FS from a lambda. Use when a crust stage exits 2 with `syntax error near unexpected token`, when a mid-pipeline function eats the wrong argument, or when a lambda says `salt is not defined`.
 ---
 
 # crust's two namespaces
