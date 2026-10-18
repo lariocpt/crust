@@ -90,6 +90,7 @@ Cheapest and least risky first; the two doc-only ones open the branch.
 - [ ] **G18** — pipelines page: "SQL placeholders survive untouched" sentence omits the script-positional rule SKILL.md states (site behind) → [file](gaps/G18-pipelines-sql-placeholder-drift.md)
 - [ ] **G19** — load gates: guard-without-`--every` sentence inverts the short-circuit on two site pages ("threshold applies unguarded" — it never runs; no-op gate = false pass) → [file](gaps/G19-guard-without-every-false-pass.md)
 - [ ] **G20** — agent-skills mock-server page: conformance-gate line omits the required `(r => r.json())` decode stage (the skill marks it "not optional"; the gate dies with `predicate threw`) → [file](gaps/G20-mockserver-gate-missing-decode.md)
+- [ ] **G21** — agent-skills builtins page: Traps bullet-1 measured table, row 1's base64 value does not match its own annotation (`YjY0aW4udHh0` = base64("b64in.txt") ≠ annotated "in.ts"; SKILL's `aW4udHM=` is the correct encoding — settled by computation, no probe needed) → [file](gaps/G21-builtins-traps-b64-row.md)
 
 Audit X census disposition (2026-10-18): R24 FIXED `0b15108` · W235 FIXED
 `d68665c`/`0ab04b0` · W153 → V (probe artifact, no finding) · W561 refs already

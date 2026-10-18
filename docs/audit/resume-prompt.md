@@ -16,10 +16,12 @@ Master plan: `docs/audit/CRUST_GAPS_PLAN.md`. Original audit prompt (scope sourc
 
 ## EXACT POSITION (rolling — update this block after EVERY unit; verified on disk 2026-10-18)
 
-- Last row on disk: **T56** (parity check — builtins pair WINDOW 1 of 2;
-  T46–T56, 0 of 11 rows X; T50 C-PENDING on the `bundle(5)` sh-error token —
-  site L37 quotes `5'`, SKILL L27 quotes `('`, settled by the W240 + SK14
-  probes already queued in (b); 7 of 10 pairs done, 8th IN PROGRESS at w2).
+- Last row on disk: **T63** (parity check — builtins pair COMPLETE, both
+  windows; T46–T63, 1 of 18 rows X: T62 → **G21** (site Traps bullet 1
+  measured table, row 1 — `YjY0aW4udHh0` decodes to "b64in.txt", not the
+  annotated "in.ts"; SKILL's `aW4udHM=` is the correct encoding, settled by
+  computation); T50 + the T54 lambda example C-PENDING, carried at the W240+SK14
+  and W245+SK19 probes; 8 of 10 pairs done).
 - Parity rows live in full-audit.md under `### parity check:` (prefix **T1+**): T1 =
   index.mdx `skills list` block vs the nine SKILL.md frontmatters (X → **G17**);
   T2–T7 = pipelines pair (T3 → **G18**); T8–T14 = api-testing pair (CLEAN all C);
@@ -36,21 +38,20 @@ Master plan: `docs/audit/CRUST_GAPS_PLAN.md`. Original audit prompt (scope sourc
   `: sh: …` on line 1 — settled by the SAME probe queued at W217 + SK31;
   SKILL.md's Environment section is ONLY L109–118 = the 5-row table, so the
   site's env elaborations W221/W222 are site-only expansions, verified).
-- Parity queue (builtins window 2 + 2 pairs left, in order): **builtins,
-  WINDOW 2 (CLOSING)** (site `agent-skills/builtins.mdx` L161–256 ↔
-  `skills/crust-builtins/SKILL.md` L161–198 — the two redirect-refusal blocks:
-  function W250 (L155–186; the block STARTS before the window, re-read it in
-  full) ↔ SK23 (L157–175); tool W251 (L188–203) ↔ SK24 (L177–198, which also
-  holds the working alternatives: `base64 hello | cat > out.b64`,
-  `base64 --file logo.png --out logo.b64`, `--out` on a tool); Traps W252
-  (L205–245, seven bullets — SKILL.md has NO Traps section, check the bullets
-  against the SK22/SK23/SK24 claims + page-level carriers); Related W253
-  (L247–256, links only). Then pair summary (expected 0 of N X), STATUS +
-  resume, commit/push. Window 1 (T46–T56) DONE: both files list the same EIGHT
-  tool builtins — the 6-vs-8 question resolves as AGENTS.md's six = the
-  `parseFlags` CLI set, the namespace holds eight (T47); W237's
-  dispatch-table grep stays open for the CODE REVIEW. Then: **logs** ·
-  **verify-web-links**.
+- Parity queue (2 pairs left, in order): **logs** (site
+  `agent-skills/logs.mdx` ↔ `skills/crust-logs/SKILL.md` — read fresh, sizes at
+  unit start; resolve the site page's W rows via grep `title: crust-logs` and
+  the SK rows via the logs-skill section header; focal item: boot-line format
+  W344 vs W446 — `logs: <cmd>`, 10000-item buffer — check the pair is not a
+  third variant) · **verify-web-links** (site
+  `agent-skills/verify-web-links.mdx` ↔ `skills/crust-verify-web-links/SKILL.md`;
+  SK rows SK87–SK94 on disk: L10–16 check matrix, L18–22 exit codes,
+  L33–37 sitemap discovery, L39–54 "Green does not mean checked", L56–77 CI
+  `--strict`, L84–106 meta fixtures, L108–126 tuning). Then per pair: summary
+  line, STATUS + resume, commit/push. builtins pair DONE (T46–T63, 1 of 18 X):
+  T62 → G21; T50 + T54-lambda C-PENDING carried; both files list the same EIGHT
+  tool builtins (6-vs-8 resolves: AGENTS.md's six = the `parseFlags` CLI set,
+  T47); W237's dispatch-table grep stays open for the CODE REVIEW.
   Remaining focal points: G01–G05 topics, logs-boot-line format (W344 vs W446).
 - Component rows (M1–M17) live under `### website components` between the W602 row and
   the `### parity check:` heading: M1–M6 Hero · M7–M11 InstallBlock+site.ts ·
@@ -216,25 +217,24 @@ and the session was restarted):
 
 ## Next move (first unit of a resuming session)
 
-Continue the **skills↔site parity check** (NOT-done item 2; T1–T56 already on disk):
-next unit = **builtins pair, WINDOW 2 (CLOSING)** — site
-`src/pages/docs/agent-skills/builtins.mdx` L161–256 (96 L) ↔ repo
-`skills/crust-builtins/SKILL.md` L161–198 (38 L), both read fresh. Write T57+
-rows immediately after the T56 row. Sections: the function-redirect refusal
-(site W250, L155–186 — the block STARTS before the window, re-read L155–256
-in one go; ↔ SKILL SK23 L157–175: `sql "select 1" > one.txt` → refused as a
-stage, pointed at a shell tail), the tool-redirect refusal (site W251,
-L188–203 ↔ SKILL SK24 L177–198 — which also holds the working alternatives:
-`base64 hello | cat > out.b64`, `base64 --file logo.png --out logo.b64`,
-`--out` on a tool, and the exact whole-invocation redirect message), Traps
-(site W252, L205–245, seven bullets — SKILL.md has NO Traps section; check
-each bullet against the on-disk SK22/SK23/SK24 claims + page-level carriers,
-e.g. bullet 1 `base64 in.ts` = the measured table W252/SK22 already carry),
-Related (site W253, L247–256 — links only). Focal item: the "two different
-messages, because a function and a tool fail differently" lead-in (T56) — the
-two refusal blocks are the pair's last live question; if they agree
-cell-for-cell the pair closes at 0 of N X. Then the pair summary line, STATUS
-+ resume update, commit/push. Then: logs pair, verify-web-links pair. Method unchanged: one pair per unit, rows per window,
+Continue the **skills↔site parity check** (NOT-done item 2; T1–T63 already on disk):
+next unit = **logs pair** (8 of 10 pairs done) — site
+`src/pages/docs/agent-skills/logs.mdx` ↔ repo
+`skills/crust-logs/SKILL.md`, read fresh (get both sizes at unit start; one or
+two ≤160 L windows each). FIRST resolve row IDs on disk: the site page's W rows
+(grep `title: crust-logs` in the W-section of full-audit.md) and SKILL.md's
+SK rows (grep the logs-skill section header under the nine-skills area of
+`### crust repo docs`). Write T64+ rows immediately after the builtins pair
+summary in the `### parity check:` section (the **T1+** prefix continues).
+Focal item: boot-line format parity — W344 vs W446 (`logs: <cmd>`, the
+10000-item buffer): both page-level rows are on disk; check the site↔skill
+pair is not a third variant of the format. Then the pair summary line, STATUS
++ resume update, commit/push. Then the LAST pair: verify-web-links (site
+`agent-skills/verify-web-links.mdx` ↔
+`skills/crust-verify-web-links/SKILL.md`; SK rows SK87–SK94 on disk:
+L10–16 check matrix, L18–22 exit codes, L33–37 sitemap discovery,
+L39–54 "Green does not mean checked", L56–77 CI `--strict`, L84–106 meta
+fixtures, L108–126 tuning). Method unchanged: one pair per unit, rows per window,
 update the audit STATUS block + this EXACT POSITION after each pair, commit
 `docs/audit/` (md-only) and push after each unit. Remaining focal points: G01–G05
 topics, logs-boot-line format parity (W344 vs W446). Then code review (item 3), then

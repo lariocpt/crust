@@ -14,7 +14,7 @@ Structure:
 Status legend for claims: `V` verified by probe, `C` confirmed in code (no probe needed),
 `X` claim contradicted (finding opened), `?` unresolved.
 
-**STATUS (2026-10-18 checkpoint — audit IN PROGRESS at skills↔site parity check, T1–T56 on disk; NOT closed).**
+**STATUS (2026-10-18 checkpoint — audit IN PROGRESS at skills↔site parity check, T1–T63 on disk; NOT closed).**
 (a) page-level complete: R1–R26, U1–U134, I1–I5, A1, C1–C24, P1–P17, S1–S10, AG1–AG11,
 SK1–SK94, W1–W602 (all 29 website pages; W602 = verify-web-links recipe L185–188, page end).
 (a) NOT done: skills↔site parity check · full code review (close every `?`) · fresh build +
@@ -38,16 +38,21 @@ non-contradicting: T40 Ctrl-B/F non-binding + Backspace omission, T41
 `script` recipe modulo `( )` vs `{ ; }` grouping + REPL `\`-negative, T42
 binary-vs-npm link + `../src/sinks` import-hint omission, T43 export-selection
 + `$CRUST_GLOBAL_PREFIX` omissions, T44 five Traps bullets all restate on-disk
-claims with the 0.2.4-era 127 half being site-only history); T46–T56 = builtins
-pair WINDOW 1 of 2 (front matter / two-namespace table / sh-builtins /
-source-grammar + bracket-JSON omissions / bundle(5) / item-meaning table +
-examples / sql contract + wait-124 + -h/--help / lambda / session env /
-not-shell-commands head), NO X — T50 C-PENDING: the `bundle(5)` sh-error token
-(site L37 quotes `5'`, SKILL L27 quotes `('` — mutually exclusive quoted outputs
-of the same command, settled by the W240 + SK14 probes already queued in (b);
-no G until the probe lands); 3 of 10 units left: builtins (IN PROGRESS —
-window 2 = site L161–256 ↔ SKILL L161–198: the two redirect-refusal blocks
-W250/W251 ↔ SK23/SK24, Traps W252, Related W253), logs, verify-web-links).
+claims with the 0.2.4-era 127 half being site-only history); T46–T63 = builtins
+pair COMPLETE, both windows (T46–T56 = window 1: front matter / two-namespace
+table / sh-builtins / source-grammar + bracket-JSON omissions / bundle(5) /
+item-meaning table + examples / sql contract + wait-124 + -h/--help / lambda /
+session env / not-shell-commands head; T57–T63 = window 2: the two
+redirect-refusal blocks W250/W251 ↔ SK23/SK24, working alternatives, Traps,
+Related), 1 of 18 rows X — T62 → **G21** (site Traps bullet 1 measured table,
+row 1: `YjY0aW4udHh0` = base64("b64in.txt") ≠ annotated "in.ts"; SKILL's
+`aW4udHM=` is the correct encoding — settled by computation, deterministic).
+C-PENDING carried: T50 the `bundle(5)` sh-error token (site L37 `5'` vs SKILL
+L27 `('`, settled by the W240 + SK14 probes already queued in (b)) and the T54
+lambda example (SKILL L108 non-`async` `await` line vs the site's `async` +
+"a bare `await` in a non-`async` body is a parse error" claim — W245 + SK19
+probes) — no G until the (b) probes land; 2 of 10 units left: logs,
+verify-web-links).
 Page-level (a) unchanged: W602 was the last W-row (recipe boundaries: stress-testing
 W549–W568 · dev-tail W569–W582 · heap-snapshots W583–W591 · verify-web-links recipe
 W592–W602).
@@ -66,8 +71,10 @@ W600 (incomplete CI gate → CONFIRMED, G16), T1 (agent-skills index: crust-cli
 placeholders survive untouched" sentence omits the script-positional rule → G18),
 T20 (load gates: guard-without-`--every` sentence inverts the short-circuit —
 no-op gate, false pass → G19), T26 (mock-server skill page: conformance-gate line
-missing the required decode stage → G20). → G13–G20 files created
-(gaps/, listed in (e)); plan lines in CRUST_GAPS_PLAN.md.
+missing the required decode stage → G20), T62 (builtins Traps bullet 1:
+measured table row 1's base64 value does not match its own annotation → G21).
+→ G13–G21 files created (gaps/, listed in (e)); plan lines in
+CRUST_GAPS_PLAN.md.
 Known in-place items not in X census: W561 stale forward refs; npm-packages drift
 (fixed earlier, SHA to log in (d)).
 
@@ -1460,6 +1467,15 @@ block L125–126 + prose L129–131, or SKILL L93–94).)
 | T54 | A lambda cannot call them (site L96–117 W245 ↔ SKILL L96–112 SK19) | C (same function-table framing + same `range(2,2) | (x => salt(4))   →  crust: salt is not defined   (exit 1)` block + same "lambda body has Bun's own globals" escape. The two example lines differ in ONE place: SKILL L108 `range(0,0) | (_ => JSON.parse(await Bun.file("package.json").text()).name)` vs site L110 `range(0,0) | (async _ => JSON.parse(await …))` — the site writes `async` and SKILL does not, yet SKILL L103 says "`await` works in it" without the keyword. The site's own L113–115 resolves it: "Write `async` on the lambda. crust awaits the result either way, but a bare `await` in a non-`async` body is a *parse* error in every released binary, so the keyword is what makes the line run everywhere" — if true, SKILL L108 is a line that does not run (a docs bug), but SKILL L103 is also false. The site's `async`-keyword claim is the operative one and is probe-queued: W245 (page row, `?` — probe the non-`async` `await` line → expect parse error; the `async` form → runs). C-PENDING on that single example, same class as T38/T50; the rest of the section is C (the site's "Prefer the registered function…" closing is near-verbatim to SKILL L111–112; the site adds the "shorter than the `crypto` line" comparison SKILL also carries).) |
 | T55 | Session environment — assignments + the two refused shapes (site L119–145 W246–W248 ↔ SKILL L114–140 SK20/SK21) | C (near-verbatim throughout: "a line of pure assignments *is* the session environment — it runs the same code `export` runs, so the two spellings cannot disagree"; the 4-line `crust` block identical (`FOO=bar`; `PATH=$PATH:/tmp/bin`; `CFLAGS+=$EXTRA_FLAGS`; `TOKEN='$literal'`); the history clause identical (`FOO=bar` used to be `sh -c 'FOO=bar'` — exit **0**, value gone, next line's `$FOO` empty); the quoting rules identical (`'…'` protects `$`, `"…"` expands, a backslash protects exactly one character, `FOO=C:\temp` survives). The two-shapes list is identical: `FOO=bar cmd args` = sh's *transient* prefix (line goes to sh untouched); `FOO=$(cmd)` **refused** rather than run (value would have to cross back out of a child; honest route = pipeline into a `capture` stage of that name; quoting doesn't change it; neither does a pipe inside the substitution — `FOO=$(date | head -1)` refused too; a `$()` anywhere else stays sh's, `echo "$(date)"` still prints the date). No contradiction.) |
 | T56 | These are not shell commands — head + the base64 shadow (site L147–153 W249 ↔ SKILL L142–155 SK22) | C (same opening: "`base64`, `sort`, `head`, `wc` and friends exist as **real binaries** too. crust runs its own when the name is registered (`base64 hello` encodes the *text*, not a file), and sh's when it is not (`… | sort` is `/usr/bin/sort`)." SKILL L150–155 ADDS the base64-shadow paragraph the site's window-1 does not carry: "`/usr/bin/base64 in.ts` encodes the FILE, crust's encodes the five characters of the path (`aW4udHM=`) and now says so on stderr. A file's bytes are `base64 --file logo.png` — crust's only binary-safe route, because a pipeline decodes UTF-8 on the way (`read logo.png | base64` gives `77+9…` for a PNG whose real answer is `iVBORw0…`) — and `--out <path>` is how the answer reaches a file, since a function stage cannot be redirected." Carried: SK22 (SK side) + W252 (site Traps bullet 1 — "`base64 in.ts` encodes the path text, not the file" — the site DOES carry the shadow claim in its Traps section, window 2). The "neither takes a redirect — two different messages, because a function and a tool fail differently" lead-in is shared; the refusal blocks themselves are the next row (window 2). No contradiction.) |
+| T57 | Function-redirect refusal — block 1 (site L155–163 W250 ↔ SKILL L157–165 SK23) | C (identical lead-in "A **registered function** with a redirect is refused as a stage and pointed at a shell tail:"; the verbatim refusal block is byte-identical (`sql "select 1" > one.txt → crust: `> one.txt`: crust has no redirect except on a shell stage, whose text goes to sh as-is — a sql stage would read it as data. to save a pipeline, end the line with a shell stage instead: \| cat > one.txt`); fence-tag difference (site ```text vs SKILL bare) is cosmetic.) |
+| T58 | Function-redirect refusal — hidden-stage paragraph + affected set (site L165–186 W250 ↔ SKILL L167–181 SK23) | C (same core: "Stage patterns match the whole text, so `range(1,3) > f` … fell through to `sh -c` … crust strips the tail, sees the stage, and refuses". Same seven-stage set — site's `range(1,3) > f` + `capture N`, `parallel 5`, `expect 200`, `stats`, `stdin`, `load 10s 100/s` = SKILL's `range`, `capture`, `parallel`, `expect`, `stats`, `stdin`, `load` — with the site showing concrete argument forms. Same `grep` exception + same `read **/*.log \| grep ERROR > errors.txt` example (site adds "deliberate"). SKILL-only: the `parallel 5 > f` false-pass half ("ran GNU parallel and exited 0 with an empty file") + the load-parser history ("the tail used to break load's parser first and the complaint was about the rate plan") — carried at SK23. Site-only: the second verbatim `range(1,3) > nums.txt` refusal block (L171–176). No contradiction.) |
+| T59 | Working-alternatives crust block (site L184–186 ↔ SKILL L177–181 SK24) | C (the site's ```crust fence holds only `base64 hello \| cat > out.b64`; SKILL's fence holds that line + `base64 --file logo.png --out logo.b64` + `base64 --file logo.b64 -d --out logo-copy.png`. The site carries the two `--file`/`--out` lines in Traps bullet-2 prose (L219–227) with the explicit on-the-spot note: the flags are "current on `main`; they are not in the published release this page's grammar gate lints against, which is why they appear in prose here and not in a `crust` fence" — a documented, designed omission, not drift; the release-state half is carried at W252(2). No contradiction.) |
+| T60 | Tool-redirect refusal (site L188–203 W251 ↔ SKILL L183–198 SK24) | C (identical lead-in "A **tool builtin** is refused as a program, and the message prints the exact whole-invocation redirect that works:"; the verbatim refusal block is byte-identical (`verify-web-links --base-url https://example.com --json > report.json → crust: verify-web-links is a crust builtin, it runs in-process and cannot redirect. Redirect the whole invocation instead: crust -c '…' > report.json`); the ```bash block is identical; the closing sentence is identical (`-o` / `--outfile` / `--report` flags to check before reaching for `>`).) |
+| T61 | Traps bullets 2–7 (site W252 L219–245 ↔ SKILL: no Traps section — checked against the on-disk claims) | C (2) `--file`/`--out` bullet = SKILL L150–155 (SK22) + the `note:`-on-stderr mechanism (matches SK22's own probe expectation) + the main-vs-release fence note (T59); (3) options bullet = the SKILL L70–83 half (SK17/T53: "options come from the line, never from the item", `LWQ=`, the `--desc` refusal) told as failure-mode history; (4) decode bullet = the SKILL decode-alphabet refusal half (SK17/T53) with the "Node's decoder skips unknown characters" why; (5) restates the T56/SK22 ambiguity claim; (6) restates T57/T60; (7) restates the T52 table's item-first claim ("salt's byte count and jwt's operation have to sit" after the data). All restates or carried; the per-bullet probes already live in W252. No contradiction — except bullet 1 (T62).) |
+| T62 | Traps bullet 1 — the measured table, row 1 (site W252 L207–213 ↔ SKILL L150–151 SK22) | **X** — site: "`base64 in.ts` → `YjY0aW4udHh0` \"in.ts\""; SKILL: "crust's encodes the five characters of the path (`aW4udHM=`)". Settled by computation (base64 is deterministic — no probe needed): `base64("in.ts")` = `aW4udHM=` (SKILL is right); `YjY0aW4udHh0` = `base64("b64in.txt")` — a 9-byte payload, so the displayed value does not match its annotated operand "in.ts" (a wrong measured row or a wrong annotation). Table rows 2–3 verified correct (`YWxwaGEKYmV0YQo=` = "alpha\nbeta\n"; `YWxwaGE=`/`YmV0YQ==` = "alpha"/"beta"), so the inconsistency is isolated to row 1. The W252 row records the table verbatim without flagging it. → **G21** (site fix: row 1 → `aW4udHM=`, or correct the operand/annotation if "b64in.txt" was the file actually measured). |
+| T63 | Related (site W253 L247–256) | C (four internal links — crust-cli, crust-pipelines, Pipe shorthand vs TypeScript, Quickstart — all page-level targets that exist and are audited (W253 records the section); check-links covers them. Page-links only, no claims.) |
+
+**builtins pair: 1 of 18 rows X** (T46–T63 across windows 1–2). T62 → **G21** (site Traps bullet 1, table row 1: displayed base64 `YjY0aW4udHh0` decodes to "b64in.txt", not the annotated "in.ts" — SKILL's `aW4udHM=` is the correct encoding; settled by computation, deterministic). C-PENDING carried (no G until the (b) probes land): T50 (`bundle(5)` sh-error token — W240 + SK14 probes) and the T54 lambda example (SKILL L108 non-`async` `await` line vs the site's `async` + "a bare `await` in a non-`async` body is a *parse* error in every released binary" — W245 + SK19 probes; the site's `async`-keyword guidance is the operative half). All other rows C: the pair matches cell-for-cell on both refusal blocks (T57/T60), the affected-set agrees (T58), and the site's only structural differences are documented expansions (second verbatim range block, the prose-vs-fence split for the main-only `--file`/`--out` flags — T59).
 
 ---
 
