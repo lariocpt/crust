@@ -14,9 +14,51 @@ the crust repo root. Audit log (single source of truth): `docs/audit/full-audit.
 Master plan: `docs/audit/CRUST_GAPS_PLAN.md`. Original audit prompt (scope source):
 `docs/audit/full-audit-prompt.md`.
 
-## EXACT POSITION (rolling — update this block after EVERY unit; verified on disk 2026-10-18)
+## EXACT POSITION (rolling — update this block after EVERY unit; verified on disk 2026-10-19)
 
-- Last unit on disk: **code review group (c) REMAINDER (W465), COMPLETE 2026-10-18** —
+- Last unit on disk: **code review group (d) export surface + runtime globals, COMPLETE 2026-10-19** —
+  src read this unit: genFixtures/cli.ts L36–41, mockServer/cli.ts L48–60,
+  verifyWebLinks/cli.ts L258–279 + parseArgs defaults, testPipes/cli.ts
+  L29–35, testFixture/cli.ts L30–37, skillsCli.ts L22–27, testFixture/
+  runner.ts L288–305 (arity guard + per-field paths), pipeline.ts L107
+  (collect → Promise<T[]>), sources/transforms export lines, + website git
+  log (the earlier "npm-packages drift fix" = **288b2d3** 2026-10-06 "fix
+  (docs): the TypeScript slots named an API that does not exist" — touches
+  db-drivers/intro/quickstart/recipes pages, NOT npm-packages.mdx itself;
+  last npm-packages.mdx commit = 5bb532c 2026-08-12; logged in full-audit
+  X-census region). Verdicts: W227 C (injection map config.ts L69–90 = the
+  page's full surface incl. expectStage L83 + crust obj L37; every entry
+  mode passes loadConfig per W136; plain bun never does), U129 → code-half
+  C (exports exist in a checkout with the used shapes; "once published"
+  parked with G13 — no exports map), W474 code-half C (module export
+  `expect` transforms L211; global `expectStage` config L83; 3-form matcher
+  L185/L198–209; shell `expect` → expectStatus parser L361), W455 code-half
+  C (read L122 lines / readAll L139 whole-file / readLines L165;
+  ExpectError {item,index,matcher} L187–196), W476 code-half C (Pipeline.of
+  L29 array/AsyncIterable/ReadableStream; collect L107; throw = failure
+  text per design rule 1), W468 code-half C (hard error L283–292 names
+  field + both fixes; OUTPUT + boolean-resolves only; per-field via
+  resolveDeep L300–305; C14 changelog ✓), W531 code-half C (load L1033
+  phases-array; parallel L253; timedGet L366; statsStage L619, p95
+  L600–609; bare names = injected globals only → plain bun = ReferenceError),
+  W551 addendum (NO sort stage anywhere — barrier note transforms L249–252
+  is the verbatim design comment; "Sort downstream" = aspirational,
+  finding-lite not X), SK47/48/50 C (src/logs read in full; SK48 nuance:
+  actual boot message wraps `help`/`exit` in backticks the page quote
+  omits — W160 precedent), SK94 C (defaults 5/4/10000 + --exclude
+  repeatable + include-external/redirect/norecurse opt-outs all confirmed).
+  **U61 flag-table half X → G25** (test-pipes row omits [-o <path>];
+  mock-server row omits --proxy-timeout + --report; test-fixture/
+  gen-fixtures/skills/logs exact, verify-web-links legitimate summary).
+  **W144 severity settled → X CONFIRMED → G24** (U129 verdict is in: no
+  bare globals under plain bun + no exports-map escape hatch; surviving
+  instance of the 288b2d3 drift class). G24 + G25 files created (gaps/,
+  (e) lines, plan lines). No code changes (audit only). Next free G = G26.
+  Next unit = **code review group (e)**: source-fn array flattening (W126,
+  W433, W477(3), W525 zero-arg parallel fn, W554 parallel(8, verb) load mode;
+  W154 from the item-3 map was already C'd in (b) — cross-ref only).
+  Last unit before this one: **code review group (c) REMAINDER (W465),
+  COMPLETE 2026-10-18** —
   src/testPipes/runner.ts read in full (180 L): W465 code-half C (per-file
   hermeticity — `freshContext()` L33–41 called inside the per-file loop (L133):
   fresh `aliases`/`functions` Maps + `registerBuiltinFns` (L39) = "builtin fns
@@ -123,12 +165,12 @@ Master plan: `docs/audit/CRUST_GAPS_PLAN.md`. Original audit prompt (scope sourc
      Priorities: (a) sql builtin existence + W107/W118/W132/W241/W305 error strings +
      W475/W477 sql stage modes, sql reads `$DATABASE_URL`; (b) auto-dispatch subsystem
      (W134–W168, W228–W232); (c) init.ts loading — **DONE 2026-10-18** (W129 X CONFIRMED + W131 C + W146/W150/W163/W164 halves consumed via the G13 investigation; W465 code-half C — src/testPipes/runner.ts in full; its probe trio queued in (b));
-     (d) export surface + runtime globals (W227, U129) — wait/logs/search/buffer/clear session
+     (d) export surface + runtime globals (W227, U129) — **DONE 2026-10-19** (W227 C; U129 code-half C; W474/W455/W476/W468/W531 code-halves C, probes → (b); W551 addendum; SK47/48/50/94 C; U61 flag half X → G25; W144 X CONFIRMED → G24; G24+G25 files + plan lines) — wait/logs/search/buffer/clear session
      commands + test-pipes/test-fixture/gen-fixtures/verify-web-links/mock-server dispatch
      entries + exact flag sets + expectStage/expect export names (W474) + readAll export
      (W455) + Pipeline.of (W476) + arity hard error since 0.2.4 (W468) + timedGet/statsStage/
      load-as-array-source (W531) + sort-stage presence (W551); (e) source-fn array flattening
-     (W126, W154, W433, W477(3), W525 zero-arg parallel fn, W554 parallel(8, verb) load mode);
+     (W126, W154 [already C'd in (b) — cross-ref only], W433, W477(3), W525 zero-arg parallel fn, W554 parallel(8, verb) load mode);
      (f) stage-error index preservation (W158 vs W266); (g) skills subsystem
      (W184/W188/W194–W218); (h) base64 `--file`/`--out` main-vs-published (W244/W252);
      (i) tool-builtin redirect refusal (W250/W251) + inside-crust `&` refusal (W525);
@@ -197,8 +239,11 @@ and the session was restarted):
   G13 npm-resolution-clash (W129/W131) · G14 procs-live-stream (W581) · G15
   procs-elapsed-comma (W586) · G16 vwl-ci-gate-incomplete (W600) — in
   `docs/audit/gaps/`, plan lines in CRUST_GAPS_PLAN.md, listed in audit (e). **Their fix commits are NOT yet made — that is Phase 2, after (a) closes.**
-- npm-packages drift fix (earlier session) — SHA still to be found
-  (`git -C …/crust-website log -- src/pages/docs/npm-packages.mdx`) and logged in (d).
+- npm-packages drift fix (earlier session) — **RESOLVED 2026-10-19, group (d)**:
+  SHA = **288b2d3** (2026-10-06, "fix(docs): the TypeScript slots named an API
+  that does not exist") — it touched db-drivers/intro/quickstart/recipes pages,
+  NOT npm-packages.mdx itself (last npm-packages.mdx commit = 5bb532c 2026-08-12);
+  logged in the full-audit X-census region + the group (d) COMPLETE marker.
 
 ## Decision (2026-10-18, user + audit rules)
 
@@ -262,20 +307,21 @@ and the session was restarted):
 
 **The parity check is DONE (T1–T81, all 10 pairs) and code review groups
 (a) sql (W477 X → G22; W107/W118/W132/W305/W475 C-code; W241 sql cell C),
-(b) auto-dispatch (all 40 rows; W141 X → G23) and (c) init.ts loading
+(b) auto-dispatch (all 40 rows; W141 X → G23), (c) init.ts loading
 (W129 X CONFIRMED + W131 C via the user-directed G13 investigation 2026-10-18,
 fresh build `bin/crust-bin` sha256 `947d2f4dd62e6705…`, Bun v1.4.3, probes
 P1a/P1b/P2/P3a/P4/P5 + C1/C2 in full-audit.md §(b); W146/W150/W163/W164
 halves consumed; W160/W162 C; W465 code-half C in the W465 unit —
 src/testPipes/runner.ts in full: per-file freshContext L33–41 at L133, env
-snapshot L128 + full finally-restore L166–171; probe trio stays in (b)) are
+snapshot L128 + full finally-restore L166–171; probe trio stays in (b)) and (d) export
+surface + runtime globals (W227 C; U129 code-half C; W474/W455/W476/W468/W531
+code-halves C, probes → (b); W551 addendum; SK47/48/50/94 C; U61 flag half X → G25;
+W144 X CONFIRMED → G24) are
 ALL DONE.**
-Next unit = **code review group (d) export surface + runtime globals**
-(item-3 group (d): W227, U129 — wait/logs/search/buffer/clear session commands
-+ test-pipes/test-fixture/gen-fixtures/verify-web-links/mock-server dispatch
-entries + exact flag sets + expectStage/expect export names (W474) + readAll
-export (W455) + Pipeline.of (W476) + arity hard error since 0.2.4 (W468) +
-timedGet/statsStage/load-as-array-source (W531) + sort-stage presence (W551))
+Next unit = **code review group (e) source-fn array flattening**
+(item-3 group (e): W126, W433, W477(3), W525 zero-arg parallel fn, W554
+parallel(8, verb) load mode — W154 from the map already C'd in (b), cross-ref
+only)
 — a review, NOT a fix gate: close every
 open `?` row to C/V/X in place, with the verdict carrying `file:line`
 evidence; an X row becomes a NEW G task file (next free = G24, same shape as
@@ -301,8 +347,13 @@ probe run); (c) init.ts loading — **DONE 2026-10-18** (W129 X CONFIRMED /
 W131 C via the G13 investigation 2026-10-18; W146+W150(+W163/W164) halves
 consumed; W160/W162 C; W465 code-half C — runner.ts in full: freshContext
 L33–41 at L133, env snapshot L128 + finally-restore L166–171, no init.ts
-(bootstrap only); probe trio in (b)); (d) export surface +
-runtime globals; (e) source-fn array flattening;
+(bootstrap only); probe trio in (b)); (d) export surface + runtime globals —
+**DONE 2026-10-19** (W227 C; U129 code-half C; W474/W455/W476/W468/W531
+code-halves C, probe halves appended to the (b) queue; W551 sort-stage addendum
+— finding-lite, not X; SK47/48/50/94 C; W338 code-side note, row stays ?
+pty-probe-owned; U61 flag-table half X → G25; W144 severity settled X CONFIRMED
+→ G24; G24+G25 files + plan lines + (e) lines written); (e) source-fn array
+flattening;
 (f) stage-error index preservation (W158 vs W266); (g) skills subsystem; (h)
 base64 `--file`/`--out` main-vs-published (W244/W252); (i) tool-builtin
 redirect refusal + `&` refusal; (j) genFixtures subpath export; (k)
