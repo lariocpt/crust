@@ -14,17 +14,17 @@ Structure:
 Status legend for claims: `V` verified by probe, `C` confirmed in code (no probe needed),
 `X` claim contradicted (finding opened), `?` unresolved.
 
-**STATUS (2026-10-18 checkpoint — audit IN PROGRESS at skills↔site parity check, T1–T7 on disk; NOT closed).**
+**STATUS (2026-10-18 checkpoint — audit IN PROGRESS at skills↔site parity check, T1–T21 on disk; NOT closed).**
 (a) page-level complete: R1–R26, U1–U134, I1–I5, A1, C1–C24, P1–P17, S1–S10, AG1–AG11,
 SK1–SK94, W1–W602 (all 29 website pages; W602 = verify-web-links recipe L185–188, page end).
 (a) NOT done: skills↔site parity check · full code review (close every `?`) · fresh build +
 full probe list → (b). 8 components DONE 2026-10-18 (claim prefix **M1+**, chosen per the
 chunking protocol: M1–M17 across Hero/InstallBlock+site.ts/CodeSwitcher/Header/Sidebar/
 Footer/RecipeCard/FeatureCard — 15 C/R-C, M1+M4 probes queued in (b), no X).
-**Exact position: skills↔site parity check IN PROGRESS — T1–T14 on disk** (T1 index
+**Exact position: skills↔site parity check IN PROGRESS — T1–T21 on disk** (T1 index
 `skills list` block vs the nine frontmatters → G17; T2–T7 = pipelines pair, T3 → G18;
-T8–T14 = api-testing pair, CLEAN all C; 7 of 10 units left: load-testing, mock-server,
-procs, cli, builtins, logs, verify-web-links).
+T8–T14 = api-testing pair, CLEAN; T15–T21 = load-testing pair, T20 → G19; 6 of 10
+units left: mock-server, procs, cli, builtins, logs, verify-web-links).
 Page-level (a) unchanged: W602 was the last W-row (recipe boundaries: stress-testing
 W549–W568 · dev-tail W569–W582 · heap-snapshots W583–W591 · verify-web-links recipe
 W592–W602).
@@ -40,8 +40,9 @@ X census (claim contradicted / X-candidate): R24 (stale FOO=x prose — FIXED `0
 P15 (PLAN.md job control — G10 owns), W581 (`live` stream set → G14), W586 (elapsed comma pin → G15),
 W600 (incomplete CI gate → CONFIRMED, G16), T1 (agent-skills index: crust-cli
 `skills list` block lags SKILL.md frontmatter → G17), T3 (pipelines page: "SQL
-placeholders survive untouched" sentence omits the script-positional rule → G18).
-→ G13–G18 files created
+placeholders survive untouched" sentence omits the script-positional rule → G18),
+T20 (load gates: guard-without-`--every` sentence inverts the short-circuit —
+no-op gate, false pass → G19). → G13–G19 files created
 (gaps/, listed in (e)); plan lines in CRUST_GAPS_PLAN.md.
 Known in-place items not in X census: W561 stale forward refs; npm-packages drift
 (fixed earlier, SHA to log in (d)).
@@ -1341,6 +1342,24 @@ Usage census (grep, 2026-10-18): 13 pages — db-drivers, intro, npm-packages, p
 
 **api-testing pair CLEAN** (T8–T14, all C — no X). The site page is a faithful condensation of the SKILL.md: every verbatim block (the five-line `.pipes` suite, the TS fixture) is identical, every flag subset matches the canonical run lines, and every omission is either pure condensation or already carried by a page-level row (U61/U77/U80/U81, SK10, W275/W389, W414–W419) with its probe queued in (b).
 
+#### pair: load-testing — site `agent-skills/load-testing.mdx` (90 L) ↔ `skills/crust-load-testing/SKILL.md` (117 L), both fully read 2026-10-18
+
+| # | pair / claim | status |
+|---|-------|--------|
+| T15 | Intro (site L7–9 vs SKILL L6–12) | C (site "One line gives a paced run with percentiles and an exit code CI can gate on … single-process smoke-load and soak tooling, not a distributed rig" = SKILL L8–12 condensed; the only omission is the tick-pacing sentence ("batches due slots per wakeup … sustains 5000+ ticks/s … real ceiling is downstream (`parallel` pool × service time)") — the 5000+ claim is already tracked at SK37 (code review + optional perf probe) and U23 ("5000/s emission verified in suite"), so the omission is covered.) |
+| T16 | "The four shapes" — the four pipeline lines (site L13–35 vs SKILL L16–28) | C (all four lines verbatim-identical: `range(0, 999) | parallel 50 | GET :3000/health | expect 200 | stats` · `load 30s 100/s | parallel 50 | … expect 200 | stats` · `load 10s 50/s, 30s 200/s | parallel 100 | … | stats --every 5` · `load 10s 20/s | (t => ({name: "user" + t.n})) | parallel 8 | POST :3000/users | expect 2xx | stats`. The site splits SKILL's one `#`-commented block into four labelled blocks; the labels match SKILL's comments, and the tick shape `{n, phase, scheduledAt, lagMs}` (site L31) is SKILL L26's comment verbatim.) |
+| T17 | The parallel load-mode bullet + the knobs bullet (site L37 vs SKILL L30–38) | C (site L37 "Rate and concurrency are independent knobs. Little's law sizes the pool: `N ≥ rate × p99-in-seconds`." = SKILL L36–37 verbatim. Omissions: SKILL L30–35 (parallel puts ANY verb in load mode: `{status, ms, url}` timing records, bodies drained, network errors → `status: 0` records, `{"status":{"0":40}}` still exits 0 unless a gate, `expect 200` over a dead port exits 1, "stats reports, it does not gate") and SKILL L38 (durations `ms|s|m`, rates `N/s`/`N/m`, decimals) — both fully carried page-level: W555 (the load-mode contract, `?` probe) and W552/W553 + U23 (duration/rate grammar). No contradiction.) |
+| T18 | "The honesty guarantees" — four bullets (site L41–53 vs SKILL L40–60) | C (bullet 1 = SKILL L42–44 near-verbatim: `empty: true` tag, `assert` refuses it, the `{count: 0, p95: 0}` history; bullet 2 = SKILL L45–47: bucketed upper bound, `count`/`meanMs` exact, constant memory (site omits the 0.1ms/1ms granularity — W539/SK40); bullet 3 = SKILL L49–53 incl. the stderr line `load: target 3000 ticks — emitted 2868, dropped 132 … achieved 95.6/s` verbatim (site L48 = SKILL L51) and the drop-means-not-sustained advice; bullet 4 = SKILL L54–58: timed records only, body download included, `--every` finished-window rule (site omits the drip example and the `wallMs`-exceeds-N claim — SK42). Site omits SKILL L59–60 entirely (`--out` takes `.json` ONLY — any other extension a loud error) — carried at SK42 (probe: `stats --out x.txt` → loud error) and W535. No contradiction.) |
+| T19 | "CI gates" — the double-assert threshold line + baseline gate (site L55–69 vs SKILL L62–80) | C (both example lines verbatim-identical: the `stats | assert (s => s.p95 < 200) | assert (s => s.rps > 80)` gate (site L60 = SKILL L65) and the baseline line with `stats --out load/last.json` + the async `Bun.file("load/baseline.json")` assert (site L66 = SKILL L76). "The artifact is written **before** the gate runs, so a failed gate still leaves the file for CI to upload" = SKILL L79–80. Omissions: the artifact's key shape `{crustStats: 1, startedAt, urls, summary, windows?}` (W535 documents it), "prints the actual summary, and the line exits 1 (`crust -c` stops there)" (W530/W532/W540). No contradiction.) |
+| T20 | "Soak with fail-fast windows" — the soak line + the guard-sentence close (site L71–77 vs SKILL L82–93) | X (the soak line itself (site L74) is verbatim-identical to SKILL L86. The closing sentence — "Both are also correct without `--every`" — CONTRADICTS SKILL L89–93: without `--every` the plain summary carries neither key, so `!s.window` is `true` and `||` short-circuits — **the threshold never runs**; SKILL gives the empirical instance ("exits 0 with p95 at 4.2") and the remedy ("Drop the guard when you drop `--every`"). The site sentence recommends keeping the guarded form in non-windowed gates, i.e. a NO-OP gate: a CI line that exits 0 at any p95 — a silent false pass, the failure class the page's own "honesty guarantees" section (and design rule 1) exists to prevent. The ci-load-gates recipe carries the same sentence in longer form (site L163: "the plain summary carries neither key, so the threshold applies unguarded") — that parenthetical states the INVERSE of the actual mechanism (it claims the threshold is evaluated on the keyless summary; it is never evaluated). SKILL.md is plain JS short-circuit semantics plus a measured example — no probe needed to pick a side; W543's queued (b) probe (the two asserts WITHOUT `--every` → expect exit 0 at any p95) is the live confirmation, not the arbiter. → **G19** (two site locations; the W543 `?` stays open until the probe runs, but the X verdict is settled by the canonical-skill cross-ref).) |
+| T21 | "Warmup" + "TS API equivalent" + Related (site L79–90 vs SKILL L95–117) | C (warmup: both two-line blocks verbatim-identical (`range(0, 99) | parallel 10 | …` + the gated `load 30s 100/s` line), "its stats simply aren't gated" matches. TS API equivalent (SKILL L104–117): the site page OMITS this section entirely — `load([{ durMs, rps }]).pipe(parallel(50, timedGet(…))).pipe(statsStage(undefined, "load/last.json"))` + the `timedHttpItem` note; no contradiction, and the surface is carried page-level: W73 (the same `timedGet`/`statsStage` positional signatures, `?` code review) and W82 (the globals list). Related links are internal → check-links; both targets exist and are audited (stress-testing, ci-load-gates).) |
+
+**load-testing pair: 1 of 7 rows X** (T20 → **G19** — the guard-without-`--every`
+sentence inverts the short-circuit; the same sentence lives in the ci-load-gates
+recipe (W543, `?` pending its (b) probe)). All other rows C: every verbatim block
+is identical, every omission is condensation or carried by a page-level row with
+its probe queued.
+
 ---
 
 ## (b) Probes run
@@ -1410,3 +1429,4 @@ verify-web-links exit=2
 - **G16** vwl-ci-gate-incomplete (W600, probe-confirmed) → `gaps/G16-vwl-ci-gate-incomplete.md`
 - **G17** cli-skill-desc-drift (T1 — site `skills list` block lags the crust-cli SKILL.md frontmatter) → `gaps/G17-cli-skill-desc-drift.md`
 - **G18** pipelines-sql-placeholder-drift (T3 — site "SQL placeholders survive untouched" sentence omits the script-positional rule SKILL.md states) → `gaps/G18-pipelines-sql-placeholder-drift.md`
+- **G19** guard-without-every-false-pass (T20 — site guard sentence inverts the short-circuit on agent-skills/load-testing + ci-load-gates: the threshold never runs without `--every`; no-op gate = false pass) → `gaps/G19-guard-without-every-false-pass.md`
