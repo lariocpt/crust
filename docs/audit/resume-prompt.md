@@ -16,17 +16,19 @@ Master plan: `docs/audit/CRUST_GAPS_PLAN.md`. Original audit prompt (scope sourc
 
 ## EXACT POSITION (rolling — update this block after EVERY unit; verified on disk 2026-10-18)
 
-- Last row on disk: **T21** (parity check — load-testing pair complete, T20 → G19;
-  4 of 10 units done).
+- Last row on disk: **T27** (parity check — mock-server pair complete, T26 → G20;
+  5 of 10 units done).
 - Parity rows live in full-audit.md under `### parity check:` (prefix **T1+**): T1 =
   index.mdx `skills list` block vs the nine SKILL.md frontmatters (X → **G17**);
   T2–T7 = pipelines pair (T3 → **G18**); T8–T14 = api-testing pair (CLEAN all C);
-  T15–T21 = load-testing pair (T20 → **G19** — the guard-without-`--every` sentence
-  inverts the short-circuit: no-op gate / false pass; the same sentence also sits in
-  ci-load-gates.mdx L163, where W543 stays `?` pending its (b) probe).
-- Parity queue (remaining 6 pairs, in order): **mock-server** (site
-  `agent-skills/mock-server.mdx` 88 L ↔ `skills/crust-mock-server/SKILL.md` 139 L,
-  both single windows) · procs · cli · builtins · logs · verify-web-links.
+  T15–T21 = load-testing pair (T20 → **G19** — guard-without-`--every` inverts the
+  short-circuit; same sentence in ci-load-gates.mdx L163, W543 `?` pending its (b)
+  probe); T22–T27 = mock-server pair (T26 → **G20** — conformance-gate line missing
+  the required `(r => r.json())` decode stage; the site's own recipe page has it in
+  both places, L482/L521).
+- Parity queue (remaining 5 pairs, in order): **procs** (site
+  `agent-skills/procs.mdx` 62 L ↔ `skills/crust-procs/SKILL.md` 108 L, both single
+  windows) · cli · builtins · logs · verify-web-links.
   Remaining focal points: G01–G05 topics, builtins-list coverage (8 builtins incl.
   `test-fixture`), logs-boot-line format (W344 vs W446).
 - Component rows (M1–M17) live under `### website components` between the W602 row and
@@ -193,12 +195,12 @@ and the session was restarted):
 
 ## Next move (first unit of a resuming session)
 
-Continue the **skills↔site parity check** (NOT-done item 2; T1–T21 already on disk):
-next unit = the **mock-server pair** — site
-`src/pages/docs/agent-skills/mock-server.mdx` (88 L) ↔ repo
-`skills/crust-mock-server/SKILL.md` (139 L). Read both in ≤160 L windows, write T22+
-rows into the `### parity check:` section of full-audit.md immediately after the T21
-row (prefix **T1+** continues), then: procs, cli, builtins, logs,
+Continue the **skills↔site parity check** (NOT-done item 2; T1–T27 already on disk):
+next unit = the **procs pair** — site
+`src/pages/docs/agent-skills/procs.mdx` (62 L) ↔ repo
+`skills/crust-procs/SKILL.md` (108 L). Read both in ≤160 L windows, write T28+
+rows into the `### parity check:` section of full-audit.md immediately after the T27
+row (prefix **T1+** continues), then: cli, builtins, logs,
 verify-web-links. Method unchanged: one pair per unit, rows per window,
 update the audit STATUS block + this EXACT POSITION after each pair, commit
 `docs/audit/` (md-only) and push after each unit. Remaining focal points: G01–G05

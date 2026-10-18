@@ -14,17 +14,18 @@ Structure:
 Status legend for claims: `V` verified by probe, `C` confirmed in code (no probe needed),
 `X` claim contradicted (finding opened), `?` unresolved.
 
-**STATUS (2026-10-18 checkpoint — audit IN PROGRESS at skills↔site parity check, T1–T21 on disk; NOT closed).**
+**STATUS (2026-10-18 checkpoint — audit IN PROGRESS at skills↔site parity check, T1–T27 on disk; NOT closed).**
 (a) page-level complete: R1–R26, U1–U134, I1–I5, A1, C1–C24, P1–P17, S1–S10, AG1–AG11,
 SK1–SK94, W1–W602 (all 29 website pages; W602 = verify-web-links recipe L185–188, page end).
 (a) NOT done: skills↔site parity check · full code review (close every `?`) · fresh build +
 full probe list → (b). 8 components DONE 2026-10-18 (claim prefix **M1+**, chosen per the
 chunking protocol: M1–M17 across Hero/InstallBlock+site.ts/CodeSwitcher/Header/Sidebar/
 Footer/RecipeCard/FeatureCard — 15 C/R-C, M1+M4 probes queued in (b), no X).
-**Exact position: skills↔site parity check IN PROGRESS — T1–T21 on disk** (T1 index
+**Exact position: skills↔site parity check IN PROGRESS — T1–T27 on disk** (T1 index
 `skills list` block vs the nine frontmatters → G17; T2–T7 = pipelines pair, T3 → G18;
-T8–T14 = api-testing pair, CLEAN; T15–T21 = load-testing pair, T20 → G19; 6 of 10
-units left: mock-server, procs, cli, builtins, logs, verify-web-links).
+T8–T14 = api-testing pair, CLEAN; T15–T21 = load-testing pair, T20 → G19;
+T22–T27 = mock-server pair, T26 → G20; 5 of 10 units left: procs, cli, builtins,
+logs, verify-web-links).
 Page-level (a) unchanged: W602 was the last W-row (recipe boundaries: stress-testing
 W549–W568 · dev-tail W569–W582 · heap-snapshots W583–W591 · verify-web-links recipe
 W592–W602).
@@ -42,7 +43,8 @@ W600 (incomplete CI gate → CONFIRMED, G16), T1 (agent-skills index: crust-cli
 `skills list` block lags SKILL.md frontmatter → G17), T3 (pipelines page: "SQL
 placeholders survive untouched" sentence omits the script-positional rule → G18),
 T20 (load gates: guard-without-`--every` sentence inverts the short-circuit —
-no-op gate, false pass → G19). → G13–G19 files created
+no-op gate, false pass → G19), T26 (mock-server skill page: conformance-gate line
+missing the required decode stage → G20). → G13–G20 files created
 (gaps/, listed in (e)); plan lines in CRUST_GAPS_PLAN.md.
 Known in-place items not in X census: W561 stale forward refs; npm-packages drift
 (fixed earlier, SHA to log in (d)).
@@ -1360,6 +1362,24 @@ recipe (W543, `?` pending its (b) probe)). All other rows C: every verbatim bloc
 is identical, every omission is condensation or carried by a page-level row with
 its probe queued.
 
+#### pair: mock-server — site `agent-skills/mock-server.mdx` (88 L) ↔ `skills/crust-mock-server/SKILL.md` (139 L), both fully read 2026-10-18
+
+| # | pair / claim | status |
+|---|-------|--------|
+| T22 | Intro + the four mode invocations + "builtins can't be piped" (site L7–25 vs SKILL L8–20) | C (the site's intro "one builtin covers four distinct jobs … which of them are mutually exclusive" is the page's own framing and is consistent with the exclusivity rules stated later (L44, L84). All four invocation lines are identical to SKILL's block (`-p4000` mock · `--stateful` · `--validate` · `-p4747 --proxy http://localhost:3001`); the site omits SKILL's fifth line (`--state ./m.sqlite`) — covered in the site's own Persistence section (L46). "Builtins can't be piped, so run the server on one line (or under `procs()`) and pipe against it from another" = SKILL L19–20. Omissions: "Swagger 2.0 auto-converts; URL or local json/yaml" (spec loading is carried page-level by the mock-server recipe rows W484–W527).) |
+| T23 | "Mock and stateful" — response preference, status pick, 404/405, the `--stateful` pairing rules, entity envelopes, the capture example (site L27–40 vs SKILL L22–49) | C (every semantic matches its SKILL twin condensed: `example`/`examples` then schema synthesis (`enum[0]`, format-aware, nested); status pick 200 → 201 → other 2xx → `default`; unknown path 404 / wrong method 405; POST stores, GET lists shaped to the envelope, unknown id 404, PUT/PATCH shallow-merge, DELETE 204, untouched collections keep serving examples. The two-line capture example (site L36–37) is verbatim-identical to SKILL L43–44. Envelope-detection rule identical (one object-valued prop, no top-level id; ambiguous shapes stay flat; "deterministic, never guessed"). Omissions: "(id from body or a UUID)" and "Default is per-process memory" (the latter is the site's Persistence section).) |
+| T24 | "Persistence and seeding" — `--state`/`--seed` bullets, the table contract, the `sql` example (site L42–62 vs SKILL L51–75) | C ("both imply `--stateful`, and both exclude `--proxy`" = SKILL L53. The `--state` and `--seed` bullets match; site omits "`postgresql://` URL", "other schemes exit 2", boot lines `(state: sqlite)`/`(state: postgres)`/`(seeded N)`, "unknown collection keys warn and boot anyway; invalid file exits 1", "created idempotently" — all carried at SK59 (probes queued) and the recipe rows. The table-contract `crust_mock_state(…)` block matches SKILL L66. The site's `sql` example omits SKILL's `AND id = '$TID'` clause — a valid weaker variant of the same demo (whole-collection read), not a contradiction; `doc` as bare entity and the postgres `doc->>'name'` twin match. No contradiction.) |
+| T25 | "Request validation" — the 422 contract + governing rule + `--strict` (site L64–68 vs SKILL L87–104) | C (422 "deliberately distinguishable from the API's own 400", header `x-crust-validation: request`, body with `violations` + pointer paths = SKILL L89–91 (the violation object's field list is condensed; the shape is documented at W521). The governing rule "a schema the validator can't judge passes — it never invents a violation" is near-verbatim (U103). `--strict`'s literal-`additionalProperties: false` at plain object nodes only, with allOf-merged/combinator-siblings/`patternProperties` exempt, matches SKILL L99–104. Omissions (carried page-level, probes queued): the checks list — type/required/enum/format/pattern/lengths/ranges, anyOf/oneOf/allOf, path+query params coerced by declared type (U102); "composes with `--stateful`: an invalid POST creates nothing" and "--strict implies --validate; composes with --proxy, both directions" (U104/U105); the anyOf/oneOf branch-selection note (U104).) |
+| T26 | "Validation proxy — conformance testing" — prose + the findings gate line (site L70–80 vs SKILL L106–133) | X (the prose matches: forwards untouched, out-of-band recording in both directions — request violations, undocumented statuses/content-types, response-schema mismatches, `undocumented-operation` still forwarded, upstream-down = 502 not a violation (site omits "mutually exclusive with `--stateful`" — stated at its L84 and covered by U105/SK66). **But the site's gate line (L77) OMITS the required decode stage**: site `GET :4747/__crust/violations | (v => v.violations.filter(x => x.direction === "response")) | assert (a => a.length === 0)` vs SKILL L118–125's `GET :4747/__crust/violations | (r => r.json()) | (v => …)` — with the explicit warning that the stage "is **not optional**": an HTTP stage hands you the response object, so `v.violations` is `undefined` and the gate dies with `predicate threw`. The site's line is the skill's line minus that stage — the exact anti-pattern warned about: `.filter` throws on `undefined`, the line dies with `predicate threw`, and the page's "actual gate" can never pass (loud failure, not a false pass — but a broken recommended gate). The site's OWN mock-server recipe page uses the decode stage in both findings examples (L482, L521) — the agent-skills page is the odd one out. The site CI cannot catch it: the Grammar stage is `crust --check` (parse-only), and the line parses fine. → **G20** (fix: restore the stage + the one-line "not optional" note; live probe queued (b): boot the mock in `--proxy` mode against a scratch upstream, run the site's exact line → expect `predicate threw`; control with the decode stage → exit 0.) |
+| T27 | "Exit codes" + Related (site L82–88 vs SKILL L135–139) | C (`0` clean shutdown · `1` runtime failure (spec load, bad seed file) · `2` bad args incl. `--proxy` + `--stateful`/`--state`/`--seed` = SKILL L137–139 condensed; site omits "(SIGINT/SIGTERM)", "an unsupported `--state` scheme", "`--report` without `--proxy`" — carried at U104/U106, SK59/SK66 with probes. Related links internal → check-links; both targets exist and are audited (mock-server recipe, gen-fixtures recipe).) |
+
+**mock-server pair: 1 of 6 rows X** (T26 → **G20** — the conformance-gate line
+is missing the required `(r => r.json())` decode stage; the skill calls it
+"not optional" and the site's own recipe page has it in both places). All other
+rows C: every semantic matches the SKILL.md condensed, every omission is
+carried by a page-level row (U102–U106, SK59/SK61/SK65/SK66, W521–W524) with
+its probe queued.
+
 ---
 
 ## (b) Probes run
@@ -1430,3 +1450,4 @@ verify-web-links exit=2
 - **G17** cli-skill-desc-drift (T1 — site `skills list` block lags the crust-cli SKILL.md frontmatter) → `gaps/G17-cli-skill-desc-drift.md`
 - **G18** pipelines-sql-placeholder-drift (T3 — site "SQL placeholders survive untouched" sentence omits the script-positional rule SKILL.md states) → `gaps/G18-pipelines-sql-placeholder-drift.md`
 - **G19** guard-without-every-false-pass (T20 — site guard sentence inverts the short-circuit on agent-skills/load-testing + ci-load-gates: the threshold never runs without `--every`; no-op gate = false pass) → `gaps/G19-guard-without-every-false-pass.md`
+- **G20** mockserver-gate-missing-decode (T26 — agent-skills/mock-server gate line omits the required `(r => r.json())` stage; dies with `predicate threw`; the skill calls it "not optional") → `gaps/G20-mockserver-gate-missing-decode.md`
