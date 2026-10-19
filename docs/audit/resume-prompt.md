@@ -54,19 +54,7 @@ truth for verdicts): `docs/audit/full-audit.md`. Master plan:
   for W82 — (e) precedent).
   FACTS IN CONTEXT (holding spot — these are read but NOT yet in rows;
   write each into its row as that subtopic lands, and delete it from here
-  once the row carries it): (4) wait — wait.ts in full (76 L): usage
-  `wait <target> [--timeout <dur>] [--interval <dur>] [--probe-timeout
-  <dur>]`; durations `300ms`/`30s`/`2m`, bare number = ms (parseDuration
-  readiness.ts L36–45: ms/s/m units — W363's "is 200ms a valid interval
-  unit?" = YES); --timeout DEFAULT 30s, --interval DEFAULT 500ms (W576(5)
-  REVIEW answered), --probe-timeout default min(interval*4, 2s); return
-  type EXACTLY {target: string, ready: true, ms: number, attempts: number}
-  (W363/W576(1)); both `--flag value` and `--flag=value` forms; unknown
-  `--` flag / extra positional / missing target → error + usage screen;
-  not-ready throws `wait: <t> not ready after <timeout>` + optional
-  root-probe hint (runLine prepends `crust:` → W576(4)'s `crust: wait:
-  :3999/nope not ready after 2s` shape); comment L13–14 "A timeout throws,
-  which runLine turns into exit 1". (5) sources.ts tail constants: tail L194
+  once the row carries it): (5) sources.ts tail constants: tail L194
   (DEFAULT_TAIL_POLL_MS L192 = 200, TAIL_SCAN_BLOCK_BYTES L241 = 64KB,
   findTailWindowStart L247, mergeAsync L366); (8) GET L418 / request L425
   (read API source stages). (6)/(9) transforms.ts: L5
@@ -91,13 +79,19 @@ truth for verdicts): `docs/audit/full-audit.md`. Master plan:
   exitGen L937–940, restart backoff 250→2s cap L979 + healthy-uptime
   reset L960–962, detached group leaders L920 + killGroup L618–631 +
   terminate L702–721 + kill() owner L729–737; per-row evidence on disk —
-  see the commit). NEXT: subtopic
-  (4) wait item shape W363, W576, W577 (3 rows — W363/W577 already carry
-  the procs-side halves from (3); (4) closes the wait side: wait.ts read
-  in full, its facts are in FACTS IN CONTEXT) — fetch the 3 claim cells,
-  write the wait halves immediately, checkpoint, commit md-only, push;
-  then subtopics in the locked order tail → grep → stats → read API →
-  histogram, then demote this entry, add the (l) line to
+  see the commit). + (4) wait item shape DONE 46/71 (3 rows W363/W576/W577 —
+  wait.ts 76 L read in full 2026-10-19; record EXACTLY {target, ready:
+  true, ms, attempts}, parseDuration ms/s/m + bare=ms, defaults --timeout
+  30s / --interval 500ms / --probe-timeout min(interval*4,2s), not-ready
+  throw → runLine `crust:` prefix → exit 1, both flag forms, usage screen
+  on bad args — per-row evidence on disk — see the commit). NEXT: subtopic
+  (5) tail source W435, W258 (2 rows, all plain `?`) — fetch the claim
+  cells, read the src the rows name: sources.ts tail region L175–466
+  (READ MAP; constants in FACTS IN CONTEXT: DEFAULT_TAIL_POLL_MS L192 =
+  200, TAIL_SCAN_BLOCK_BYTES L241 = 64KB, findTailWindowStart L247,
+  mergeAsync L366), write the 2 code halves immediately, checkpoint,
+  commit md-only, push; then subtopics in the locked order grep → stats →
+  read API → histogram, then demote this entry, add the (l) line to
   resume-history.md's completed block, Next-move head → (m), commit
   md-only, push.
 - Completed code-review groups (a)–(k): one line each in `resume-history.md`
@@ -188,24 +182,22 @@ compaction that failed and the session was restarted):
 
 ## Next move (first unit of a resuming session)
 
-Next unit = **code review group (l), subtopic (4) wait item shape** —
-W363, W576, W577 (3 rows; W363/W577 already carry the procs-side halves
-from (3) — (4) closes the WAIT side, no rewrite). A review,
+Next unit = **code review group (l), subtopic (5) tail source** —
+W435, W258 (2 rows, all plain `?`). A review,
 NOT a fix gate: close
 `?` rows to C/V/X in place, verdict carries `file:line` evidence; an X row
 becomes a NEW G task file (next free G30, same shape as G13–G29) + a plan
 line — no code fixes while reviewing (a fix landing mid-audit would make
 later findings stale). Method: rules above + the chunking protocol in
-`resume-history.md`; NO new src read — wait.ts was read in full earlier
-and every fact it needs is in the EXACT POSITION FACTS IN CONTEXT block
-(parseDuration ms/s/m units, defaults --timeout 30s / --interval 500ms /
---probe-timeout min(interval*4,2s), record EXACTLY {target, ready: true,
-ms: number, attempts: number}, not-ready throws `wait: <t> not ready
-after <timeout>` → runLine prepends `crust:` → exit 1, wait.ts comment
-L13–14); NEVER re-read a src file after its verdict is on disk. Write the
-3 wait halves into the rows, then checkpoint EXACT POSITION, commit
+`resume-history.md`; fetch the 2 claim cells, read only the src the rows
+name (sources.ts tail region L175–466 per READ MAP — tail L194,
+findTailWindowStart L247, mergeAsync L366, readiness-probe internals,
+GET L418 / request L425 which (8) will cite; constants in FACTS IN
+CONTEXT: DEFAULT_TAIL_POLL_MS L192 = 200, TAIL_SCAN_BLOCK_BYTES L241 =
+64KB); NEVER re-read a src file after its verdict is on disk. Write the
+2 code halves into the rows, then checkpoint EXACT POSITION, commit
 `docs/audit/` (md-only) and push. Then
-subtopics in the locked order tail → grep → stats → read API →
+subtopics in the locked order grep → stats → read API →
 histogram; after group (l) closes: (m) W515 vs W473 message dialect;
 (n) W514 line-numbering; then item-4 (fresh build + full probe list →
 (b), then (c)–(e)) — item-4's full probe list is in `resume-history.md`.
