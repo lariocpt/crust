@@ -16,7 +16,70 @@ Master plan: `docs/audit/CRUST_GAPS_PLAN.md`. Original audit prompt (scope sourc
 
 ## EXACT POSITION (rolling — update this block after EVERY unit; verified on disk 2026-10-19)
 
-- Last unit on disk: **code review group (h) base64 `--file`/`--out` main-vs-published, COMPLETE 2026-10-19** —
+- Last unit on disk: **code review group (i) tool-builtin redirect refusal (W250/W251) + inside-crust `&` refusal (W525), COMPLETE 2026-10-19** —
+  src read this unit: src/lexer.ts L60–211 (redirectTail L69–97; refusal()
+  L99–113 — the full message: target line + "crust has no redirect except on
+  a shell stage, whose text goes to sh as-is" + article/kind clause, the
+  L108–110 `>`-tail hint "to save a pipeline, end the line with a shell
+  stage instead: | cat <t>" (lowercase "to save" = the code's own spelling —
+  the row's byte question settled), article logic L111 (`http` always "an");
+  rejectRedirect L119–122; stageHiddenByRedirect L170–178 — strip the
+  redirect tail, reclassify, null when the inner is shell or grep; classify
+  L180–211 — the two refusal sites L197–200 (non-shell kind with a tail) and
+  L207–210 (shell kind whose tail hides a crust stage), the "Measured leaks"
+  comment L205–209 = the page's exact seven (range/capture/parallel/expect/
+  stats/stdin/load), the grep exception comment L196–198); src/runLine.ts
+  L110–176 + L205–245 (runLine L110; exHead = first word L117; in-process
+  dispatch gate L118 — a tool-builtin head runs in-process, so no sh, no `&`;
+  the tool-builtin redirect refusal L162–174 — comment L162–166 = the pre-fix
+  127 leak, redirectTail(expanded) L167, the Bun.which(exHead) guard L168 so
+  the refusal reaches only a name that is BOTH a crust builtin and on PATH,
+  rest = user's line minus the tail L169, message + return 1 L170–174; the
+  pure-shell path + per-stage builtinInShellRefusal loop L212–220);
+  src/builtins.ts L547–571 (isToolBuiltin L547–549; design comment L554–557
+  "no shell operator can wrap them" = the page's sentence;
+  builtinInShellRefusal L559–571 — "Give it a line of its own.");
+  src/parser.ts L180–225 + L630–700 (resolveKind L187–207 +
+  rejectRedirect; shellSource refusal L640; shellTransform refusal L683);
+  src/args.ts L261 (hasUnquotedShellMeta — an unquoted `&` marks the line
+  shell, so the in-process dispatch gate steps aside); npm/package.json
+  (bin = `crust` ONLY — sh has no `mock-server` to exec); the file-flag
+  sites: testPipes/cli.ts L21 (-o, --out), testFixture/cli.ts L21 (-o,
+  --out), bundle.ts L21 (--outfile/--outdir), mockServer/cli.ts L45
+  (--report <path>), verifyWebLinks/cli.ts L49 (stdout --json, NO file
+  flag). Page reads: agent-skills/builtins.mdx W250 L155–186 / W251
+  L188–203; recipes/mock-server.mdx (NOT agent-skills) W525 L526–563, the
+  `&` sentence L528–531. Verdicts — **W250** C on every half (the verbatim
+  message byte-exact; the hidden-stage strip with its two refusal sites; the
+  explicit grep exception; `base64 hello | cat > out.b64` C by
+  construction). **W251** C on every half (refusal on the exec path BEFORE
+  any spawn; the double-condition Bun.which guard + the recorded pre-fix 127
+  leak; the suggestion line reproduces the exact flags BY CONSTRUCTION since
+  rest = the user's line minus the tail; every cited file-flag name real —
+  nuance: verify-web-links has no file flag, the row's parenthetical is an
+  example set; the W250 cross-check: the two messages ARE distinct —
+  runLine L171–172 vs lexer refusal() — plus a third mid-pipeline form
+  builtinInShellRefusal, no contradiction). **W525** C on the `&` half (the
+  in-scope one): `&` is unquoted shell meta (args.ts L261) so the dispatch
+  gate steps aside, the redirect gate finds no tail, and the per-stage loop
+  L212–220 refuses the tool-builtin head BEFORE any spawn; the refusal is
+  against the tool-builtin head, not against `&` itself — a non-builtin `&`
+  line goes to sh; "hand sh a name it does not have" C from the artifact;
+  the wait-target rationale (:4000/pets vs wait :4000 404 trap, port:
+  scheme) stays probe-owned (b). **W525 row repair (pre-existing defect,
+  found this unit):** group (e)'s commit bae078f left the row truncated
+  mid-sentence at "The row" (verified: bae078f^ well-formed, bae078f and
+  every commit since broken; single-line preserved) — this unit restored
+  the "Row stays `?`" closing and recorded the repair in the row itself. No
+  new G (next free G stays G30) → no plan line, no X-census entry, no (e)
+  line this unit. No code changes (audit only). The W250/W251/W525 rows
+  stay `?` — their (b) probe halves (the verbatim captures, the tail-form
+  file check, the file-flag probe list, the in-process `&`-refusal pair, the
+  wait-target rationale, the switcher trio, the burn-in, the ts runtime
+  half) stay in (b).
+  Next unit = **code review group (j) `crust/genFixtures/generate` subpath
+  export (W390) + examples/gen-setup.ts + setup-contract exports**.
+  Last unit before this one: **code review group (h) base64 `--file`/`--out` main-vs-published, COMPLETE 2026-10-19** —
   src read this unit: src/builtinFns/base64.ts in full (235 L — usage L36;
   parseOptions L67–91: -f/--file/-o/--out L67–82, `--` operand stop
   L83–91, typo refusal L95–100; render(Buffer) L118–125 binary-safe
@@ -351,7 +414,25 @@ Master plan: `docs/audit/CRUST_GAPS_PLAN.md`. Original audit prompt (scope sourc
      (cli.mdx failure block: line-1 truncation + the "sh: line after that"
      the code cannot produce); W216's two nuances recorded; all (g) probes
      stay (b)); (h) base64 `--file`/`--out` main-vs-published — **DONE 2026-10-19** (W244 C on every half — six parse-time screens via builtinHelp parser L301/L444 → HelpExit → runLine L293–295 stdout+0, `--` stop L619, piped-item-is-data, isBuiltinFn override gate L616, usage = base64.ts L36 verbatim, F42 = 95a1bbe in PR #60 merge 699986c, 0.2.4 `LS1oZWxw` from the flag-less v0.2.4 file; W252 C on every code half — flags on main L67–82, v0.2.4 lacks both (7a85aca in PR #60 postdates the 0.2.4 publish; npm latest 0.2.4), item-is-data L212–235, NOT_BASE64 refusal L143/L148–154; the W218 0.2.4 clause X → G29 — v0.2.4 had the preflight on NEITHER path (check half is PR #60's ae82619); G29 file + plan line + X-census entry + (e) line; W244/W252 stay ? with (b) probes);
-     (i) tool-builtin redirect refusal (W250/W251) + inside-crust `&` refusal (W525);
+     (i) tool-builtin redirect refusal (W250/W251) + inside-crust `&` refusal (W525) —
+     **DONE 2026-10-19** (W250 C on every half — refusal() lexer L99–113
+     byte-exact incl. lowercase "to save", hidden-stage strip classify
+     L180–211 + stageHiddenByRedirect L170–178, "Measured leaks" comment
+     L205–209 = the page's exact seven, grep exception L196–198/L177, the
+     `| cat` tail form by construction; W251 C on every half — runLine
+     exHead L117 + redirectTail L167 + Bun.which guard L168 (pre-fix 127
+     leak comment L162–166) + message L170–174, rest = user's line minus
+     tail L169, flag names all real: -o/--out test-pipes+test-fixture L21,
+     --outfile/--outdir bundle L21, --report mock-server L45,
+     verify-web-links has no file flag (stdout --json L49), the two W250
+     messages distinct + third mid-pipeline form builtins.ts L559–571;
+     W525 `&` half C — unquoted `&` = hasUnquotedShellMeta args.ts L261,
+     refusal = the tool-builtin-head builtinInShellRefusal via runLine
+     L212–220 before spawn, design comment L554–557 = the page's sentence,
+     `&` itself has no dedicated token; the W525 row was found truncated
+     mid-sentence at "The row" by group (e)'s commit bae078f — repaired +
+     recorded in the row; all three rows stay ? with (b) probes; no new G,
+     next free G = G30);
      (j) `crust/genFixtures/generate` subpath export (W390) + examples/gen-setup.ts +
      setup-contract exports; (k) mock-server: three import surfaces + exports map +
      crust_mock_state DDL + __crust/violations endpoint + x-crust-validation header + subset
@@ -506,12 +587,12 @@ truncation + a "sh: line after that" the code cannot produce; G28 file +
 plan line + X-census entry + (e) line; W216's two nuances recorded; all (g)
 probes stay (b)) are
 ALL DONE.**
-Next unit = **code review group (i) tool-builtin redirect refusal (W250/W251) + inside-crust `&` refusal (W525)**
-(item-3 group (i): what `crust` refuses inside a line — a tool-builtin head
-with a redirect, and `&` — vs what the pages claim; group (h) is DONE
-2026-10-19: W244 C on every half, W252 C on every code half, the W218 0.2.4
-clause X → G29 — G29 file + plan line + X-census entry + (e) line; see the
-EXACT POSITION block)
+Next unit = **code review group (j) `crust/genFixtures/generate` subpath export (W390) + examples/gen-setup.ts + setup-contract exports**
+(item-3 group (j): the genFixtures subpath export surface + examples/
+gen-setup.ts + the setup-contract exports vs what the pages claim; group
+(i) is DONE 2026-10-19: W250 C on every half, W251 C on every half, W525
+`&` half C, the W525 row truncation repaired — no new G, next free G =
+G30; see the EXACT POSITION block)
 — a review, NOT a fix gate: close every
 open `?` row to C/V/X in place, with the verdict carrying `file:line`
 evidence; an X row becomes a NEW G task file (next free = G30, same shape as
@@ -553,9 +634,12 @@ code-half C; W158-vs-W266 resolves in W266's favor; G27 file + plan line +
 5 R (W197/W201/W203/W204/W205), W217 X → G28 — the cli.mdx failure block is
 a line-1 truncation + a "sh: line after that" the code cannot produce;
 G28 file + plan line + X-census entry + (e) line; all (g) probes stay (b));
-(h)
-base64 `--file`/`--out` main-vs-published (W244/W252); (i) tool-builtin
-redirect refusal + `&` refusal; (j) genFixtures subpath export; (k)
+(h) base64 `--file`/`--out` main-vs-published (W244/W252) — **DONE
+2026-10-19** (W244 C on every half; W252 C on every code half; the W218
+0.2.4 clause X → G29); (i) tool-builtin redirect refusal (W250/W251) +
+inside-crust `&` refusal (W525) — **DONE 2026-10-19** (W250 C on every
+half; W251 C on every half; W525 `&` half C; W525 row truncation repaired;
+no new G, next free G = G30); (j) genFixtures subpath export; (k)
 mock-server surfaces; (l) logs ring buffer / pty keymap / procs stream kinds /
 wait item shape / tail / grep / stats --every / read API / histogram
 bucketing (W539 C-half); (m) W515 vs W473 message dialect; (n) W514
