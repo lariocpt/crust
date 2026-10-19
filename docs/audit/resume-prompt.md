@@ -41,12 +41,13 @@ truth for verdicts): `docs/audit/full-audit.md`. Master plan:
   (e); lexer L60–211 (i); runLine L55–95/L110–176/L125–140/L205–245/
   L288–303 (f)/(i); config L65–90 map (e); readiness L1–50 + wait.ts
   L62–72 (g); sinks.ts (e); builtins.ts L547–571 (i); genFixtures/
-  mockServer (j)/(k); src/logs/cli.ts + ring.ts + session.ts (l)(1)):
+  mockServer (j)/(k); src/logs/cli.ts + ring.ts + session.ts (l)(1);
+  sources.ts L460–1000 (l)(3)):
    editor.ts in full (321 L), completion.ts L80–95,
   interrupt.ts L40–88, builtinFns/wait.ts in full (76 L — facts below),
-  sources.ts L175–1014 (tail L194 + findTailWindowStart L247 + mergeAsync
-  L366 + procs L640–1014 incl. defaults L528–539, normalizeReady L548,
-  normalizeLive L580, restartMax L609, killGroup L618), transforms.ts
+  sources.ts L175–466 (tail L194 + findTailWindowStart L247 + mergeAsync
+  L366 + readiness-probe internals + GET L418 / request L425 for (8)),
+  transforms.ts
   L1–~100 (native grep, comment L5) + L505–703 (histogram L514–618 +
   statsStage L619+ tail for --out/flush-on-item), lexer.ts L440–576 (grep
   safe-subset recognizer L450), config.ts L60–95 (injection map re-verify
@@ -65,17 +66,10 @@ truth for verdicts): `docs/audit/full-audit.md`. Master plan:
   not-ready throws `wait: <t> not ready after <timeout>` + optional
   root-probe hint (runLine prepends `crust:` → W576(4)'s `crust: wait:
   :3999/nope not ready after 2s` shape); comment L13–14 "A timeout throws,
-  which runLine turns into exit 1". (3)/(5)/(9) sources.ts grep-confirmed
-  constants: READY_DEFAULT_TIMEOUT_MS L528 = 30_000 (W574(4)),
-  READY_DEFAULT_INTERVAL_MS L529 = 250, LIVE_DEFAULT_INTERVAL_MS L532 =
-  5_000 (W572(5) cadence ~5s), LIVE_DEFAULT_FAILURES L533 = 3,
-  KILL_GRACE_MS L536 = 3000 (W359/W575 3s-grace SIGTERM then SIGKILL),
-  RESTART_HEALTHY_UPTIME_MS L539 = 10_000 (W573(2) uptime>10s reset);
-  ProcLine L467, ReadySpec L474, LiveSpec L487, ProcSpec L502,
-  normalizeReady L548, normalizeLive L580, restartMax L609, killGroup
-  L618, procs L640; tail L194 (DEFAULT_TAIL_POLL_MS L192 = 200,
-  TAIL_SCAN_BLOCK_BYTES L241 = 64KB, findTailWindowStart L247,
-  mergeAsync L366); GET L418 / request L425. (6)/(9) transforms.ts: L5
+  which runLine turns into exit 1". (5) sources.ts tail constants: tail L194
+  (DEFAULT_TAIL_POLL_MS L192 = 200, TAIL_SCAN_BLOCK_BYTES L241 = 64KB,
+  findTailWindowStart L247, mergeAsync L366); (8) GET L418 / request L425
+  (read API source stages). (6)/(9) transforms.ts: L5
   comment "Native grep over pipeline items — line-buffered where sh grep
   block-…" (native grep stage lives in transforms.ts, NOT a separate
   file); histogram L514–618 (BUCKET_BOUNDS, bucketFor L542, overflow
@@ -86,20 +80,26 @@ truth for verdicts): `docs/audit/full-audit.md`. Master plan:
   W225 code halves (rows stay ? pty-probe-owned), SK34 C (code review +
   C-by-usage); the subtopic's read record (editor.ts 321 L keymap map,
   completion, interrupt, history, index REPL loop, builtins L193–208) is
-  fully carried in those four rows — commit d4194ac. (1) logs session
-  DONE 23/71 — W331–W343, W345–W349 + W578 (19 rows) ALL carry code halves
-  (src/logs/cli.ts 180 L + ring.ts 97 L + session.ts 459 L full-read
-  2026-10-19; per-row evidence on disk — see the commit). NEXT: subtopic
-  (3) procs stream kinds W351, W353–W364 (13) + W570–W575, W577 (7) = 20
-  rows (all plain `?`, no code halves on disk) — fetch the claim cells,
-  the src is sources.ts procs L640–1014 (READ MAP) + the grep-confirmed
-  constants already in FACTS IN CONTEXT (defaults L528–539, normalizeReady
-  L548, normalizeLive L580, restartMax L609, killGroup L618); write the 20
-  code halves immediately (a verdict counts only once it is in its row),
-  checkpoint, commit md-only, push; then subtopics in the locked order
-  wait → tail → grep → stats → read API → histogram, then demote this
-  entry, add the (l) line to resume-history.md's completed block,
-  Next-move head → (m), commit md-only, push.
+  fully carried in those four rows — commit d4194ac. (1) logs session DONE 23/71 (19 rows, all code halves on disk — see commit)
+  + (3) procs stream kinds DONE 43/71 — W351, W353–W364 + W570–W575, W577
+  (20 rows) ALL carry code halves (sources.ts L460–1000 full-read
+  2026-10-19: ProcLine/ReadySpec/LiveSpec/ProcSpec types L467–526,
+  normalizeReady L548 / normalizeLive L580 / restartMax L609, upfront
+  after-validation L652–679 (self/unknown/cycle), readyGen L770–813
+  (timeout: restart → terminate+respawn; else throw), liveGen L820–889
+  (per-spawn, armed post-ready, 3 message shapes + label suffixes),
+  exitGen L937–940, restart backoff 250→2s cap L979 + healthy-uptime
+  reset L960–962, detached group leaders L920 + killGroup L618–631 +
+  terminate L702–721 + kill() owner L729–737; per-row evidence on disk —
+  see the commit). NEXT: subtopic
+  (4) wait item shape W363, W576, W577 (3 rows — W363/W577 already carry
+  the procs-side halves from (3); (4) closes the wait side: wait.ts read
+  in full, its facts are in FACTS IN CONTEXT) — fetch the 3 claim cells,
+  write the wait halves immediately, checkpoint, commit md-only, push;
+  then subtopics in the locked order tail → grep → stats → read API →
+  histogram, then demote this entry, add the (l) line to
+  resume-history.md's completed block, Next-move head → (m), commit
+  md-only, push.
 - Completed code-review groups (a)–(k): one line each in `resume-history.md`
   (append-only; no progress annotations there). **next free G = G30.** G
   task files: `docs/audit/gaps/`; plan lines: `CRUST_GAPS_PLAN.md`;
@@ -188,20 +188,24 @@ compaction that failed and the session was restarted):
 
 ## Next move (first unit of a resuming session)
 
-Next unit = **code review group (l), subtopic (3) procs stream kinds** —
-W351, W353–W364 (13) + W570–W575, W577 (7) = 20 rows, all plain `?`, no
-code halves on disk (W577 is shared with subtopic (4) wait). A review,
+Next unit = **code review group (l), subtopic (4) wait item shape** —
+W363, W576, W577 (3 rows; W363/W577 already carry the procs-side halves
+from (3) — (4) closes the WAIT side, no rewrite). A review,
 NOT a fix gate: close
 `?` rows to C/V/X in place, verdict carries `file:line` evidence; an X row
 becomes a NEW G task file (next free G30, same shape as G13–G29) + a plan
 line — no code fixes while reviewing (a fix landing mid-audit would make
 later findings stale). Method: rules above + the chunking protocol in
-`resume-history.md`; read only the src the rows name (sources.ts procs
-L640–1014; the grep-confirmed sources/transforms constants are in the
-EXACT POSITION FACTS IN CONTEXT; NEVER re-read a src file after its
-verdict is on disk); commit `docs/audit/` (md-only) and push after the
-unit. Then
-subtopics in the locked order wait → tail → grep → stats → read
-API → histogram; after group (l) closes: (m) W515 vs W473 message dialect;
+`resume-history.md`; NO new src read — wait.ts was read in full earlier
+and every fact it needs is in the EXACT POSITION FACTS IN CONTEXT block
+(parseDuration ms/s/m units, defaults --timeout 30s / --interval 500ms /
+--probe-timeout min(interval*4,2s), record EXACTLY {target, ready: true,
+ms: number, attempts: number}, not-ready throws `wait: <t> not ready
+after <timeout>` → runLine prepends `crust:` → exit 1, wait.ts comment
+L13–14); NEVER re-read a src file after its verdict is on disk. Write the
+3 wait halves into the rows, then checkpoint EXACT POSITION, commit
+`docs/audit/` (md-only) and push. Then
+subtopics in the locked order tail → grep → stats → read API →
+histogram; after group (l) closes: (m) W515 vs W473 message dialect;
 (n) W514 line-numbering; then item-4 (fresh build + full probe list →
 (b), then (c)–(e)) — item-4's full probe list is in `resume-history.md`.
