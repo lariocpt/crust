@@ -16,7 +16,33 @@ Master plan: `docs/audit/CRUST_GAPS_PLAN.md`. Original audit prompt (scope sourc
 
 ## EXACT POSITION (rolling — update this block after EVERY unit; verified on disk 2026-10-19)
 
-- Last unit on disk: **code review group (e) source-fn array flattening, COMPLETE 2026-10-19** —
+- Last unit on disk: **code review group (f) stage-error index preservation, COMPLETE 2026-10-19** —
+  src read this unit: runLine.ts L55–95 (splitLines continuation + `runLines`
+  L76–85 — the SHARED fail-fast loop, comment names script file / piped stdin
+  / multi-line `-c` / `source`d file, `if (last !== 0) break;` L82) + the
+  line-exec catch L288–303 (HelpExit → stdout + 0; ShellExitError → child's
+  code, no `crust:` line; else `crust: <err.message>` + return 1, L301–302) +
+  the in-process builtin dispatch catch L125–140 (same format); transforms.ts
+  L185–222 (ExpectError L187–196 — `expect: item at index ${index} failed
+  matcher ${…}` at L193; the expect stage's own counter `i` L215/L217/L219,
+  stage-local over surviving items); pipeline.ts re-verified NO-INDEX in
+  every arm (fn-arm L75–83 no try/catch; only throw = unsupported-source
+  L58). Verdicts: **W158** C on throw-fails + sinks-reject (collect
+  L107–111 for-await rejects) + non-terminal-propagate (no local catch in
+  the generator chain); the "with the index preserved" half **X → G27** (no
+  index in chain or format; the sole indexed error is a stage-local
+  ExpectError MISMATCH, not a preserved source index), **W266** C on all
+  three halves (format verbatim + the two documented in-contract exceptions;
+  the three entry modes DO share `runLines`) — the W158-vs-W266
+  contradiction resolves in W266's favor in code. G27 file in gaps/ + plan
+  line + (f) section line; both rows stay ? with their (b) verbatim-capture
+  probes (throw-on-item-2-of-5; good/bad/good fail-fast). No code changes
+  (audit only). Next free G = G28.
+  Next unit = **code review group (g) skills subsystem**
+  (W184/W188/W194–W218 — the skills-CLI surface: what `crust skills`
+  subcommands actually exist vs what the skills pages claim).
+  Last unit before this one: **code review group (e) source-fn array flattening,
+  COMPLETE 2026-10-19** —
   src read this unit: pipeline.ts L44–142 in full (pipe fn-arm L75–83 =
   the no-flatten contract `yield await fn(item)`; collect L107; `to` L140–142
   — a stage passed there is a laziness trap), parser.ts shellSource
@@ -215,7 +241,11 @@ Master plan: `docs/audit/CRUST_GAPS_PLAN.md`. Original audit prompt (scope sourc
      + nonexistent `startMockServer`); W554 parallel(8, verb) load-mode C;
      W154 already C'd in (b) — cross-ref only; G26 file + plan line + G22 file
      update + (e) lines; all (e) probes in the (b) queue)
-     (f) stage-error index preservation (W158 vs W266); (g) skills subsystem
+     (f) stage-error index preservation — **DONE 2026-10-19** (W158 code-half:
+     throw-fails/sinks-reject/propagate C, "index preserved" X → G27; W266
+     code-half C on all three halves; W158-vs-W266 resolves in W266's favor;
+     G27 file + plan line + (f) line; both rows stay ? with (b) probes);
+     (g) skills subsystem
      (W184/W188/W194–W218); (h) base64 `--file`/`--out` main-vs-published (W244/W252);
      (i) tool-builtin redirect refusal (W250/W251) + inside-crust `&` refusal (W525);
      (j) `crust/genFixtures/generate` subpath export (W390) + examples/gen-setup.ts +
@@ -363,11 +393,13 @@ code-halves C, probes → (b); W551 addendum; SK47/48/50/94 C; U61 flag half X �
 W144 X CONFIRMED → G24) and (e) source-fn array flattening (W126 C via cross-ref;
 W433 code-half C; W477(3) X CONFIRMED → G22 scope EXTENDED; W525 zero-arg parallel
 fn C + X → G26; W554 load-mode C; G26 file + plan line + G22 file update + (e)
-lines) are
+lines) and (f) stage-error index preservation (W158: throw-fails/sinks-reject/
+propagate C, "index preserved" X → G27; W266 code-half C; W158-vs-W266
+resolves in W266's favor; G27 file + plan line + (f) line) are
 ALL DONE.**
-Next unit = **code review group (f) stage-error index preservation**
-(item-3 group (f): W158 vs W266 — which index a stage error reports, pre- or
-post-transform item position; W158's row carries the (f) probe)
+Next unit = **code review group (g) skills subsystem**
+(item-3 group (g): W184/W188/W194–W218 — the skills-CLI surface: what
+`crust skills` subcommands actually exist vs what the skills pages claim)
 — a review, NOT a fix gate: close every
 open `?` row to C/V/X in place, with the verdict carrying `file:line`
 evidence; an X row becomes a NEW G task file (next free = G24, same shape as
@@ -402,7 +434,10 @@ pty-probe-owned; U61 flag-table half X → G25; W144 severity settled X CONFIRME
 flattening — **DONE 2026-10-19** (W126 C; W433 code-half C; W477(3) X CONFIRMED →
 G22 scope EXTENDED; W525 zero-arg parallel fn C + X → G26; W554 load-mode C;
 G26 file + plan line + G22 file update);
-(f) stage-error index preservation (W158 vs W266); (g) skills subsystem; (h)
+(f) stage-error index preservation — **DONE 2026-10-19** (W158 code-half:
+throw-fails/sinks-reject/propagate C + "index preserved" X → G27; W266
+code-half C; W158-vs-W266 resolves in W266's favor; G27 file + plan line +
+(f) line); (g) skills subsystem; (h)
 base64 `--file`/`--out` main-vs-published (W244/W252); (i) tool-builtin
 redirect refusal + `&` refusal; (j) genFixtures subpath export; (k)
 mock-server surfaces; (l) logs ring buffer / pty keymap / procs stream kinds /
