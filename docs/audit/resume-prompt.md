@@ -16,7 +16,46 @@ Master plan: `docs/audit/CRUST_GAPS_PLAN.md`. Original audit prompt (scope sourc
 
 ## EXACT POSITION (rolling — update this block after EVERY unit; verified on disk 2026-10-19)
 
-- Last unit on disk: **code review group (d) export surface + runtime globals, COMPLETE 2026-10-19** —
+- Last unit on disk: **code review group (e) source-fn array flattening, COMPLETE 2026-10-19** —
+  src read this unit: pipeline.ts L44–142 in full (pipe fn-arm L75–83 =
+  the no-flatten contract `yield await fn(item)`; collect L107; `to` L140–142
+  — a stage passed there is a laziness trap), parser.ts shellSource
+  L636–684 + shellTransform L686–745 (per-line linearization: `buf.split("\n")`
+  yield-per-line, flush `if (buf) yield buf` L668/L738, empty lines = ""
+  items — "drops blanks" is grep's `.`) + parallel-modifier region L83–121
+  (NOT a stage — pending-concurrency consumed by the NEXT stage) + applyStage
+  arms L326–355 (GET = parallel(n, timedGet) at any n; write verbs + modifier
+  = LOAD mode parallel(concurrency, timedHttpItem)), transforms.ts parallel
+  body L253–300 (fn(item) call site L277 — zero-arg fn ignores the item) +
+  statsStage L619–700 (yields per-window + final tagged), sources.ts L50
+  (range(): Pipeline<number>), config.ts L65–90 (21-name map RE-VERIFIED —
+  statsStage IS injected, bare stats is NOT; L65–68 drift comment), sinks.ts
+  (removed-stats() tombstone), mockServer/ listing (NO index.ts;
+  startMockServer = zero matches in src/+tests/; loadSpec.ts L49 + server.ts
+  L127 corroborated for W485). Verdicts: **W126 C** (closed by cross-ref —
+  parser.ts L298–313 per W154 (b); `fn === sql` → sqlSource L53–56 per group
+  (a); Pipeline.of array arm L31–33; no probe plan carried), W433 code-half C
+  (linearization shellSource/shellTransform; no mid-pipeline flatten
+  pipeline.ts L79–81; source-fn-only flattening L298–313; (2)'s whole-file
+  half = W430's ?; four probes stay (b)), W477 sub-claim (3) **X CONFIRMED →
+  G22 scope EXTENDED** (ts "Source equivalent" collects `[]` — zero-arg pipe
+  fn never runs on empty seed, pipeline.ts L31–33 + L75–83 + L107–111; G22
+  file updated — NOT a new G; verbatim capture probe stays (b)), W525
+  code-half C + **X → G26** (zero-arg parallel fn C — transforms L253/L277;
+  range-as-TS-source C — sources L50; `stats()` = removed sink +
+  `startMockServer` = nonexistent name — sinks.ts tombstone, config L69–90,
+  grep zero, no index.ts, no exports map (G13); expectStage-vs-expect nuance
+  recorded (W474); row stays ? with the (b) probe plan), W554 code-half C
+  (`parallel 8 | POST …` = write-verb LOAD mode — parser L83–121 + L335–355;
+  tick shapes are W552's; probe trio stays (b)). G26 file in gaps/ + plan
+  line + (e) lines; G22 file scope-extended (Sub-claim (3) section + Fix
+  addition + Out-of-scope correction). All (e) probes appended to the (b)
+  queue (L83 note). No code changes (audit only). Next free G = G27.
+  Next unit = **code review group (f) stage-error index preservation**
+  (W158 vs W266 — which index a stage error reports, pre- or post-transform
+  item position; W158's row carries the (f) probe).
+  Last unit before this one: **code review group (d) export surface + runtime globals,
+  COMPLETE 2026-10-19** —
   src read this unit: genFixtures/cli.ts L36–41, mockServer/cli.ts L48–60,
   verifyWebLinks/cli.ts L258–279 + parseArgs defaults, testPipes/cli.ts
   L29–35, testFixture/cli.ts L30–37, skillsCli.ts L22–27, testFixture/
@@ -169,8 +208,13 @@ Master plan: `docs/audit/CRUST_GAPS_PLAN.md`. Original audit prompt (scope sourc
      commands + test-pipes/test-fixture/gen-fixtures/verify-web-links/mock-server dispatch
      entries + exact flag sets + expectStage/expect export names (W474) + readAll export
      (W455) + Pipeline.of (W476) + arity hard error since 0.2.4 (W468) + timedGet/statsStage/
-     load-as-array-source (W531) + sort-stage presence (W551); (e) source-fn array flattening
-     (W126, W154 [already C'd in (b) — cross-ref only], W433, W477(3), W525 zero-arg parallel fn, W554 parallel(8, verb) load mode);
+     load-as-array-source (W531) + sort-stage presence (W551);
+     (e) source-fn array flattening — **DONE 2026-10-19** (W126 C via cross-ref;
+     W433 code-half C; W477(3) X CONFIRMED → G22 scope EXTENDED, not a new G;
+     W525 zero-arg parallel fn C + X → G26 (ghost names: removed `stats()` sink
+     + nonexistent `startMockServer`); W554 parallel(8, verb) load-mode C;
+     W154 already C'd in (b) — cross-ref only; G26 file + plan line + G22 file
+     update + (e) lines; all (e) probes in the (b) queue)
      (f) stage-error index preservation (W158 vs W266); (g) skills subsystem
      (W184/W188/W194–W218); (h) base64 `--file`/`--out` main-vs-published (W244/W252);
      (i) tool-builtin redirect refusal (W250/W251) + inside-crust `&` refusal (W525);
@@ -313,15 +357,17 @@ fresh build `bin/crust-bin` sha256 `947d2f4dd62e6705…`, Bun v1.4.3, probes
 P1a/P1b/P2/P3a/P4/P5 + C1/C2 in full-audit.md §(b); W146/W150/W163/W164
 halves consumed; W160/W162 C; W465 code-half C in the W465 unit —
 src/testPipes/runner.ts in full: per-file freshContext L33–41 at L133, env
-snapshot L128 + full finally-restore L166–171; probe trio stays in (b)) and (d) export
+snapshot L128 + full finally-restore L166–171; probe trio stays in (b)), (d) export
 surface + runtime globals (W227 C; U129 code-half C; W474/W455/W476/W468/W531
 code-halves C, probes → (b); W551 addendum; SK47/48/50/94 C; U61 flag half X → G25;
-W144 X CONFIRMED → G24) are
+W144 X CONFIRMED → G24) and (e) source-fn array flattening (W126 C via cross-ref;
+W433 code-half C; W477(3) X CONFIRMED → G22 scope EXTENDED; W525 zero-arg parallel
+fn C + X → G26; W554 load-mode C; G26 file + plan line + G22 file update + (e)
+lines) are
 ALL DONE.**
-Next unit = **code review group (e) source-fn array flattening**
-(item-3 group (e): W126, W433, W477(3), W525 zero-arg parallel fn, W554
-parallel(8, verb) load mode — W154 from the map already C'd in (b), cross-ref
-only)
+Next unit = **code review group (f) stage-error index preservation**
+(item-3 group (f): W158 vs W266 — which index a stage error reports, pre- or
+post-transform item position; W158's row carries the (f) probe)
 — a review, NOT a fix gate: close every
 open `?` row to C/V/X in place, with the verdict carrying `file:line`
 evidence; an X row becomes a NEW G task file (next free = G24, same shape as
@@ -353,7 +399,9 @@ code-halves C, probe halves appended to the (b) queue; W551 sort-stage addendum
 — finding-lite, not X; SK47/48/50/94 C; W338 code-side note, row stays ?
 pty-probe-owned; U61 flag-table half X → G25; W144 severity settled X CONFIRMED
 → G24; G24+G25 files + plan lines + (e) lines written); (e) source-fn array
-flattening;
+flattening — **DONE 2026-10-19** (W126 C; W433 code-half C; W477(3) X CONFIRMED →
+G22 scope EXTENDED; W525 zero-arg parallel fn C + X → G26; W554 load-mode C;
+G26 file + plan line + G22 file update);
 (f) stage-error index preservation (W158 vs W266); (g) skills subsystem; (h)
 base64 `--file`/`--out` main-vs-published (W244/W252); (i) tool-builtin
 redirect refusal + `&` refusal; (j) genFixtures subpath export; (k)
