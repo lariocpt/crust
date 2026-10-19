@@ -16,7 +16,95 @@ Master plan: `docs/audit/CRUST_GAPS_PLAN.md`. Original audit prompt (scope sourc
 
 ## EXACT POSITION (rolling — update this block after EVERY unit; verified on disk 2026-10-19)
 
-- Last unit on disk: **code review group (i) tool-builtin redirect refusal (W250/W251) + inside-crust `&` refusal (W525), COMPLETE 2026-10-19** —
+- Last unit on disk: **code review group (j) `crust/genFixtures/generate` subpath export (W390) + examples/gen-setup.ts + setup-contract exports, COMPLETE 2026-10-19** —
+  src read this unit: src/genFixtures/cli.ts in full (130 L —
+  DEFAULT_OUT tests/gen L7, DEFAULT_SETUP ./tests/gen-setup.ts L8;
+  USAGE L10–34 incl. the required-exports list L23–27 + the
+  examples/gen-setup.ts pointer; SPEC L36–41: swagger positional, -o/--out,
+  -s/--setup, --no-flows; the missing-setup catch L105–128 — the
+  Cannot-find-module match L115–117 + the L107–114 design comment (pre-fix
+  raw Bun error), the 3-line message L119–124 (path looked at +
+  examples/gen-setup.ts template + --setup flag), return 1; success line
+  L72–74); src/genFixtures/generate.ts L1–100 (the in-file contract doc
+  L28–63 — six required exports + optional flowOverrides L59–63; imports
+  L65–76: loadSpec from ../mockServer/loadSpec, resolveRef from
+  mockResponse, the schemaTypes helpers) + L100–160 (GenerateOpts L119–127,
+  GenerateResult L129–143, FlowOverride L149–152) + L955–1024 (emitFixture
+  L966–999 — the per-case shape: setup: shared, input closure, body
+  double-stringified L976, data matcher L977–978, JSON_HEADERS vs
+  headersFor L968–974; setupSpecifier L1002–1007; isPathLike L1009–1011) +
+  L1315–1345 (derefSchemas head — local resolveRef, no fetch, the
+  200k-node budget) + L1380–1505 (generateFixtures L1385 — loadSpec
+  L1386, setup import L1392 + scopeParam `in` check L1396–1404 + the
+  scopeRoots/flowOverrides defaults L1407–1409, byTag loop L1416–1424,
+  the rm/mkdir L1450–1451, the file template L1462–1471, per-tag file name
+  L1472, the flows emission L1479–1501, the return L1504);
+  src/mockServer/loadSpec.ts in full (100 L — loadSpec L49–80: the
+  source.includes("://") ? fetchText : readText branch L50, the JSON/YAML
+  sniff L52–55, the Swagger-2.0 auto-convert L63–65, the optional-paths
+  webhook acceptance L71–78; fetchText L82–86; readText L88–92);
+  src/mockServer/swagger2to3.ts exports only (isSwagger2 L14, swagger2to3
+  L132; 185 L — the built-in zero-dep converter). Repo: examples/gen-setup.ts
+  shape (106 L — JSON_HEADERS L22, scopeParam L30, scopeRoots L36,
+  shared L48, headersFor L66, resolvePath L77, the fetch helpers L87/L98);
+  package.json (name "crust" — NO exports field at all); npm/package.json
+  in full (55 L — ALSO name "crust", NO exports, files[] = bin/lib/scripts/
+  skills/README.md — no src shipped; postinstall; the LAN publishConfig).
+  Page reads: recipes/gen-fixtures.mdx L1–80 (the W390 ts switcher
+  L28–40 + the bash sibling L14–26 + the deleted-and-recreated note L43 +
+  the regen-and-diff CI block L54–61) + L300–419 (the contract table
+  L311–322, the minimal module L324–369, the rewrite sentence L371, the
+  examples ship claim L373–375, the generated-file sample L377–413);
+  docs/USAGE.md L1477–1513 (the U82 contract section). Verdicts —
+  **W390** C on every code half (the named export real at generate.ts L1385
+  with exactly the documented opts {swagger, out, setup, flows?, log?} +
+  result {outDir, files, totalCases, flowFile, flowCount, flowSkipped,
+  withNoCases}; the subpath specifier NOT resolvable — neither package.json
+  has an exports map and the launcher ships no src, so
+  `crust/genFixtures/generate` works only as a relative import in-repo; the
+  page block carries no in-repo caveat unlike the W485 sibling — record
+  exports-map state + doc-nuance, no X, every API claim source-true;
+  URL-or-path: the SWAGGER ARG is fetched when it is a URL (loadSpec L50 /
+  fetchText L82–86) while $refs are resolved locally (derefSchemas L1326) —
+  W406 not contradicted; out ↔ -o/--out naming consistent (L7/L38/L121);
+  Swagger 2.0 auto-convert = loadSpec L63–65 → swagger2to3). **U82** C
+  (scopeParam the ONLY hard-required export — the `in` check L1396–1404
+  with the null fix named; scopeRoots/flowOverrides optional defaults;
+  shared/headersFor/resolvePath/JSON_HEADERS NOT read by the generator —
+  the generated file imports only what it uses (used-set L1459 +
+  emitFixture L968–974); "only member/outsider" C (auth union L660, none →
+  JSON_HEADERS direct); laziness enforced by the generation-time import
+  L1390–1392; flowOverrides = the undocumented-optional nuance). **W420**
+  **C FULL CLOSE** (the row asked for no deep probe: the module shape
+  covers both consumers, the `??=` cache L342 satisfies MUST-cache,
+  import-side-effect-free satisfies lazy, BASE binds at import time per
+  process (generation env vs runtime env — the W276 cross-ref resolved by
+  mechanism), randomUUID global fine; real-run confirmation rides
+  W422/W425's gen probe). **W421** C code half (setupSpecifier L1002–1007 =
+  relative(outDir, resolve(setup)) + ./ prefix; isPathLike L1009–1011; bare
+  kept as-is L1003 — the doc-tension note (bare npm specifiers fail at
+  runtime in the compiled binary, no-npm-resolution constraint) stays a
+  findings note, not an X). **W422** C on all three claims
+  (examples/gen-setup.ts exists 106 L same shape + fetch helpers;
+  DEFAULT_SETUP ./tests/gen-setup.ts L8/L46/L58/L30; the missing-setup
+  message names path + template + --setup flag, exit 1, the L107–114
+  comment = the pre-fix raw-error history). **W423** C on the emitted
+  structure (template L1462–1471 + emitFixture L966–999 byte-exact on
+  every cited shape; per-tag file name L1472; the out dir rm/recreate
+  L1450–1451; nuance: the page sample shows ONE header line, the template
+  UNCONDITIONALLY emits the second `// Regenerate: …` L1463 — a cosmetic
+  abridgment, recorded for the findings section with the template proof).
+  No X (nothing the code disproves as a false page claim — the exports-map
+  state is release-state, already conceded on the sibling mockServer page;
+  next free G stays G30) → no plan line, no X-census entry, no (e) line
+  this unit. No code changes (audit only). The W390/U82/W421/W422/W423
+  rows stay `?` — their (b) probes (the ts-import runnability, the no-setup
+  message verbatim + exit, the different-cwd relative-path, the gen-run
+  file-shape + emitted header) stay in (b).
+  Next unit = **code review group (k) mock-server: three import surfaces +
+  exports map + crust_mock_state DDL + __crust/violations endpoint +
+  x-crust-validation header + subset walker + 422 + proxy --report**.
+  Last unit before this one: **code review group (i) tool-builtin redirect refusal (W250/W251) + inside-crust `&` refusal (W525), COMPLETE 2026-10-19** —
   src read this unit: src/lexer.ts L60–211 (redirectTail L69–97; refusal()
   L99–113 — the full message: target line + "crust has no redirect except on
   a shell stage, whose text goes to sh as-is" + article/kind clause, the
@@ -434,7 +522,26 @@ Master plan: `docs/audit/CRUST_GAPS_PLAN.md`. Original audit prompt (scope sourc
      recorded in the row; all three rows stay ? with (b) probes; no new G,
      next free G = G30);
      (j) `crust/genFixtures/generate` subpath export (W390) + examples/gen-setup.ts +
-     setup-contract exports; (k) mock-server: three import surfaces + exports map +
+     setup-contract exports — **DONE 2026-10-19** (W390 C on every code
+     half — the named export generate.ts L1385 + the documented opts/
+     result shapes, the subpath NOT resolvable (no exports map in either
+     package.json, no src in the launcher files[]) = the relative-import
+     in-repo form, the page has no in-repo caveat unlike the W485 sibling
+     (record, no X), the swagger arg gets fetched when it's a URL
+     (loadSpec L50) while $refs are local (derefSchemas L1326), out ↔
+     -o/--out consistent, Swagger 2.0 auto-convert L63–65 → swagger2to3;
+     U82 C — scopeParam the only hard-required (the in check L1396–1404),
+     the four runtime exports not read by the generator (used-set L1459 +
+     emitFixture L968–974), flowOverrides undocumented-optional; W420 C
+     FULL CLOSE (the row waives the deep probe); W421 C code half
+     (setupSpecifier L1002–1007 + isPathLike L1009–1011, bare kept as-is
+     L1003, tension note → findings); W422 C on all three claims
+     (examples/gen-setup.ts 106 L, DEFAULT_SETUP L8/L46/L58, the
+     missing-setup message L115–125 exit 1); W423 C on the emitted
+     structure (template L1462–1471 + emitFixture L966–999; the page
+     sample omits the unconditional second header line L1463 — cosmetic
+     note); no new G, next free G = G30; all open rows keep (b) probes);
+     (k) mock-server: three import surfaces + exports map +
      crust_mock_state DDL + __crust/violations endpoint + x-crust-validation header + subset
      walker + 422 + proxy --report; (l) logs session ring buffer / pty keymap + procs stream
      kinds + wait item shape + tail source + grep native-subset + stats --every +
@@ -587,12 +694,12 @@ truncation + a "sh: line after that" the code cannot produce; G28 file +
 plan line + X-census entry + (e) line; W216's two nuances recorded; all (g)
 probes stay (b)) are
 ALL DONE.**
-Next unit = **code review group (j) `crust/genFixtures/generate` subpath export (W390) + examples/gen-setup.ts + setup-contract exports**
-(item-3 group (j): the genFixtures subpath export surface + examples/
-gen-setup.ts + the setup-contract exports vs what the pages claim; group
-(i) is DONE 2026-10-19: W250 C on every half, W251 C on every half, W525
-`&` half C, the W525 row truncation repaired — no new G, next free G =
-G30; see the EXACT POSITION block)
+Next unit = **code review group (k) mock-server: three import surfaces + exports map + crust_mock_state DDL + __crust/violations endpoint + x-crust-validation header + subset walker + 422 + proxy --report**
+(item-3 group (k); group (j) is DONE 2026-10-19: W390 C on every code
+half (no exports map in either package.json — the subpath is in-repo
+relative only; the swagger arg fetches when a URL, $refs stay local), U82
+C, W420 C full close, W421/W422/W423 C code halves, no new G, next free
+G = G30; see the EXACT POSITION block)
 — a review, NOT a fix gate: close every
 open `?` row to C/V/X in place, with the verdict carrying `file:line`
 evidence; an X row becomes a NEW G task file (next free = G30, same shape as
@@ -639,7 +746,9 @@ G28 file + plan line + X-census entry + (e) line; all (g) probes stay (b));
 0.2.4 clause X → G29); (i) tool-builtin redirect refusal (W250/W251) +
 inside-crust `&` refusal (W525) — **DONE 2026-10-19** (W250 C on every
 half; W251 C on every half; W525 `&` half C; W525 row truncation repaired;
-no new G, next free G = G30); (j) genFixtures subpath export; (k)
+no new G, next free G = G30); (j) genFixtures subpath export — **DONE
+2026-10-19** (W390 C on every code half; U82 C; W420 C full close;
+W421/W422/W423 C code halves; no new G, next free G = G30); (k)
 mock-server surfaces; (l) logs ring buffer / pty keymap / procs stream kinds /
 wait item shape / tail / grep / stats --every / read API / histogram
 bucketing (W539 C-half); (m) W515 vs W473 message dialect; (n) W514
