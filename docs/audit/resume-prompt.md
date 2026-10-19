@@ -16,7 +16,51 @@ Master plan: `docs/audit/CRUST_GAPS_PLAN.md`. Original audit prompt (scope sourc
 
 ## EXACT POSITION (rolling — update this block after EVERY unit; verified on disk 2026-10-19)
 
-- Last unit on disk: **code review group (f) stage-error index preservation, COMPLETE 2026-10-19** —
+- Last unit on disk: **code review group (g) skills subsystem, COMPLETE 2026-10-19** —
+  src read this unit: skillsCli.ts (spec comments L19–21; installSkills
+  L80–151 incl. idempotency L80–82 + refusal format L135–140 + summary L145–149;
+  wantsMenu L128–131; list L218–230; exit-code table L151–235), skillsPicker.ts
+  (keymap L81–100; toggleAll L112–116; defaultChoice L139–141; status labels
+  L143–147; global/force toggles L255–260), skillsData.ts (EMBEDDED_SKILLS
+  L6–30; skillDescription L33–37; status pre-read L105–115), skillsCompat.ts
+  (link ensure L60–64), npm/scripts/postinstall.mjs + npm/lib/skills-prompt.mjs
+  in full (five never-ask conditions shouldAsk L36–63; warn-only
+  try/catches; explicit exit 0 L36), tests/skills.test.ts (live-lexer import
+  L6; KEYWORDS set L43–60; fence extraction L64; fail-on-unclassified L70–73;
+  keyword-head assertion L74–78), index.ts L175–269 re-verified (check path
+  L189–219: `parse(line)(ctx)` build-only L190, preflight L209–216, `where`
+  L211, exit 1 L215; tool dispatch L235–241; script read 127 L261–265),
+  runLine.ts L150–269 (isPureShell L179–191; exec preflight L193–208;
+  pure-shell one `sh -c` L229–238; catch format L288–303), lexer.ts L195–304
+  (ShellSyntaxProblem L216–221; shellSyntaxPreflight L238–253 — `sh -n -c`
+  spawn, stderr PIPED L241–245, `first` = sh's first stderr line L249; F19
+  comment L223–237), args.ts L270–301 (expandEnv L283–301 — process.env
+  L296, unset → `""` L296–298, opt-in-sites comment L281–282), parser.ts
+  L195–344 (expansion call sites L204/L216/L241/L259/L337/L417; json case
+  eager `JSON.parse(expandEnv(...))` L256–261; readsrc raw pattern L262–269;
+  -H no-colon throw L217–218), sources.ts L130–158 (readAll laziness —
+  `Bun.file(p)` at iteration). Verdicts — all 27 in-scope rows closed
+  (W184/W188/W194–W218): **21 C** (W184 nine-names + frontmatter
+  verbatim-by-construction; W188 two summary lines verbatim; W194 picker
+  keymap + 3 nuance notes; W195 non-interactive contract; W196 postinstall
+  five never-ask + never-fail; W198 idempotency; W199 edit-refusal format
+  verbatim; W200 exit-code table 0/1/2; W202 live-lexer lint, KEYWORDS
+  superset note; W206–W212 run-modes/exit-codes/wait contract; W213–W215
+  --check contract/lazy-source; W216 env-expansion all four halves C + two
+  nuances (read path NEVER expanded at build — parser L269 raw; whole-unset
+  `-H` → build error L217–218); W218 runtime preflight all halves C —
+  mixed-only, BEFORE build so "nothing has run" is structural, F19 comments
+  verbatim); **5 R** (W197/W201/W203/W204/W205); **1 X → G28** (W217:
+  cli.mdx L121–132 failure block — the verbatim block is a line-1 truncation
+  and "the `sh:` line after that" is a line the code cannot produce; the
+  format appends `problem.first` to the END of line 1, index.ts L212–214 /
+  runLine.ts L204–206, and the preflight's stderr is captured not passed
+  through, lexer.ts L241–249; the "names the stage" + "passes it through
+  unchanged (wording)" halves C). G28 file in gaps/ + plan line + X-census
+  entry + (e) line. No code changes (audit only). Next free G = G29.
+  Next unit = **code review group (h) base64 `--file`/`--out` main-vs-published**
+  (W244/W252).
+  Last unit before this one: **code review group (f) stage-error index preservation, COMPLETE 2026-10-19** —
   src read this unit: runLine.ts L55–95 (splitLines continuation + `runLines`
   L76–85 — the SHARED fail-fast loop, comment names script file / piped stdin
   / multi-line `-c` / `source`d file, `if (last !== 0) break;` L82) + the
@@ -245,8 +289,11 @@ Master plan: `docs/audit/CRUST_GAPS_PLAN.md`. Original audit prompt (scope sourc
      throw-fails/sinks-reject/propagate C, "index preserved" X → G27; W266
      code-half C on all three halves; W158-vs-W266 resolves in W266's favor;
      G27 file + plan line + (f) line; both rows stay ? with (b) probes);
-     (g) skills subsystem
-     (W184/W188/W194–W218); (h) base64 `--file`/`--out` main-vs-published (W244/W252);
+     (g) skills subsystem — **DONE 2026-10-19** (all 27 rows closed: W184/
+     W188/W194–W218 — 21 C, 5 R (W197/W201/W203/W204/W205), W217 X → G28
+     (cli.mdx failure block: line-1 truncation + the "sh: line after that"
+     the code cannot produce); W216's two nuances recorded; all (g) probes
+     stay (b)); (h) base64 `--file`/`--out` main-vs-published (W244/W252);
      (i) tool-builtin redirect refusal (W250/W251) + inside-crust `&` refusal (W525);
      (j) `crust/genFixtures/generate` subpath export (W390) + examples/gen-setup.ts +
      setup-contract exports; (k) mock-server: three import surfaces + exports map +
@@ -395,15 +442,20 @@ W433 code-half C; W477(3) X CONFIRMED → G22 scope EXTENDED; W525 zero-arg para
 fn C + X → G26; W554 load-mode C; G26 file + plan line + G22 file update + (e)
 lines) and (f) stage-error index preservation (W158: throw-fails/sinks-reject/
 propagate C, "index preserved" X → G27; W266 code-half C; W158-vs-W266
-resolves in W266's favor; G27 file + plan line + (f) line) are
+resolves in W266's favor; G27 file + plan line + (f) line) and
+(g) skills subsystem (all 27 rows closed: 21 C, 5 R (W197/W201/W203/W204/
+W205), W217 X → G28 — the cli.mdx L121–132 failure block is a line-1
+truncation + a "sh: line after that" the code cannot produce; G28 file +
+plan line + X-census entry + (e) line; W216's two nuances recorded; all (g)
+probes stay (b)) are
 ALL DONE.**
-Next unit = **code review group (g) skills subsystem**
-(item-3 group (g): W184/W188/W194–W218 — the skills-CLI surface: what
-`crust skills` subcommands actually exist vs what the skills pages claim)
+Next unit = **code review group (h) base64 `--file`/`--out` main-vs-published**
+(item-3 group (h): W244/W252 — the base64 builtin's `--file`/`--out`
+handling on main vs what the published binary does)
 — a review, NOT a fix gate: close every
 open `?` row to C/V/X in place, with the verdict carrying `file:line`
-evidence; an X row becomes a NEW G task file (next free = G24, same shape as
-G13–G23) +
+evidence; an X row becomes a NEW G task file (next free = G29, same shape as
+G13–G28) +
 a plan line — no code fixes while reviewing (a fix landing mid-audit would
 make later findings stale). Method (same discipline as the pair units,
 adapted): work the priority groups **(a)–(n)** in the item-3 list below, ONE
@@ -437,7 +489,11 @@ G26 file + plan line + G22 file update);
 (f) stage-error index preservation — **DONE 2026-10-19** (W158 code-half:
 throw-fails/sinks-reject/propagate C + "index preserved" X → G27; W266
 code-half C; W158-vs-W266 resolves in W266's favor; G27 file + plan line +
-(f) line); (g) skills subsystem; (h)
+(f) line); (g) skills subsystem — **DONE 2026-10-19** (all 27 rows: 21 C,
+5 R (W197/W201/W203/W204/W205), W217 X → G28 — the cli.mdx failure block is
+a line-1 truncation + a "sh: line after that" the code cannot produce;
+G28 file + plan line + X-census entry + (e) line; all (g) probes stay (b));
+(h)
 base64 `--file`/`--out` main-vs-published (W244/W252); (i) tool-builtin
 redirect refusal + `&` refusal; (j) genFixtures subpath export; (k)
 mock-server surfaces; (l) logs ring buffer / pty keymap / procs stream kinds /
