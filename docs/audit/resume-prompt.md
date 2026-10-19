@@ -43,13 +43,12 @@ truth for verdicts): `docs/audit/full-audit.md`. Master plan:
   L62–72 (g); sinks.ts (e); builtins.ts L547–571 (i); genFixtures/
   mockServer (j)/(k); src/logs/cli.ts + ring.ts + session.ts (l)(1);
   sources.ts L175–1000 (l)(3)+(5); transforms.ts L1–122 (l)(6);
-  lexer.ts L440–576 (l)(6)):
+  transforms.ts L505–703 (l)(7); lexer.ts L440–576 (l)(6)):
    editor.ts in full (321 L), completion.ts L80–95,
   interrupt.ts L40–88, builtinFns/wait.ts in full (76 L — facts below),
   sources.ts L371–466 (mergeAsync body + readiness-probe internals +
   GET L418 / request L425 for (8)),
-  transforms.ts L123+ (httpRequest body — (8)) + L505–703 (histogram
-  L514–618 + statsStage L619+ tail for --out/flush-on-item — (7)/(9)),
+  transforms.ts L123+ (httpRequest body — (8)),
   config.ts L60–95 (injection map re-verify
   for W82 — (e) precedent).
   FACTS IN CONTEXT (holding spot — these are read but NOT yet in rows;
@@ -57,10 +56,7 @@ truth for verdicts): `docs/audit/full-audit.md`. Master plan:
   once the row carries it): (8) GET L418 / request L425 (read API source
   stages) + transforms.ts httpRequest L106–122 read under (l)(6) (signal
   minted PER REQUEST L114–122; a caller-supplied signal always wins and
-  only a MINTED abort may classify as a timeout). (7) stats:
-  classifyStats lexer L507–537 (read (l)(6): --every N[s] with or
-  without =, --out file with or without =, ANY other token → null →
-  shell; bare `stats` = zero-arg form admitted L536). (9) transforms.ts:
+  only a MINTED abort may classify as a timeout). (9) transforms.ts:
   histogram L514–618 (BUCKET_BOUNDS, bucketFor L542, overflow bucket
   index = BUCKET_BOUNDS.length, nearest-rank over histogram L586+);
   statsStage L619+ (summary shape L600–609 {count, wallMs, rps, status,
@@ -106,15 +102,35 @@ truth for verdicts): `docs/audit/full-audit.md`. Master plan:
   the line's code; W442's probe example `[0-9]{3}` does NOT fall back ({,
   is the brace trigger) — correction recorded in-row; classifyStats
   L507–537 + httpRequest L106–122 facts held for (7)/(8) — see the
-  commit). NEXT: subtopic
-  (7) stats --every U39, W543, W559, W560, SK42, SK44 (6 rows) — fetch
-  the claim cells, read the src the rows name: transforms.ts statsStage
-  L619+ + histogram L514–618 (per READ MAP; lexer classifyStats
-  L507–537 facts already in FACTS IN CONTEXT), write the 6 code halves
-  immediately, checkpoint, commit md-only, push; then subtopics in the
-  locked order read API → histogram, then demote this entry, add the
-  (l) line to resume-history.md's completed block, Next-move head →
-  (m), commit md-only, push.
+  commit). + (7) stats --every DONE 58/71 (6 rows U39/W543/W559/W560/
+  SK42/SK44 — transforms.ts L505–703 read 2026-10-19: two-accumulator
+  design (total L631 vs win L634, fresh per window L678) = delta windows
+  {window: N, …} L674 + cumulative final {final: true, …} L699 with NO
+  window key; plain summary (no --every) = keyless L699 tagged branch
+  (SK44's short-circuit is the keyless shape); window flush ONLY on the
+  item path L672 — no clock anywhere, stalled upstream holds the window,
+  partial-final count>0-guarded L682–688 so no empty windows ever;
+  --out doc {crustStats:1, startedAt, urls sorted, summary, windows?}
+  L643–649, write-then-rename L653–655, flushed after EVERY window
+  L676/L686 and BEFORE the final yield L689–690 (U39's ordering);
+  .json-only throw at construction L623–625 (SK42); empty run tagged
+  empty:true L698; wallMs = now-winStart at the flushing item L674+L602
+  so it can exceed N (SK42's measured 3006); summary shape L600–609;
+  the classifyStats flag-parse boundary (lexer L507–537, read (l)(6):
+  --every N[s] / --out file with or without =, ANY other token → shell
+  fallback, bare stats admitted) is carried in this entry per the
+  facts-in-rows rule — see the commit). NEXT: subtopic
+  (8) read API W82, W379, W430 (3 rows; W455 already (d)-C, out of
+  scope) — fetch the claim cells, read the src the rows name:
+  sources.ts L371–466 (mergeAsync body + readiness-probe internals +
+  GET L418 / request L425) + transforms.ts L123+ (the httpRequest body —
+  the L106–122 header facts: signal minted PER REQUEST, caller signal
+  always wins, only a MINTED abort may classify as a timeout, are in
+  FACTS IN CONTEXT) + config.ts L60–95 (the injection map re-verify for
+  W82 — (e) precedent), write the 3 code halves immediately, checkpoint,
+  commit md-only, push; then subtopics in the locked order histogram,
+  then demote this entry, add the (l) line to resume-history.md's
+  completed block, Next-move head → (m), commit md-only, push.
 - Completed code-review groups (a)–(k): one line each in `resume-history.md`
   (append-only; no progress annotations there). **next free G = G30.** G
   task files: `docs/audit/gaps/`; plan lines: `CRUST_GAPS_PLAN.md`;
@@ -203,23 +219,22 @@ compaction that failed and the session was restarted):
 
 ## Next move (first unit of a resuming session)
 
-Next unit = **code review group (l), subtopic (7) stats --every** —
-U39, W543, W559, W560, SK42, SK44 (6 rows). A review,
-NOT a fix gate:
-close
+Next unit = **code review group (l), subtopic (8) read API** —
+W82, W379, W430 (3 rows; W455 already (d)-C, out of scope). A review,
+NOT a fix gate: close
 `?` rows to C/V/X in place, verdict carries `file:line` evidence; an X row
 becomes a NEW G task file (next free G30, same shape as G13–G29) + a plan
 line — no code fixes while reviewing (a fix landing mid-audit would make
 later findings stale). Method: rules above + the chunking protocol in
-`resume-history.md`; fetch the 6 claim cells, read only the src the rows
-name (transforms.ts statsStage L619+ — the --out/flush-on-item tail — +
-histogram L514–618 (BUCKET_BOUNDS, bucketFor L542, overflow bucket =
-BUCKET_BOUNDS.length, nearest-rank L586+); the lexer classifyStats
-L507–537 facts and the summary shape L600–609 are in the EXACT POSITION
-FACTS IN CONTEXT; NEVER re-read a src file
-after its verdict is on disk. Write the 6 code halves into the rows, then
+`resume-history.md`; fetch the 3 claim cells, read only the src the rows
+name: sources.ts L371–466 (mergeAsync body + readiness-probe internals +
+GET L418 / request L425) + transforms.ts L123+ (the httpRequest body —
+the L106–122 header facts: signal minted PER REQUEST, caller signal
+always wins, only a MINTED abort may classify as a timeout, are in the
+EXACT POSITION FACTS IN CONTEXT) + config.ts L60–95 (the injection map
+re-verify for W82 — (e) precedent); NEVER re-read a src file
+after its verdict is on disk. Write the 3 code halves into the rows, then
 checkpoint EXACT POSITION, commit `docs/audit/` (md-only) and push. Then
-subtopics in the locked order read API →
-histogram; after group (l) closes: (m) W515 vs W473 message dialect;
+subtopics in the locked order histogram; after group (l) closes: (m) W515 vs W473 message dialect;
 (n) W514 line-numbering; then item-4 (fresh build + full probe list →
 (b), then (c)–(e)) — item-4's full probe list is in `resume-history.md`.
