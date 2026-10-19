@@ -16,7 +16,64 @@ Master plan: `docs/audit/CRUST_GAPS_PLAN.md`. Original audit prompt (scope sourc
 
 ## EXACT POSITION (rolling — update this block after EVERY unit; verified on disk 2026-10-19)
 
-- Last unit on disk: **code review group (g) skills subsystem, COMPLETE 2026-10-19** —
+- Last unit on disk: **code review group (h) base64 `--file`/`--out` main-vs-published, COMPLETE 2026-10-19** —
+  src read this unit: src/builtinFns/base64.ts in full (235 L — usage L36;
+  parseOptions L67–91: -f/--file/-o/--out L67–82, `--` operand stop
+  L83–91, typo refusal L95–100; render(Buffer) L118–125 binary-safe
+  (decode via decodeBytes, no UTF-8 round-trip), writeTo L127–130
+  (`wrote N bytes to <p>`), readTheFile L132–135 raw readFileSync;
+  NOT_BASE64 L143 + decodeBytes throw L148–154; head form: file branch
+  L182–184, text encode + stderr `note:` L195–204; base64Stage L212–235 —
+  parseOptions on the LINE args only, item → String/Buffer, the two
+  mid-pipeline refusals); src/builtinFns/index.ts in full (46 L —
+  BUILTIN_FN_USAGE L24–31 keyed by all six names; BUILTIN_FNS +
+  isBuiltinFn identity check L43–46); src/parser.ts L605–627 (HelpExit
+  class L608–613; builtinHelp L615–627: isBuiltinFn gate L616, `--` stop
+  L619, piped-item comment L621–623, throw L624) + the two builtinHelp
+  call sites (fn-source arm L301, fn-stage arm L444); src/runLine.ts
+  L288–303 (the HelpExit catch L293–295 → usage on STDOUT + return 0);
+  src/index.ts L185–200 (the check path: parse-only loop, HelpExit arm
+  L192–196 = valid line, usage prints when it RUNS). Git (all read-only):
+  `git show v0.2.4:src/builtinFns/base64.ts` (the whole 16-line file — no
+  option parsing, no `--`, no usage; decode scan `args.some(a => a ===
+  "-d" || …)`; plain lenient `Buffer.from(str, "base64")`), `git show
+  v0.2.4:src/index.ts` (the check loop = `parse(line)(ctx)` +
+  `checkBuiltinLine` only), `git grep 'sh -n\|shellSyntax\|noexec' v0.2.4
+  -- src/` = ZERO matches, ancestry checks (`ae82619` → `7a85aca` →
+  `95a1bbe` all ancestors of `699986c`). Verdicts — **W244** C on every
+  half (six parse-time screens via HelpExit; "before any stage runs"
+  STRUCTURAL — builtinHelp runs in the parse BUILD phase and 95a1bbe's
+  message records the touch-never-happens measurement; `--` stop L619;
+  piped value is data (parser L621–623 + base64Stage L212–235); crust.fn
+  override bypass (isBuiltinFn L616); usage line byte-exact = L36; "That
+  is the PR #60 change" C — F42 = 95a1bbe in the 699986c merge; "In
+  0.2.4 … `LS1oZWxw`" C from the flag-less v0.2.4 file; the row's
+  internal-consistency note resolves C — the usage block is a verbatim
+  MAIN quote, not a linted fence, and the published state (npm latest
+  0.2.4, published 2026-08-25, gitHead `49b271d`; the GitHub-release
+  binary = v0.2.4 tag) really lacks the flags); **W252** C on every code
+  half (head form encodes TEXT L195–205 + the offline encodings verified;
+  PNG claim = L14–16 header + `7a85aca`'s message; --file/--out on main
+  L67–82 + raw-bytes binary-safe path + `wrote N` + byte-for-byte round
+  trip + note: stderr-only — MAIN-VS-PUBLISHED settled C: v0.2.4 lacks
+  BOTH flags, `7a85aca` is in PR #60 postdating the 0.2.4 publish, npm
+  latest 0.2.4; item-is-data L212–235 + the v0.2.4 history
+  code-verified (item `-d` → missing input exit 1, `--desc` → `LS1kZXNj`
+  exit 0); NOT_BASE64 refusal L143/L148–154 vs v0.2.4's lenient
+  Buffer.from). **W218 AMENDMENT**: the 0.2.4 clause "(in 0.2.4 only
+  `--check` has it)" is **X → G29** — v0.2.4 had the preflight on NEITHER
+  path (check loop pure-parse + checkBuiltinLine only; zero `sh -n` in
+  the tree); the preflight is PR #60's (`ae82619` check half, `95a1bbe`
+  exec half, both ancestors of `699986c`); the "only --check" state was
+  intra-PR only, never a release; group (g) had C'd it off the CURRENT
+  dual-path comment (a misread — recorded); W218's other four halves
+  stand. G29 file in gaps/ + plan line + X-census entry + (e) line.
+  No code changes (audit only). W244/W252 stay `?` — their (b) probes
+  (six screens, touch-never-runs, `--` stop, round-trip, note:, LWQ=/
+  refusal captures) stay in (b). Next free G = G30.
+  Next unit = **code review group (i) tool-builtin redirect refusal
+  (W250/W251) + inside-crust `&` refusal (W525)**.
+  Last unit before this one: **code review group (g) skills subsystem, COMPLETE 2026-10-19** —
   src read this unit: skillsCli.ts (spec comments L19–21; installSkills
   L80–151 incl. idempotency L80–82 + refusal format L135–140 + summary L145–149;
   wantsMenu L128–131; list L218–230; exit-code table L151–235), skillsPicker.ts
@@ -293,7 +350,7 @@ Master plan: `docs/audit/CRUST_GAPS_PLAN.md`. Original audit prompt (scope sourc
      W188/W194–W218 — 21 C, 5 R (W197/W201/W203/W204/W205), W217 X → G28
      (cli.mdx failure block: line-1 truncation + the "sh: line after that"
      the code cannot produce); W216's two nuances recorded; all (g) probes
-     stay (b)); (h) base64 `--file`/`--out` main-vs-published (W244/W252);
+     stay (b)); (h) base64 `--file`/`--out` main-vs-published — **DONE 2026-10-19** (W244 C on every half — six parse-time screens via builtinHelp parser L301/L444 → HelpExit → runLine L293–295 stdout+0, `--` stop L619, piped-item-is-data, isBuiltinFn override gate L616, usage = base64.ts L36 verbatim, F42 = 95a1bbe in PR #60 merge 699986c, 0.2.4 `LS1oZWxw` from the flag-less v0.2.4 file; W252 C on every code half — flags on main L67–82, v0.2.4 lacks both (7a85aca in PR #60 postdates the 0.2.4 publish; npm latest 0.2.4), item-is-data L212–235, NOT_BASE64 refusal L143/L148–154; the W218 0.2.4 clause X → G29 — v0.2.4 had the preflight on NEITHER path (check half is PR #60's ae82619); G29 file + plan line + X-census entry + (e) line; W244/W252 stay ? with (b) probes);
      (i) tool-builtin redirect refusal (W250/W251) + inside-crust `&` refusal (W525);
      (j) `crust/genFixtures/generate` subpath export (W390) + examples/gen-setup.ts +
      setup-contract exports; (k) mock-server: three import surfaces + exports map +
@@ -449,13 +506,16 @@ truncation + a "sh: line after that" the code cannot produce; G28 file +
 plan line + X-census entry + (e) line; W216's two nuances recorded; all (g)
 probes stay (b)) are
 ALL DONE.**
-Next unit = **code review group (h) base64 `--file`/`--out` main-vs-published**
-(item-3 group (h): W244/W252 — the base64 builtin's `--file`/`--out`
-handling on main vs what the published binary does)
+Next unit = **code review group (i) tool-builtin redirect refusal (W250/W251) + inside-crust `&` refusal (W525)**
+(item-3 group (i): what `crust` refuses inside a line — a tool-builtin head
+with a redirect, and `&` — vs what the pages claim; group (h) is DONE
+2026-10-19: W244 C on every half, W252 C on every code half, the W218 0.2.4
+clause X → G29 — G29 file + plan line + X-census entry + (e) line; see the
+EXACT POSITION block)
 — a review, NOT a fix gate: close every
 open `?` row to C/V/X in place, with the verdict carrying `file:line`
-evidence; an X row becomes a NEW G task file (next free = G29, same shape as
-G13–G28) +
+evidence; an X row becomes a NEW G task file (next free = G30, same shape as
+G13–G29) +
 a plan line — no code fixes while reviewing (a fix landing mid-audit would
 make later findings stale). Method (same discipline as the pair units,
 adapted): work the priority groups **(a)–(n)** in the item-3 list below, ONE
