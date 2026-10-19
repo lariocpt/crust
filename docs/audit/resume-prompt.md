@@ -42,11 +42,11 @@ truth for verdicts): `docs/audit/full-audit.md`. Master plan:
   L288–303 (f)/(i); config L65–90 map (e); readiness L1–50 + wait.ts
   L62–72 (g); sinks.ts (e); builtins.ts L547–571 (i); genFixtures/
   mockServer (j)/(k); src/logs/cli.ts + ring.ts + session.ts (l)(1);
-  sources.ts L460–1000 (l)(3)):
+  sources.ts L175–1000 (l)(3)+(5)):
    editor.ts in full (321 L), completion.ts L80–95,
   interrupt.ts L40–88, builtinFns/wait.ts in full (76 L — facts below),
-  sources.ts L175–466 (tail L194 + findTailWindowStart L247 + mergeAsync
-  L366 + readiness-probe internals + GET L418 / request L425 for (8)),
+  sources.ts L371–466 (mergeAsync body + readiness-probe internals +
+  GET L418 / request L425 for (8)),
   transforms.ts
   L1–~100 (native grep, comment L5) + L505–703 (histogram L514–618 +
   statsStage L619+ tail for --out/flush-on-item), lexer.ts L440–576 (grep
@@ -54,10 +54,8 @@ truth for verdicts): `docs/audit/full-audit.md`. Master plan:
   for W82 — (e) precedent).
   FACTS IN CONTEXT (holding spot — these are read but NOT yet in rows;
   write each into its row as that subtopic lands, and delete it from here
-  once the row carries it): (5) sources.ts tail constants: tail L194
-  (DEFAULT_TAIL_POLL_MS L192 = 200, TAIL_SCAN_BLOCK_BYTES L241 = 64KB,
-  findTailWindowStart L247, mergeAsync L366); (8) GET L418 / request L425
-  (read API source stages). (6)/(9) transforms.ts: L5
+  once the row carries it): (8) GET L418 / request L425 (read API source
+  stages). (6)/(9) transforms.ts: L5
   comment "Native grep over pipeline items — line-buffered where sh grep
   block-…" (native grep stage lives in transforms.ts, NOT a separate
   file); histogram L514–618 (BUCKET_BOUNDS, bucketFor L542, overflow
@@ -84,14 +82,22 @@ truth for verdicts): `docs/audit/full-audit.md`. Master plan:
   true, ms, attempts}, parseDuration ms/s/m + bare=ms, defaults --timeout
   30s / --interval 500ms / --probe-timeout min(interval*4,2s), not-ready
   throw → runLine `crust:` prefix → exit 1, both flag forms, usage screen
-  on bad args — per-row evidence on disk — see the commit). NEXT: subtopic
-  (5) tail source W435, W258 (2 rows, all plain `?`) — fetch the claim
-  cells, read the src the rows name: sources.ts tail region L175–466
-  (READ MAP; constants in FACTS IN CONTEXT: DEFAULT_TAIL_POLL_MS L192 =
-  200, TAIL_SCAN_BLOCK_BYTES L241 = 64KB, findTailWindowStart L247,
-  mergeAsync L366), write the 2 code halves immediately, checkpoint,
-  commit md-only, push; then subtopics in the locked order grep → stats →
-  read API → histogram, then demote this entry, add the (l) line to
+  on bad args — per-row evidence on disk — see the commit). + (5) tail
+  source DONE 48/71 (2 rows W435/W258 — sources.ts L175–370 read
+  2026-10-19: TailOptions L175–187 incl. the holder-owned signal
+  cancellation the logs session uses; tail L194 (lines??10 / follow??false
+  / pollMs??200); expandTailPaths glob-sorted+deduped L216–239;
+  findTailWindowStart 64KB-backward byte-safe scan L247–272 (n<=0 → size
+  = no initial cut); tailOne bounded initial cut L289–300, poll loop
+  L315–348 with inode-change + size-shrink rotation reset L331–337 and
+  offset+buf byte-exact follow; mergeAsync arrival-order contract L351–354
+  — per-row evidence on disk — see the commit). NEXT: subtopic
+  (6) grep native-subset SK69, W442, U33, U34 (4 rows) — fetch the claim
+  cells, read the src the rows name: transforms.ts L1–~100 (native grep
+  stage, comment L5) + lexer.ts L440–576 (grep safe-subset recognizer
+  L450) per READ MAP, write the 4 code halves immediately, checkpoint,
+  commit md-only, push; then subtopics in the locked order stats → read
+  API → histogram, then demote this entry, add the (l) line to
   resume-history.md's completed block, Next-move head → (m), commit
   md-only, push.
 - Completed code-review groups (a)–(k): one line each in `resume-history.md`
@@ -182,22 +188,20 @@ compaction that failed and the session was restarted):
 
 ## Next move (first unit of a resuming session)
 
-Next unit = **code review group (l), subtopic (5) tail source** —
-W435, W258 (2 rows, all plain `?`). A review,
+Next unit = **code review group (l), subtopic (6) grep native-subset** —
+SK69, W442, U33, U34 (4 rows). A review,
 NOT a fix gate: close
 `?` rows to C/V/X in place, verdict carries `file:line` evidence; an X row
 becomes a NEW G task file (next free G30, same shape as G13–G29) + a plan
 line — no code fixes while reviewing (a fix landing mid-audit would make
 later findings stale). Method: rules above + the chunking protocol in
-`resume-history.md`; fetch the 2 claim cells, read only the src the rows
-name (sources.ts tail region L175–466 per READ MAP — tail L194,
-findTailWindowStart L247, mergeAsync L366, readiness-probe internals,
-GET L418 / request L425 which (8) will cite; constants in FACTS IN
-CONTEXT: DEFAULT_TAIL_POLL_MS L192 = 200, TAIL_SCAN_BLOCK_BYTES L241 =
-64KB); NEVER re-read a src file after its verdict is on disk. Write the
-2 code halves into the rows, then checkpoint EXACT POSITION, commit
-`docs/audit/` (md-only) and push. Then
-subtopics in the locked order grep → stats → read API →
+`resume-history.md`; fetch the 4 claim cells, read only the src the rows
+name (transforms.ts L1–~100 — the native grep stage, comment L5 — +
+lexer.ts L440–576 — the grep safe-subset recognizer L450 — per READ MAP;
+the line-buffering fact is in FACTS IN CONTEXT); NEVER re-read a src file
+after its verdict is on disk. Write the 4 code halves into the rows, then
+checkpoint EXACT POSITION, commit `docs/audit/` (md-only) and push. Then
+subtopics in the locked order stats → read API →
 histogram; after group (l) closes: (m) W515 vs W473 message dialect;
 (n) W514 line-numbering; then item-4 (fresh build + full probe list →
 (b), then (c)–(e)) — item-4's full probe list is in `resume-history.md`.
