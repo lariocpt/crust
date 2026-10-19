@@ -16,629 +16,101 @@ Master plan: `docs/audit/CRUST_GAPS_PLAN.md`. Original audit prompt (scope sourc
 
 ## EXACT POSITION (rolling — update this block after EVERY unit; verified on disk 2026-10-19)
 
-- Last unit on disk: **code review group (k) mock-server: three import surfaces + exports map + crust_mock_state DDL + __crust/violations endpoint + x-crust-validation header + subset walker + 422 + proxy --report, COMPLETE 2026-10-19** —
-  scope LOCKED at 12 rows: W484, W485, W513, W515, W516, W517, W518, W520,
-  W521, W522, W523, W524 (all were plain `?`, none had a code half; W486/
-  W487–W512/W514/W519 excluded = other groups, W525 done in (i)). src read
-  this unit: src/mockServer/cli.ts in full (226 L — SPEC L48–60: positional
-  spec, -p/--port def 3000, -b/--host def 0.0.0.0, --stateful/--state/
-  --seed/--validate/--strict/--proxy/--proxy-timeout def 30000/--report;
-  --state/--seed imply stateful L105; --strict implies validate only when
-  NOT proxy L106; the exit-2 exclusions: proxy×state L109–112, proxy×seed
-  L113–116, proxy×stateful L117–120, --report-without-proxy L130–133,
-  bad proxy URL L134–141, proxy-timeout≤0 L142–145; redundant --validate+
-  --proxy accepted silently L146–147; flag↔option mapping L159–171 (port,
-  hostname ← --host, spec, stateful, state, seed, validate, strict, proxy,
-  proxyTimeoutMs ← --proxy-timeout, report); loadSpec fail→exit 1 L152–155;
-  boot line `N route(s) from <origin>` L184; listening line L206–211
-  (validate-mode token shown only when NOT proxy); the three boot warnings:
-  webhooks-only L176–182, Express :param L186–195, regex-literal patterns
-  L196–205; startServer fail→exit 1 L172–175; SIGINT/SIGTERM → stop + exit
-  0 L213–221); src/mockServer/proxy.ts in full (93 L —
-  STRIP_REQUEST_HEADERS L24–31 = host/connection/keep-alive/
-  transfer-encoding/content-length/accept-encoding (NOTE: NOT the RFC set
-  the W520 probe anticipates — no proxy-auth/te/trailers; host/
-  content-length/accept-encoding ARE stripped — probe data point),
-  STRIP_RESPONSE_HEADERS L33 = content-encoding/content-length/
-  transfer-encoding; joinUpstreamUrl L35–45 preserves the upstream base
-  path; forward() L47–93: redirect:"manual" so 3xx untouched L67,
-  AbortSignal.timeout(proxyTimeoutMs) L68, body read ONCE as raw bytes L73,
-  bodyless rebuild for 101/204/205/304/HEAD L81–82, bodyText only for JSON
-  content types L88–91; NO header injection into the client response —
-  rebuilt from upstream status/statusText/headers (W520's no-injection half
-  C by construction)); src/mockServer/router.ts in full (171 L —
-  buildRoutes L19–47 (path-item params merged BEFORE operation-level L37;
-  sort literal-segments desc → template-length desc L42–45), compileTemplate
-  L49–53 ({p}→([^/]+), anchored, escaped), matchRoute L65–76 (matched +
-  pathExists → 405-vs-404 + params), percent-decoded params L91–101, the
-  three boot-warning counters L111–122/L135–143/L154–171);
-  src/mockServer/server.ts in full (637 L — startServer L127 (the exact
-  W485 export name), ServerOptions L16–40, RunningServer L44–57 (port =
-  `server.port ?? opts.port` L533 = the port-0 readback), stop L545–552
-  (awaits the listener BEFORE backend.close — the measured 50/50 comment);
-  MAX_VIOLATIONS = 1000 L59, DEFAULT_PROXY_TIMEOUT_MS = 30_000 L60;
-  record() L149–161 = push, shift+dropped++ past 1000 (OLDEST dropped),
-  NDJSON appendFile awaited per record via reportQueue L155–160;
-  GET /__crust/violations L279–281 PROXY-MODE-ONLY + exact pathname →
-  {count: violations.length, dropped, violations} 200; DELETE L282–285
-  clears violations AND dropped → 204; other methods 405 L286–288; handled
-  FIRST, never forwarded (reserved-route precedence C); the mock-mode-only
-  /__crust/override control endpoint L295–330 (PUT/GET/DELETE, 201
-  {armed: N}); the proxy path L367–437: request validation ALWAYS on
-  (matched → validateRequest L371–385, unmatched →
-  [undocumentedOperation(method, pathname)] L387), recorded L389 but still
-  forwarded L392–400, response validated L401–424 with
-  .map(v => ({...v, path: url.pathname})) L421, response as-is L425,
-  UpstreamError → 502 {error: "upstream unreachable", upstream, detail}
-  L429–433 NEVER recorded (comment L428); the mock-mode 422 L461–485: ALL
-  violations recorded L462, body {error: "request validation failed",
-  violations: [{pointer, rule, message, expected?, received?, location}]}
-  with expected/received omitted when undefined L467–476, headers
-  content-type + x-crust-validation: request L479–484; the 422 lands
-  BEFORE any stateful handling L488–509 (creates nothing, comment L489);
-  404/405 L438–442; logLine L520–530: method.padEnd(6) pathname.padEnd(28)
-  status "  " msms + suffix, suffix ` [N violation(s)]` only when N>0,
-  the literal `(s)` even at N=1 L528, admin lines log 0 L289/L328;
-  applySeed L562–610 (empty-only L591, deterministic seed-<Bun.hash> ids
-  L598–604, unknown collection warns L584, bad file throws → CLI exit 1));
-  src/mockServer/state.ts in full (276 L — the sqlite DDL L88–91
-  BYTE-IDENTICAL to the page's W513 block; the postgres twin L107–110
-  (doc JSONB, updated_at timestamptz NOT NULL DEFAULT now()); NUANCE: a
-  SECOND internal table `crust_mock_touched (collection TEXT PRIMARY KEY)`
-  L92/L111 is also created — the "ever written" marker so delete-emptied
-  collections keep 404-ing (comment L149–152); the page's "one table" is
-  the public contract, not the full open-time DDL → row nuance, NOT an X;
-  ensure() L164–175 lazy idempotent DDL (not top-level await — it's
-  bytecode); sqlite put = JSON.stringify(doc) + new Date().toISOString()
-  L202; postgres upsert $3::jsonb + updated_at = now() L112–114;
-  normalizeStateUrl L246–258 (bare path → sqlite://, sqlite/postgres/
-  postgresql pass, else throw → CLI exit 2); stateDialect L260–262;
-  openStateBackend L269–276 (undefined → memory));
-  src/mockServer/validateRequest.ts in full (875 L — header comment L1–13
-  = the governing rule verbatim (never invents; deliberately unsupported:
-  not, patternProperties, uniqueItems, multipleOf, discriminator,
-  dependentSchemas, propertyNames, contains, prefixItems,
-  readOnly/writeOnly; additionalProperties only under strict LITERAL false
-  at plain object nodes, composed exempt); SchemaViolation L19–26; Violation
-  L28–39 adds ts/direction/location/method/path/template/status? (response
-  only) — the W523 six-added-fields C by type; MAX_RECEIVED=200 truncate
-  L41–52; FORMAT_REGEXES L58–64 = uuid/email/date/date-time/uri EXACTLY the
-  W516 five; matchesType L73–92 (unknown type → pass L90); $ref L132–140
-  (same-position cycle pass, unresolvable pass); allOf suppressAP L144–154;
-  anyOf/oneOf L156–191 (pass when ANY branch passes — oneOf exactly-one
-  deliberately not enforced L160–161; on total failure ONE violation, rule
-  "anyOf" L182, message `matches no ${combinator} branch; closest
-  (${bestLabel}) failed: …` L183–185, closest = FEWEST errors L174,
-  expected = the closest branch's errors); enum L193–202 `value not in
-  enum`; type L205–218 `expected X | Y, got Z` + early return L217;
-  format L221–229 `does not match format '<f>'` (unknown format pass L222);
-  pattern L233–263 (u-flag-then-plain compile, msg L258 `does not match
-  pattern`); minLength L268 `length N < minLength M`; maxLength L277;
-  minimum L287–300 (both exclusive forms); maximum L304–321 (`N >=|>
-  maximum M`); minItems/maxItems L323–341; required L361–373 `missing
-  required property 'k'`; properties L374–393 + items L342–358 (fresh guard
-  sets — pointer deepens, recursion finite); additionalProperties strict
-  guard L400–421 (enforced only when strict && !suppressAP && literal false
-  && no allOf/anyOf/oneOf siblings && no patternProperties — EXACTLY the
-  page's exemption set; msg `unexpected property 'k'`); RequestInput
-  L431–440; isJsonContentType L442–646 (application/json, text/json,
-  +json); coerceByType L489–508 (integer /^-?\d+$/, number isFinite,
-  boolean "true"/"false" literals); toViolation L518–533 (stamps ts ISO,
-  direction, location, method, path, template; status only when set);
-  validateRequest L535–635 (path params L552–555, required query params
-  L556–576 `missing required query parameter 'n'`, header/cookie params
-  NOT validated L577, requestBody: required-body L590–604 with the GET/HEAD
-  exemption L590–591 (a required body on GET/HEAD is unenforceable — no
-  client can deliver one), json-parse L611–623, body schema L624–628,
-  non-JSON passthrough L630); validateParamValue L637–665 (coercion FIRST,
-  failed coercion → `expected integer, got 'abc'`); validateQueryValues
-  L667–724 (array serialization: explode form repeated keys /
-  explode:false comma-joined, other styles pass L677–687);
-  validateResponse L738–840 (ctx path = template L747 — server.ts L421
-  re-stamps the actual pathname; NO responses documented → return [] L755–
-  761 (3.1 made responses optional; pickResponse defaults 200 so crust
-  would reject its own mock — the comment cites 7 of 17 react-corpus
-  specs); status selection exact → NXX (case-insensitive) → default
-  L763–785, miss → undocumented-status L774 + return (no body checks);
-  content-type check L797–824 (skipped for 204/304/HEAD/empty body L798–
-  799; the documented-side wildcard match L803–807 (a documented entry
-  equal to star-slash-star, or one ending in star-slash); body schema
-  L826–837); branchLabel L850–860 (0-based index; name = $ref last segment
-  or title, else bare number — the page's `branch #1 Quote` = a $ref'd
-  branch at index 1; the L842–849 comment records the design: closest =
-  fewest errors, NOT the branch the body was built from — the sinao.app
-  case); undocumentedOperation L863–875 (template "", direction "request",
-  rule undocumented-operation — the server.ts L387 consumer); W473
-  message-dialect note: the fixture-side `keyword: ` prefix is added by the
-  fixture runner's formatter layer — two formatters over ONE walker,
-  message-dialect question settled). Verdicts — **W484** C on the CLI
-  surface (all seven forms parse; the implications L105/L106; the six
-  exit-2 exclusions; loadSpec/startServer fail→1; the boot + listening
-  lines L184/L206–211 with the proxy-mode token nuance; the three boot
-  warnings). **W485** C on all four API claims (loadSpec named export real
-  + { spec } shape; startServer named export real + handle.port readback
-  L533 + handle.stop; the exports map = NEITHER package.json has one
-  (group (j) fact) → the subpath is unresolvable as written, the page's
-  own in-repo + not-on-npm caveat stands — recorded, NO X; the flag↔option
-  mapping incl. --host↔hostname + --proxy-timeout↔proxyTimeoutMs).
-  **W513** C on the DDL (byte-identical sqlite L88–91 + postgres twin
-  L107–110; lazy idempotent ensure() L164–175) + the crust_mock_touched
-  second-table nuance (L92/L111) + the bare-doc/ISO/now() put paths
-  (L202/L112–114). **W515** C on the 422 build (all violations,
-  expected/received-when-defined, the two headers L479–484) + the four
-  exhibit messages verbatim (L268/L198/L304–320/L258) + the dialect
-  settlement + the location stamping + the coercion-first +
-  header/cookie-skip. **W516** C on the checked surface (the five formats
-  L58–64; the keyword set incl. both exclusive bound forms L287–320;
-  minItems/maxItems L323–341) + the branch-naming claim (branchLabel
-  L850–860: 0-based + $ref-last-segment/title; closest = fewest errors
-  L174) + the request-level surface (validateRequest L535–635 incl. the
-  GET/HEAD required-body exemption L590–591 + json-parse L611–623).
-  **W517** C on the governing rule (header comment L1–13 = the page's rule
-  verbatim + the unsupported-keyword superset; the pass-not-judge sites
-  L222/L233–263/L136/L134) + the strict additionalProperties guard =
-  exactly the page's exemption set (L400–408) + the non-JSON passthrough
-  (L610/L630) + the --strict implications (cli L106; proxy-always-on
-  server L367–437; redundant --validate accepted cli L146–147) + the
-  exit-2 exclusions (cli L109–120). **W518** C on creates-nothing (422
-  branch L461–485 before stateful L488–509, comment L489) + the
-  422-vs-400 literals (L463/L480). **W520** C on: the strip-set data
-  point (the six request headers L24–31 — NOT the RFC set the probe
-  anticipates), the 3xx-untouched (redirect:"manual" L67), the as-is
-  response (raw bytes L73; rebuilt from upstream L47–93), the NO header
-  injection (no x-crust-validation on proxied responses — by
-  construction), the record-never-enforce (record L389 then forward
-  L392–400; response validation L401–424 with the L421 path re-stamp),
-  the 502 shape {error:"upstream unreachable",upstream,detail} L429–433
-  + NEVER recorded (L428), the shared timeout shape (AbortSignal L68).
-  **W521** C on the logLine (conditional column only when N>0; literal
-  ` violation(s)` even at 1 L528; combined both-directions count by
-  construction; the undocumented-operation counted; admin lines log 0
-  L289/L328). **W522** C on the endpoint (reserved-route precedence —
-  handled first, proxy-mode-only, exact pathname; the mock-only
-  /__crust/override is the other reserved surface L295–330) + the
-  example-line explanation (pointer "" is not nullish → the nullish
-  operator does not fall through → the empty slot is exactly what the
-  code renders; the W522(2) "potential mismatch" resolves faithful-by-
-  code, probe still confirms live). **W523** C on the buffer contract
-  (MAX_VIOLATIONS L59; oldest shift + dropped++ L149–161;
-  {count,dropped,violations} L279–281; DELETE clears violations AND
-  dropped → 204 L282–285; 405 L286–288) + the six added fields by type
-  (L28–39; ts ISO L525; status response-only L531) + the example message
-  form (L213 `expected X, got Y`). **W524** C on the --report append
-  (appendFile via reportQueue L155–160; --report requires --proxy cli
-  L130–133) + the implications (proxy implies both-direction validation by
-  construction server L367–437; redundant --validate accepted cli
-  L146–147) + the exclusions (cli L109–120) + the step-1 shell-& nuance
-  (the & is outside the quoted crust line — shell backgrounding, crust's
-  own & refusal never sees it; the W525 cross-ref).
-  No X (nothing the code disproves as a false page claim — the
-  exports-map state is release-state already conceded on the page, the
-  strip-set delta is probe data not a page error, the touched-table
-  nuance is the public-contract scope the page states deliberately; next
-  free G stays G30) → no plan line, no X-census entry, no (e) line this
-  unit. No code changes (audit only — the two stray-pipe repairs in the
-  W522/W523 cells are md-hygiene only). The 12 rows stay `?` — every (b)
-  probe (the seven boot forms, the module-not-found, the DDL schema-diff,
-  the exact-curl 422, the keyword battery, the never-invent probes, the
-  creates-nothing count-diff, the header-diff + as-is byte-diff, the
-  stderr format, the summary line, the 1000-cap burn-in, the DELETE
-  reset, the field-by-field diff, the CI gate run) stays in (b).
-  Next unit = **code review group (l) logs ring buffer / pty keymap /
-  procs stream kinds / wait item shape / tail / grep / stats --every /
-  read API / histogram bucketing (W539 C-half)**.
-  Last unit before this one: **code review group (j) `crust/genFixtures/
-  generate` subpath export (W390) + examples/gen-setup.ts + setup-contract
-  exports, COMPLETE 2026-10-19** —
-  src read this unit: src/genFixtures/cli.ts in full (130 L —
-  DEFAULT_OUT tests/gen L7, DEFAULT_SETUP ./tests/gen-setup.ts L8;
-  USAGE L10–34 incl. the required-exports list L23–27 + the
-  examples/gen-setup.ts pointer; SPEC L36–41: swagger positional, -o/--out,
-  -s/--setup, --no-flows; the missing-setup catch L105–128 — the
-  Cannot-find-module match L115–117 + the L107–114 design comment (pre-fix
-  raw Bun error), the 3-line message L119–124 (path looked at +
-  examples/gen-setup.ts template + --setup flag), return 1; success line
-  L72–74); src/genFixtures/generate.ts L1–100 (the in-file contract doc
-  L28–63 — six required exports + optional flowOverrides L59–63; imports
-  L65–76: loadSpec from ../mockServer/loadSpec, resolveRef from
-  mockResponse, the schemaTypes helpers) + L100–160 (GenerateOpts L119–127,
-  GenerateResult L129–143, FlowOverride L149–152) + L955–1024 (emitFixture
-  L966–999 — the per-case shape: setup: shared, input closure, body
-  double-stringified L976, data matcher L977–978, JSON_HEADERS vs
-  headersFor L968–974; setupSpecifier L1002–1007; isPathLike L1009–1011) +
-  L1315–1345 (derefSchemas head — local resolveRef, no fetch, the
-  200k-node budget) + L1380–1505 (generateFixtures L1385 — loadSpec
-  L1386, setup import L1392 + scopeParam `in` check L1396–1404 + the
-  scopeRoots/flowOverrides defaults L1407–1409, byTag loop L1416–1424,
-  the rm/mkdir L1450–1451, the file template L1462–1471, per-tag file name
-  L1472, the flows emission L1479–1501, the return L1504);
-  src/mockServer/loadSpec.ts in full (100 L — loadSpec L49–80: the
-  source.includes("://") ? fetchText : readText branch L50, the JSON/YAML
-  sniff L52–55, the Swagger-2.0 auto-convert L63–65, the optional-paths
-  webhook acceptance L71–78; fetchText L82–86; readText L88–92);
-  src/mockServer/swagger2to3.ts exports only (isSwagger2 L14, swagger2to3
-  L132; 185 L — the built-in zero-dep converter). Repo: examples/gen-setup.ts
-  shape (106 L — JSON_HEADERS L22, scopeParam L30, scopeRoots L36,
-  shared L48, headersFor L66, resolvePath L77, the fetch helpers L87/L98);
-  package.json (name "crust" — NO exports field at all); npm/package.json
-  in full (55 L — ALSO name "crust", NO exports, files[] = bin/lib/scripts/
-  skills/README.md — no src shipped; postinstall; the LAN publishConfig).
-  Page reads: recipes/gen-fixtures.mdx L1–80 (the W390 ts switcher
-  L28–40 + the bash sibling L14–26 + the deleted-and-recreated note L43 +
-  the regen-and-diff CI block L54–61) + L300–419 (the contract table
-  L311–322, the minimal module L324–369, the rewrite sentence L371, the
-  examples ship claim L373–375, the generated-file sample L377–413);
-  docs/USAGE.md L1477–1513 (the U82 contract section). Verdicts —
-  **W390** C on every code half (the named export real at generate.ts L1385
-  with exactly the documented opts {swagger, out, setup, flows?, log?} +
-  result {outDir, files, totalCases, flowFile, flowCount, flowSkipped,
-  withNoCases}; the subpath specifier NOT resolvable — neither package.json
-  has an exports map and the launcher ships no src, so
-  `crust/genFixtures/generate` works only as a relative import in-repo; the
-  page block carries no in-repo caveat unlike the W485 sibling — record
-  exports-map state + doc-nuance, no X, every API claim source-true;
-  URL-or-path: the SWAGGER ARG is fetched when it is a URL (loadSpec L50 /
-  fetchText L82–86) while $refs are resolved locally (derefSchemas L1326) —
-  W406 not contradicted; out ↔ -o/--out naming consistent (L7/L38/L121);
-  Swagger 2.0 auto-convert = loadSpec L63–65 → swagger2to3). **U82** C
-  (scopeParam the ONLY hard-required export — the `in` check L1396–1404
-  with the null fix named; scopeRoots/flowOverrides optional defaults;
-  shared/headersFor/resolvePath/JSON_HEADERS NOT read by the generator —
-  the generated file imports only what it uses (used-set L1459 +
-  emitFixture L968–974); "only member/outsider" C (auth union L660, none →
-  JSON_HEADERS direct); laziness enforced by the generation-time import
-  L1390–1392; flowOverrides = the undocumented-optional nuance). **W420**
-  **C FULL CLOSE** (the row asked for no deep probe: the module shape
-  covers both consumers, the `??=` cache L342 satisfies MUST-cache,
-  import-side-effect-free satisfies lazy, BASE binds at import time per
-  process (generation env vs runtime env — the W276 cross-ref resolved by
-  mechanism), randomUUID global fine; real-run confirmation rides
-  W422/W425's gen probe). **W421** C code half (setupSpecifier L1002–1007 =
-  relative(outDir, resolve(setup)) + ./ prefix; isPathLike L1009–1011; bare
-  kept as-is L1003 — the doc-tension note (bare npm specifiers fail at
-  runtime in the compiled binary, no-npm-resolution constraint) stays a
-  findings note, not an X). **W422** C on all three claims
-  (examples/gen-setup.ts exists 106 L same shape + fetch helpers;
-  DEFAULT_SETUP ./tests/gen-setup.ts L8/L46/L58/L30; the missing-setup
-  message names path + template + --setup flag, exit 1, the L107–114
-  comment = the pre-fix raw-error history). **W423** C on the emitted
-  structure (template L1462–1471 + emitFixture L966–999 byte-exact on
-  every cited shape; per-tag file name L1472; the out dir rm/recreate
-  L1450–1451; nuance: the page sample shows ONE header line, the template
-  UNCONDITIONALLY emits the second `// Regenerate: …` L1463 — a cosmetic
-  abridgment, recorded for the findings section with the template proof).
-  No X (nothing the code disproves as a false page claim — the exports-map
-  state is release-state, already conceded on the sibling mockServer page;
-  next free G stays G30) → no plan line, no X-census entry, no (e) line
-  this unit. No code changes (audit only). The W390/U82/W421/W422/W423
-  rows stay `?` — their (b) probes (the ts-import runnability, the no-setup
-  message verbatim + exit, the different-cwd relative-path, the gen-run
-  file-shape + emitted header) stay in (b).
-  Next unit = **code review group (k) mock-server: three import surfaces +
-  exports map + crust_mock_state DDL + __crust/violations endpoint +
-  x-crust-validation header + subset walker + 422 + proxy --report**.
-  Last unit before this one: **code review group (i) tool-builtin redirect refusal (W250/W251) + inside-crust `&` refusal (W525), COMPLETE 2026-10-19** —
-  src read this unit: src/lexer.ts L60–211 (redirectTail L69–97; refusal()
-  L99–113 — the full message: target line + "crust has no redirect except on
-  a shell stage, whose text goes to sh as-is" + article/kind clause, the
-  L108–110 `>`-tail hint "to save a pipeline, end the line with a shell
-  stage instead: | cat <t>" (lowercase "to save" = the code's own spelling —
-  the row's byte question settled), article logic L111 (`http` always "an");
-  rejectRedirect L119–122; stageHiddenByRedirect L170–178 — strip the
-  redirect tail, reclassify, null when the inner is shell or grep; classify
-  L180–211 — the two refusal sites L197–200 (non-shell kind with a tail) and
-  L207–210 (shell kind whose tail hides a crust stage), the "Measured leaks"
-  comment L205–209 = the page's exact seven (range/capture/parallel/expect/
-  stats/stdin/load), the grep exception comment L196–198); src/runLine.ts
-  L110–176 + L205–245 (runLine L110; exHead = first word L117; in-process
-  dispatch gate L118 — a tool-builtin head runs in-process, so no sh, no `&`;
-  the tool-builtin redirect refusal L162–174 — comment L162–166 = the pre-fix
-  127 leak, redirectTail(expanded) L167, the Bun.which(exHead) guard L168 so
-  the refusal reaches only a name that is BOTH a crust builtin and on PATH,
-  rest = user's line minus the tail L169, message + return 1 L170–174; the
-  pure-shell path + per-stage builtinInShellRefusal loop L212–220);
-  src/builtins.ts L547–571 (isToolBuiltin L547–549; design comment L554–557
-  "no shell operator can wrap them" = the page's sentence;
-  builtinInShellRefusal L559–571 — "Give it a line of its own.");
-  src/parser.ts L180–225 + L630–700 (resolveKind L187–207 +
-  rejectRedirect; shellSource refusal L640; shellTransform refusal L683);
-  src/args.ts L261 (hasUnquotedShellMeta — an unquoted `&` marks the line
-  shell, so the in-process dispatch gate steps aside); npm/package.json
-  (bin = `crust` ONLY — sh has no `mock-server` to exec); the file-flag
-  sites: testPipes/cli.ts L21 (-o, --out), testFixture/cli.ts L21 (-o,
-  --out), bundle.ts L21 (--outfile/--outdir), mockServer/cli.ts L45
-  (--report <path>), verifyWebLinks/cli.ts L49 (stdout --json, NO file
-  flag). Page reads: agent-skills/builtins.mdx W250 L155–186 / W251
-  L188–203; recipes/mock-server.mdx (NOT agent-skills) W525 L526–563, the
-  `&` sentence L528–531. Verdicts — **W250** C on every half (the verbatim
-  message byte-exact; the hidden-stage strip with its two refusal sites; the
-  explicit grep exception; `base64 hello | cat > out.b64` C by
-  construction). **W251** C on every half (refusal on the exec path BEFORE
-  any spawn; the double-condition Bun.which guard + the recorded pre-fix 127
-  leak; the suggestion line reproduces the exact flags BY CONSTRUCTION since
-  rest = the user's line minus the tail; every cited file-flag name real —
-  nuance: verify-web-links has no file flag, the row's parenthetical is an
-  example set; the W250 cross-check: the two messages ARE distinct —
-  runLine L171–172 vs lexer refusal() — plus a third mid-pipeline form
-  builtinInShellRefusal, no contradiction). **W525** C on the `&` half (the
-  in-scope one): `&` is unquoted shell meta (args.ts L261) so the dispatch
-  gate steps aside, the redirect gate finds no tail, and the per-stage loop
-  L212–220 refuses the tool-builtin head BEFORE any spawn; the refusal is
-  against the tool-builtin head, not against `&` itself — a non-builtin `&`
-  line goes to sh; "hand sh a name it does not have" C from the artifact;
-  the wait-target rationale (:4000/pets vs wait :4000 404 trap, port:
-  scheme) stays probe-owned (b). **W525 row repair (pre-existing defect,
-  found this unit):** group (e)'s commit bae078f left the row truncated
-  mid-sentence at "The row" (verified: bae078f^ well-formed, bae078f and
-  every commit since broken; single-line preserved) — this unit restored
-  the "Row stays `?`" closing and recorded the repair in the row itself. No
-  new G (next free G stays G30) → no plan line, no X-census entry, no (e)
-  line this unit. No code changes (audit only). The W250/W251/W525 rows
-  stay `?` — their (b) probe halves (the verbatim captures, the tail-form
-  file check, the file-flag probe list, the in-process `&`-refusal pair, the
-  wait-target rationale, the switcher trio, the burn-in, the ts runtime
-  half) stay in (b).
-  Next unit = **code review group (j) `crust/genFixtures/generate` subpath
-  export (W390) + examples/gen-setup.ts + setup-contract exports**.
-  Last unit before this one: **code review group (h) base64 `--file`/`--out` main-vs-published, COMPLETE 2026-10-19** —
-  src read this unit: src/builtinFns/base64.ts in full (235 L — usage L36;
-  parseOptions L67–91: -f/--file/-o/--out L67–82, `--` operand stop
-  L83–91, typo refusal L95–100; render(Buffer) L118–125 binary-safe
-  (decode via decodeBytes, no UTF-8 round-trip), writeTo L127–130
-  (`wrote N bytes to <p>`), readTheFile L132–135 raw readFileSync;
-  NOT_BASE64 L143 + decodeBytes throw L148–154; head form: file branch
-  L182–184, text encode + stderr `note:` L195–204; base64Stage L212–235 —
-  parseOptions on the LINE args only, item → String/Buffer, the two
-  mid-pipeline refusals); src/builtinFns/index.ts in full (46 L —
-  BUILTIN_FN_USAGE L24–31 keyed by all six names; BUILTIN_FNS +
-  isBuiltinFn identity check L43–46); src/parser.ts L605–627 (HelpExit
-  class L608–613; builtinHelp L615–627: isBuiltinFn gate L616, `--` stop
-  L619, piped-item comment L621–623, throw L624) + the two builtinHelp
-  call sites (fn-source arm L301, fn-stage arm L444); src/runLine.ts
-  L288–303 (the HelpExit catch L293–295 → usage on STDOUT + return 0);
-  src/index.ts L185–200 (the check path: parse-only loop, HelpExit arm
-  L192–196 = valid line, usage prints when it RUNS). Git (all read-only):
-  `git show v0.2.4:src/builtinFns/base64.ts` (the whole 16-line file — no
-  option parsing, no `--`, no usage; decode scan `args.some(a => a ===
-  "-d" || …)`; plain lenient `Buffer.from(str, "base64")`), `git show
-  v0.2.4:src/index.ts` (the check loop = `parse(line)(ctx)` +
-  `checkBuiltinLine` only), `git grep 'sh -n\|shellSyntax\|noexec' v0.2.4
-  -- src/` = ZERO matches, ancestry checks (`ae82619` → `7a85aca` →
-  `95a1bbe` all ancestors of `699986c`). Verdicts — **W244** C on every
-  half (six parse-time screens via HelpExit; "before any stage runs"
-  STRUCTURAL — builtinHelp runs in the parse BUILD phase and 95a1bbe's
-  message records the touch-never-happens measurement; `--` stop L619;
-  piped value is data (parser L621–623 + base64Stage L212–235); crust.fn
-  override bypass (isBuiltinFn L616); usage line byte-exact = L36; "That
-  is the PR #60 change" C — F42 = 95a1bbe in the 699986c merge; "In
-  0.2.4 … `LS1oZWxw`" C from the flag-less v0.2.4 file; the row's
-  internal-consistency note resolves C — the usage block is a verbatim
-  MAIN quote, not a linted fence, and the published state (npm latest
-  0.2.4, published 2026-08-25, gitHead `49b271d`; the GitHub-release
-  binary = v0.2.4 tag) really lacks the flags); **W252** C on every code
-  half (head form encodes TEXT L195–205 + the offline encodings verified;
-  PNG claim = L14–16 header + `7a85aca`'s message; --file/--out on main
-  L67–82 + raw-bytes binary-safe path + `wrote N` + byte-for-byte round
-  trip + note: stderr-only — MAIN-VS-PUBLISHED settled C: v0.2.4 lacks
-  BOTH flags, `7a85aca` is in PR #60 postdating the 0.2.4 publish, npm
-  latest 0.2.4; item-is-data L212–235 + the v0.2.4 history
-  code-verified (item `-d` → missing input exit 1, `--desc` → `LS1kZXNj`
-  exit 0); NOT_BASE64 refusal L143/L148–154 vs v0.2.4's lenient
-  Buffer.from). **W218 AMENDMENT**: the 0.2.4 clause "(in 0.2.4 only
-  `--check` has it)" is **X → G29** — v0.2.4 had the preflight on NEITHER
-  path (check loop pure-parse + checkBuiltinLine only; zero `sh -n` in
-  the tree); the preflight is PR #60's (`ae82619` check half, `95a1bbe`
-  exec half, both ancestors of `699986c`); the "only --check" state was
-  intra-PR only, never a release; group (g) had C'd it off the CURRENT
-  dual-path comment (a misread — recorded); W218's other four halves
-  stand. G29 file in gaps/ + plan line + X-census entry + (e) line.
-  No code changes (audit only). W244/W252 stay `?` — their (b) probes
-  (six screens, touch-never-runs, `--` stop, round-trip, note:, LWQ=/
-  refusal captures) stay in (b). Next free G = G30.
-  Next unit = **code review group (i) tool-builtin redirect refusal
-  (W250/W251) + inside-crust `&` refusal (W525)**.
-  Last unit before this one: **code review group (g) skills subsystem, COMPLETE 2026-10-19** —
-  src read this unit: skillsCli.ts (spec comments L19–21; installSkills
-  L80–151 incl. idempotency L80–82 + refusal format L135–140 + summary L145–149;
-  wantsMenu L128–131; list L218–230; exit-code table L151–235), skillsPicker.ts
-  (keymap L81–100; toggleAll L112–116; defaultChoice L139–141; status labels
-  L143–147; global/force toggles L255–260), skillsData.ts (EMBEDDED_SKILLS
-  L6–30; skillDescription L33–37; status pre-read L105–115), skillsCompat.ts
-  (link ensure L60–64), npm/scripts/postinstall.mjs + npm/lib/skills-prompt.mjs
-  in full (five never-ask conditions shouldAsk L36–63; warn-only
-  try/catches; explicit exit 0 L36), tests/skills.test.ts (live-lexer import
-  L6; KEYWORDS set L43–60; fence extraction L64; fail-on-unclassified L70–73;
-  keyword-head assertion L74–78), index.ts L175–269 re-verified (check path
-  L189–219: `parse(line)(ctx)` build-only L190, preflight L209–216, `where`
-  L211, exit 1 L215; tool dispatch L235–241; script read 127 L261–265),
-  runLine.ts L150–269 (isPureShell L179–191; exec preflight L193–208;
-  pure-shell one `sh -c` L229–238; catch format L288–303), lexer.ts L195–304
-  (ShellSyntaxProblem L216–221; shellSyntaxPreflight L238–253 — `sh -n -c`
-  spawn, stderr PIPED L241–245, `first` = sh's first stderr line L249; F19
-  comment L223–237), args.ts L270–301 (expandEnv L283–301 — process.env
-  L296, unset → `""` L296–298, opt-in-sites comment L281–282), parser.ts
-  L195–344 (expansion call sites L204/L216/L241/L259/L337/L417; json case
-  eager `JSON.parse(expandEnv(...))` L256–261; readsrc raw pattern L262–269;
-  -H no-colon throw L217–218), sources.ts L130–158 (readAll laziness —
-  `Bun.file(p)` at iteration). Verdicts — all 27 in-scope rows closed
-  (W184/W188/W194–W218): **21 C** (W184 nine-names + frontmatter
-  verbatim-by-construction; W188 two summary lines verbatim; W194 picker
-  keymap + 3 nuance notes; W195 non-interactive contract; W196 postinstall
-  five never-ask + never-fail; W198 idempotency; W199 edit-refusal format
-  verbatim; W200 exit-code table 0/1/2; W202 live-lexer lint, KEYWORDS
-  superset note; W206–W212 run-modes/exit-codes/wait contract; W213–W215
-  --check contract/lazy-source; W216 env-expansion all four halves C + two
-  nuances (read path NEVER expanded at build — parser L269 raw; whole-unset
-  `-H` → build error L217–218); W218 runtime preflight all halves C —
-  mixed-only, BEFORE build so "nothing has run" is structural, F19 comments
-  verbatim); **5 R** (W197/W201/W203/W204/W205); **1 X → G28** (W217:
-  cli.mdx L121–132 failure block — the verbatim block is a line-1 truncation
-  and "the `sh:` line after that" is a line the code cannot produce; the
-  format appends `problem.first` to the END of line 1, index.ts L212–214 /
-  runLine.ts L204–206, and the preflight's stderr is captured not passed
-  through, lexer.ts L241–249; the "names the stage" + "passes it through
-  unchanged (wording)" halves C). G28 file in gaps/ + plan line + X-census
-  entry + (e) line. No code changes (audit only). Next free G = G29.
-  Next unit = **code review group (h) base64 `--file`/`--out` main-vs-published**
-  (W244/W252).
-  Last unit before this one: **code review group (f) stage-error index preservation, COMPLETE 2026-10-19** —
-  src read this unit: runLine.ts L55–95 (splitLines continuation + `runLines`
-  L76–85 — the SHARED fail-fast loop, comment names script file / piped stdin
-  / multi-line `-c` / `source`d file, `if (last !== 0) break;` L82) + the
-  line-exec catch L288–303 (HelpExit → stdout + 0; ShellExitError → child's
-  code, no `crust:` line; else `crust: <err.message>` + return 1, L301–302) +
-  the in-process builtin dispatch catch L125–140 (same format); transforms.ts
-  L185–222 (ExpectError L187–196 — `expect: item at index ${index} failed
-  matcher ${…}` at L193; the expect stage's own counter `i` L215/L217/L219,
-  stage-local over surviving items); pipeline.ts re-verified NO-INDEX in
-  every arm (fn-arm L75–83 no try/catch; only throw = unsupported-source
-  L58). Verdicts: **W158** C on throw-fails + sinks-reject (collect
-  L107–111 for-await rejects) + non-terminal-propagate (no local catch in
-  the generator chain); the "with the index preserved" half **X → G27** (no
-  index in chain or format; the sole indexed error is a stage-local
-  ExpectError MISMATCH, not a preserved source index), **W266** C on all
-  three halves (format verbatim + the two documented in-contract exceptions;
-  the three entry modes DO share `runLines`) — the W158-vs-W266
-  contradiction resolves in W266's favor in code. G27 file in gaps/ + plan
-  line + (f) section line; both rows stay ? with their (b) verbatim-capture
-  probes (throw-on-item-2-of-5; good/bad/good fail-fast). No code changes
-  (audit only). Next free G = G28.
-  Next unit = **code review group (g) skills subsystem**
-  (W184/W188/W194–W218 — the skills-CLI surface: what `crust skills`
-  subcommands actually exist vs what the skills pages claim).
-  Last unit before this one: **code review group (e) source-fn array flattening,
-  COMPLETE 2026-10-19** —
-  src read this unit: pipeline.ts L44–142 in full (pipe fn-arm L75–83 =
-  the no-flatten contract `yield await fn(item)`; collect L107; `to` L140–142
-  — a stage passed there is a laziness trap), parser.ts shellSource
-  L636–684 + shellTransform L686–745 (per-line linearization: `buf.split("\n")`
-  yield-per-line, flush `if (buf) yield buf` L668/L738, empty lines = ""
-  items — "drops blanks" is grep's `.`) + parallel-modifier region L83–121
-  (NOT a stage — pending-concurrency consumed by the NEXT stage) + applyStage
-  arms L326–355 (GET = parallel(n, timedGet) at any n; write verbs + modifier
-  = LOAD mode parallel(concurrency, timedHttpItem)), transforms.ts parallel
-  body L253–300 (fn(item) call site L277 — zero-arg fn ignores the item) +
-  statsStage L619–700 (yields per-window + final tagged), sources.ts L50
-  (range(): Pipeline<number>), config.ts L65–90 (21-name map RE-VERIFIED —
-  statsStage IS injected, bare stats is NOT; L65–68 drift comment), sinks.ts
-  (removed-stats() tombstone), mockServer/ listing (NO index.ts;
-  startMockServer = zero matches in src/+tests/; loadSpec.ts L49 + server.ts
-  L127 corroborated for W485). Verdicts: **W126 C** (closed by cross-ref —
-  parser.ts L298–313 per W154 (b); `fn === sql` → sqlSource L53–56 per group
-  (a); Pipeline.of array arm L31–33; no probe plan carried), W433 code-half C
-  (linearization shellSource/shellTransform; no mid-pipeline flatten
-  pipeline.ts L79–81; source-fn-only flattening L298–313; (2)'s whole-file
-  half = W430's ?; four probes stay (b)), W477 sub-claim (3) **X CONFIRMED →
-  G22 scope EXTENDED** (ts "Source equivalent" collects `[]` — zero-arg pipe
-  fn never runs on empty seed, pipeline.ts L31–33 + L75–83 + L107–111; G22
-  file updated — NOT a new G; verbatim capture probe stays (b)), W525
-  code-half C + **X → G26** (zero-arg parallel fn C — transforms L253/L277;
-  range-as-TS-source C — sources L50; `stats()` = removed sink +
-  `startMockServer` = nonexistent name — sinks.ts tombstone, config L69–90,
-  grep zero, no index.ts, no exports map (G13); expectStage-vs-expect nuance
-  recorded (W474); row stays ? with the (b) probe plan), W554 code-half C
-  (`parallel 8 | POST …` = write-verb LOAD mode — parser L83–121 + L335–355;
-  tick shapes are W552's; probe trio stays (b)). G26 file in gaps/ + plan
-  line + (e) lines; G22 file scope-extended (Sub-claim (3) section + Fix
-  addition + Out-of-scope correction). All (e) probes appended to the (b)
-  queue (L83 note). No code changes (audit only). Next free G = G27.
-  Next unit = **code review group (f) stage-error index preservation**
-  (W158 vs W266 — which index a stage error reports, pre- or post-transform
-  item position; W158's row carries the (f) probe).
-  Last unit before this one: **code review group (d) export surface + runtime globals,
-  COMPLETE 2026-10-19** —
-  src read this unit: genFixtures/cli.ts L36–41, mockServer/cli.ts L48–60,
-  verifyWebLinks/cli.ts L258–279 + parseArgs defaults, testPipes/cli.ts
-  L29–35, testFixture/cli.ts L30–37, skillsCli.ts L22–27, testFixture/
-  runner.ts L288–305 (arity guard + per-field paths), pipeline.ts L107
-  (collect → Promise<T[]>), sources/transforms export lines, + website git
-  log (the earlier "npm-packages drift fix" = **288b2d3** 2026-10-06 "fix
-  (docs): the TypeScript slots named an API that does not exist" — touches
-  db-drivers/intro/quickstart/recipes pages, NOT npm-packages.mdx itself;
-  last npm-packages.mdx commit = 5bb532c 2026-08-12; logged in full-audit
-  X-census region). Verdicts: W227 C (injection map config.ts L69–90 = the
-  page's full surface incl. expectStage L83 + crust obj L37; every entry
-  mode passes loadConfig per W136; plain bun never does), U129 → code-half
-  C (exports exist in a checkout with the used shapes; "once published"
-  parked with G13 — no exports map), W474 code-half C (module export
-  `expect` transforms L211; global `expectStage` config L83; 3-form matcher
-  L185/L198–209; shell `expect` → expectStatus parser L361), W455 code-half
-  C (read L122 lines / readAll L139 whole-file / readLines L165;
-  ExpectError {item,index,matcher} L187–196), W476 code-half C (Pipeline.of
-  L29 array/AsyncIterable/ReadableStream; collect L107; throw = failure
-  text per design rule 1), W468 code-half C (hard error L283–292 names
-  field + both fixes; OUTPUT + boolean-resolves only; per-field via
-  resolveDeep L300–305; C14 changelog ✓), W531 code-half C (load L1033
-  phases-array; parallel L253; timedGet L366; statsStage L619, p95
-  L600–609; bare names = injected globals only → plain bun = ReferenceError),
-  W551 addendum (NO sort stage anywhere — barrier note transforms L249–252
-  is the verbatim design comment; "Sort downstream" = aspirational,
-  finding-lite not X), SK47/48/50 C (src/logs read in full; SK48 nuance:
-  actual boot message wraps `help`/`exit` in backticks the page quote
-  omits — W160 precedent), SK94 C (defaults 5/4/10000 + --exclude
-  repeatable + include-external/redirect/norecurse opt-outs all confirmed).
-  **U61 flag-table half X → G25** (test-pipes row omits [-o <path>];
-  mock-server row omits --proxy-timeout + --report; test-fixture/
-  gen-fixtures/skills/logs exact, verify-web-links legitimate summary).
-  **W144 severity settled → X CONFIRMED → G24** (U129 verdict is in: no
-  bare globals under plain bun + no exports-map escape hatch; surviving
-  instance of the 288b2d3 drift class). G24 + G25 files created (gaps/,
-  (e) lines, plan lines). No code changes (audit only). Next free G = G26.
-  Next unit = **code review group (e)**: source-fn array flattening (W126,
-  W433, W477(3), W525 zero-arg parallel fn, W554 parallel(8, verb) load mode;
-  W154 from the item-3 map was already C'd in (b) — cross-ref only).
-  Last unit before this one: **code review group (c) REMAINDER (W465),
-  COMPLETE 2026-10-18** —
-  src/testPipes/runner.ts read in full (180 L): W465 code-half C (per-file
-  hermeticity — `freshContext()` L33–41 called inside the per-file loop (L133):
-  fresh `aliases`/`functions` Maps + `registerBuiltinFns` (L39) = "builtin fns
-  registered, no shared alias state"; the init.ts import (config.ts L101–108) is
-  a bootstrap job the test-pipes path never enters = "no init.ts"; env snapshot
-  L128 before `runSetup` (L130) + FULL restore in the `finally` (L166–171) per
-  file even on failure = "snapshotted before setup and restored when the file
-  finishes"; probe trio stays in (b); row remains ? overall). **Group (c)
-  COMPLETE** (W129 X, W131 C, W146/W150/W163/W164 consumed, W160/W162 C, W465
-  code-half C). No new G; next free = G24.
-  Last unit before this one: **G13 investigation (user-directed, 2026-10-18) — COMPLETE** —
-  the two pending questions (is the no-npm-resolution constraint empirical? does
-  any channel make the page's pattern work?) answered by fresh probes on a fresh
-  build (`bin/crust-bin` 21:36, sha256 `947d2f4dd62e6705…`, Bun v1.4.3; full
-  commands/outputs/exit codes in full-audit.md §(b) "G13 investigation probes"):
-  (1) the AGENTS.md constraint is REFUTED — plain dynamic `import(absolutePath)`
-  (testFixture/runner.ts L20; config.ts L101–108) + the compiled binary's standard
-  node_modules resolution walking UP from the user file (P2 init.ts `left-pad` →
-  `000hi` exit 0; P1b fixture PASS exit 0; P4 standard location-dependent negative;
-  P1a CJS named-import caveat); (2) `import "crust"` has NO importable entry
-  (npm/package.json: no exports/main/module/index, only `bin`) — P5 + no-entry
-  control C2 vs positive control C1. Verdicts: W129 X CONFIRMED (claim 1; claim 2
-  C-by-delegation), W131 C (clash resolves in the page's favor; the stale
-  AGENTS.md line joins G13's fix scope), the four parked npm-resolution halves at
-  W146/W150/W163/W164 consumed (addenda in-cell). G13 file rewritten (Q1–Q3
-  answered; Fix revised to include AGENTS.md + the two page edits + db-drivers if
-  repeated). Census updated. No new G (G13 absorbs; next free = G24).
-  Last unit before this one: **code review group (b) auto-dispatch, COMPLETE
-  2026-10-18**
-  (sources read in full: src/discover.ts 170 L, src/config.ts 109 L; plus
-  parser.ts dispatch/buildSource/applyStage regions, runLine.ts dispatch head,
-  index.ts bootstrap, builtins.ts record, lexer.ts time region, builtinFns/):
-  all 40 rows adjudicated — W134–W168 + W228–W232 + W237. C: W134–W140,
-  W142, W145–W146, W148–W151, W154, W155 (bash half), W157, W159–W162,
-  W165–W167, W228–W232, W237 (subs 1–3); W168 R. Deliberately `?`
-  (probe-owned halves, queued in (b)): W137 (slugify canonical loop), W143
-  (bash tour), W147 (glob-as-source + bare `read`), W152 (bare `[` bracket
-  token — lexer/G02 territory; the row goes X if the grammar refuses), W158
-  (stage-error index — the (f) group W158-vs-W266), W163 (npm-resolution at
-  scale), W164 (prettier output). X: W141 → **G23** (npm-packages L37–40/
-  L183–185 source position `pkg(undefined, "arg1")` — parser.ts L298–313
-  invokes `fn(...staticArgs)`, item slot ABSENT; transform half C; W154
-  duplicate covered); W144's X cell extended with the case sub-claim
-  (severity still pending U129). G23 file in gaps/ + census + (e) + plan line
-  all on disk. Last unit before this one: **group (a) sql, COMPLETE** (W477
-  X → G22; W107/W118/W132/W305/W475 C-code; W241 sql cell C; the
-  `$1`-vs-`?` placeholder question — page L345 `$1` vs SKILL L65 `?` —
-  deliberately NOT closed, stays with the (b) probe). The skills↔site parity
-  check remains COMPLETE (T1–T81, all 10 pairs; T50 + the T54 lambda example
-  still C-PENDING at the W240+SK14 / W245+SK19 probes).
+- Last unit on disk: **code review group (l) logs session / pty keymap / procs stream kinds / wait item shape / tail source / grep native-subset / stats --every / read API surface / histogram bucketing (W539 C-half), IN PROGRESS 2026-10-19** —
+  scope LOCKED at 71 rows across 9 subtopics (all verified plain `?` with
+  zero code halves on disk; R internal-link rows W344/W350/W352/W365/W569
+  excluded; SK48/SK94 already C from (d); W237 excluded — subs 1–3 C from
+  (b), sub-claim 4 stays open with W240): (1) logs session W331–W343,
+  W345–W349 (18; W338 already carries the (d) code-side note) + W578;
+  (2) pty keymap W68, W224, W225, SK34; (3) procs stream kinds W351,
+  W353–W364 (13) + W570–W575, W577 (7); (4) wait item shape W363, W576,
+  W577 (+ W241's wait cell routed to (l) on disk; W211's (g) verdict says
+  the wait ITEM shape is group (l)'s); (5) tail source W435, W258;
+  (6) grep native-subset SK69, W442, U33, U34; (7) stats --every U39,
+  W543, W559, W560, SK42, SK44; (8) read API W82, W379, W430 (W455
+  already (d)-C, excluded); (9) histogram W539 (C-half named).
+  src inventory (NEW regions only — verdicts already on disk, NEVER
+  re-read: read family sources.ts L98–174 + L50 (d); src/logs/* (d);
+  transforms.ts parallel L253–300 + expect L185–222 + statsStage
+  L619–700 (e); lexer L60–211 (i); runLine L55–95/L110–176/L125–140/
+  L205–245/L288–303 (f)/(i); config L65–90 map (e); readiness L1–50 +
+  wait.ts L62–72 (g); sinks.ts (e); builtins.ts L547–571 (i); genFixtures/
+  mockServer (j)/(k)): src/editor.ts in full (321 L), completion.ts
+  L80–95 (L1–80 seen this session), interrupt.ts L40–88 (L1–40 seen),
+  builtinFns/wait.ts in full (76 L — DONE, facts below), sources.ts
+  L175–1014 (tail L194 + findTailWindowStart L247 + mergeAsync L366 +
+  procs L640–1014 incl. defaults L528–539, normalizeReady L548,
+  normalizeLive L580, restartMax L609, killGroup L618), transforms.ts
+  L1–~100 (native grep, comment L5) + L505–703 (histogram L514–618 +
+  statsStage L619+ tail for --out/flush-on-item), lexer.ts L440–576
+  (grep safe-subset recognizer L450), config.ts L60–95 (injection map
+  re-verify for W82 — (e) precedent). Facts ALREADY read in context this
+  session (must be written into the rows before they count): wait.ts in
+  full (76 L) — usage `wait <target> [--timeout <dur>] [--interval <dur>]
+  [--probe-timeout <dur>]`; durations `300ms`/`30s`/`2m`, bare number = ms
+  (parseDuration readiness.ts L36–45: ms/s/m units — W363's "is 200ms a
+  valid interval unit?" = YES); --timeout DEFAULT 30s, --interval DEFAULT
+  500ms (W576(5) REVIEW answered), --probe-timeout default min(interval*4,
+  2s); return type EXACTLY {target: string, ready: true, ms: number,
+  attempts: number} (W363/W576(1)); both `--flag value` and `--flag=value`
+  forms; unknown `--` flag / extra positional / missing target → error +
+  usage screen; not-ready throws `wait: <t> not ready after <timeout>` +
+  optional root-probe hint (runLine prepends `crust:` → W576(4)'s
+  `crust: wait: :3999/nope not ready after 2s` shape); comment L13–14
+  "A timeout throws, which runLine turns into exit 1". pty facts
+  (grep-confirmed): exit 130 = runLine.ts L134 `fired ? 130 : (result ??
+  0)` + L273 `return 130`; interrupt.ts = Ctrl-C interrupt bus (beginRun/
+  fire/children kill set, parked-sleep races, non-REPL no-op);
+  history.ts (30 L) HISTORY_PATH = $XDG_DATA_HOME/crust/history default
+  ~/.local/share/crust/history, plain text, appendHistory dedupes ONLY
+  against the immediately-preceding line, loadHistory splits newline +
+  filters empty; completion.ts (95 L) at start-of-stage (after pipe/
+  semicolon/BOL) completes $PATH names (readdir over PATH dirs, cached),
+  mid-stage completes file paths, single-candidate auto-complete (dirs get
+  trailing slash), common-prefix, does NOT know crust builtins; index.ts
+  L271 `if (!process.stdin.isTTY)` = REPL TTY gate. sources.ts
+  grep-confirmed constants: READY_DEFAULT_TIMEOUT_MS L528 = 30_000
+  (W574(4)), READY_DEFAULT_INTERVAL_MS L529 = 250, LIVE_DEFAULT_INTERVAL_
+  MS L532 = 5_000 (W572(5) cadence ~5s), LIVE_DEFAULT_FAILURES L533 = 3,
+  KILL_GRACE_MS L536 = 3000 (W359/W575 3s-grace SIGTERM then SIGKILL),
+  RESTART_HEALTHY_UPTIME_MS L539 = 10_000 (W573(2) uptime>10s reset);
+  ProcLine L467, ReadySpec L474, LiveSpec L487, ProcSpec L502,
+  normalizeReady L548, normalizeLive L580, restartMax L609, killGroup
+  L618, procs L640; tail L194 (DEFAULT_TAIL_POLL_MS L192 = 200,
+  TAIL_SCAN_BLOCK_BYTES L241 = 64KB, findTailWindowStart L247,
+  mergeAsync L366); GET L418 / request L425. transforms.ts: L5 comment
+  "Native grep over pipeline items — line-buffered where sh grep
+  block-…" (native grep stage lives in transforms.ts, NOT a separate
+  file); histogram L514–618 (BUCKET_BOUNDS, bucketFor L542, overflow
+  bucket index = BUCKET_BOUNDS.length, nearest-rank over histogram L586+);
+  statsStage L619+ (summary shape L600–609 {count, wallMs, rps, status,
+  p50, p95, p99, meanMs} on disk via U129/W531). Next: read the remaining
+  inventory regions, then write the 71 code halves row by row (subtopic
+  order: pty → logs → procs → wait → tail → grep → stats → read API →
+  histogram), then demote this entry, item-3 (l) line → DONE, Next-move
+  head → (m), commit md-only, push.
+- **Completed code-review groups (a)–(k), one line each** — full verdicts (claim-by-claim, with
+  `file:line` evidence) live in the rows of `full-audit.md` and in each group's audit commit
+  message; they are NOT restated here. (a) sql — W477 X → G22; W107/W118/W132/W305/W475
+  C-code; W241 sql cell C (the `$1`-as-bind question stays with the (b) probe). (b)
+  auto-dispatch — all 40 rows (W134–W168, W228–W232); W141 X → G23; 7 probe-owned `?` halves
+  (W137/W143/W147/W152/W158/W163/W164) queued in (b). (c) init.ts — W129 X CONFIRMED / W131 C
+  (via the user-directed G13 investigation 2026-10-18, fresh build `bin/crust-bin` sha256
+  `947d2f4dd62e6705…`); W465 code-half C (src/testPipes/runner.ts in full). (d) export surface +
+  runtime globals — W227 C; U129/W474/W455/W476/W468/W531 code-halves C; W551 addendum;
+  SK47/48/50/94 C; U61 flag half X → G25; W144 X CONFIRMED → G24. (e) source-fn flattening —
+  W126 C; W433 code-half C; W477(3) X CONFIRMED → G22 scope EXTENDED; W525 zero-arg parallel fn C
+  + X → G26; W554 load-mode C. (f) stage-error index — W158 throw/sinks/propagate C +
+  "index preserved" X → G27; W266 C (W158-vs-W266 resolves W266's way). (g) skills — all 27
+  rows closed (21 C, 5 R: W197/W201/W203/W204/W205, W217 X → G28). (h) base64 — W244 C on every
+  half; W252 C on every code half; W218 0.2.4 clause X → G29. (i) redirect/`&` refusal — W250/W251
+  C on every half; W525 `&` half C; W525 row truncation (group (e) commit bae078f) repaired.
+  (j) genFixtures — W390 C all code halves; U82 C; W420 C full close; W421/W422/W423 C code
+  halves. (k) mock-server — 12 rows (W484/W485/W513/W515/W516/W517/W518/W520/W521/W522/W523/W524)
+  code halves: DDL byte-identical, 422 build, message-dialect settled, 1000-cap,
+  502-not-recorded. No unit after (g) found a new G beyond those listed; **next free G = G30**
+  (the current (l) entry carries the same counter). G task files: `docs/audit/gaps/`; plan lines:
+  `CRUST_GAPS_PLAN.md`; X-census: `full-audit.md`.
 - Parity rows live in full-audit.md under `### parity check:` (prefix **T1+**): T1 =
   index.mdx `skills list` block vs the nine SKILL.md frontmatters (X → **G17**);
   T2–T7 = pipelines pair (T3 → **G18**); T8–T14 = api-testing pair (CLEAN all C);
