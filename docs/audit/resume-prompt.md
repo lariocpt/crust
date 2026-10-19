@@ -41,7 +41,8 @@ truth for verdicts): `docs/audit/full-audit.md`. Master plan:
   (e); lexer L60–211 (i); runLine L55–95/L110–176/L125–140/L205–245/
   L288–303 (f)/(i); config L65–90 map (e); readiness L1–50 + wait.ts
   L62–72 (g); sinks.ts (e); builtins.ts L547–571 (i); genFixtures/
-  mockServer (j)/(k)): editor.ts in full (321 L), completion.ts L80–95,
+  mockServer (j)/(k); src/logs/cli.ts + ring.ts + session.ts (l)(1)):
+   editor.ts in full (321 L), completion.ts L80–95,
   interrupt.ts L40–88, builtinFns/wait.ts in full (76 L — facts below),
   sources.ts L175–1014 (tail L194 + findTailWindowStart L247 + mergeAsync
   L366 + procs L640–1014 incl. defaults L528–539, normalizeReady L548,
@@ -85,17 +86,20 @@ truth for verdicts): `docs/audit/full-audit.md`. Master plan:
   W225 code halves (rows stay ? pty-probe-owned), SK34 C (code review +
   C-by-usage); the subtopic's read record (editor.ts 321 L keymap map,
   completion, interrupt, history, index REPL loop, builtins L193–208) is
-  fully carried in those four rows — commit d4194ac. NEXT: subtopic (1)
-  logs session W331–W343, W345–W349 + W578 (19 rows, ~13 KB of claim
-  cells) — fetch the claim cells (2 batches of ~10), read src/logs/cli.ts
-  (180 L) + ring.ts (97 L) + session.ts (459 L) = 736 L in one pass
-  (src/logs/* was read in (d) for W338/SK48 only — the other rows' facts
-  are NOT on disk), write the 19 code halves immediately (a verdict counts
-  only once it is in its row), checkpoint, commit md-only, push; then
-  subtopics in the locked order procs → wait → tail → grep → stats → read
-  API → histogram, then demote this entry, add the (l) line to
-  resume-history.md's completed block, Next-move head → (m), commit
-  md-only, push.
+  fully carried in those four rows — commit d4194ac. (1) logs session
+  DONE 23/71 — W331–W343, W345–W349 + W578 (19 rows) ALL carry code halves
+  (src/logs/cli.ts 180 L + ring.ts 97 L + session.ts 459 L full-read
+  2026-10-19; per-row evidence on disk — see the commit). NEXT: subtopic
+  (3) procs stream kinds W351, W353–W364 (13) + W570–W575, W577 (7) = 20
+  rows (all plain `?`, no code halves on disk) — fetch the claim cells,
+  the src is sources.ts procs L640–1014 (READ MAP) + the grep-confirmed
+  constants already in FACTS IN CONTEXT (defaults L528–539, normalizeReady
+  L548, normalizeLive L580, restartMax L609, killGroup L618); write the 20
+  code halves immediately (a verdict counts only once it is in its row),
+  checkpoint, commit md-only, push; then subtopics in the locked order
+  wait → tail → grep → stats → read API → histogram, then demote this
+  entry, add the (l) line to resume-history.md's completed block,
+  Next-move head → (m), commit md-only, push.
 - Completed code-review groups (a)–(k): one line each in `resume-history.md`
   (append-only; no progress annotations there). **next free G = G30.** G
   task files: `docs/audit/gaps/`; plan lines: `CRUST_GAPS_PLAN.md`;
@@ -184,17 +188,20 @@ compaction that failed and the session was restarted):
 
 ## Next move (first unit of a resuming session)
 
-Next unit = **code review group (l), subtopic (1) logs session** — W331–
-W343, W345–W349 + W578 (19 rows, ~13 KB claim cells, all plain `?`; W338
-already carries the (d) code-side note). A review, NOT a fix gate: close
+Next unit = **code review group (l), subtopic (3) procs stream kinds** —
+W351, W353–W364 (13) + W570–W575, W577 (7) = 20 rows, all plain `?`, no
+code halves on disk (W577 is shared with subtopic (4) wait). A review,
+NOT a fix gate: close
 `?` rows to C/V/X in place, verdict carries `file:line` evidence; an X row
 becomes a NEW G task file (next free G30, same shape as G13–G29) + a plan
 line — no code fixes while reviewing (a fix landing mid-audit would make
 later findings stale). Method: rules above + the chunking protocol in
-`resume-history.md`; read only the src the rows name (src/logs/cli.ts +
-ring.ts + session.ts = 736 L; NEVER re-read a src file after its verdict is
-on disk); commit `docs/audit/` (md-only) and push after the unit. Then
-subtopics in the locked order procs → wait → tail → grep → stats → read
+`resume-history.md`; read only the src the rows name (sources.ts procs
+L640–1014; the grep-confirmed sources/transforms constants are in the
+EXACT POSITION FACTS IN CONTEXT; NEVER re-read a src file after its
+verdict is on disk); commit `docs/audit/` (md-only) and push after the
+unit. Then
+subtopics in the locked order wait → tail → grep → stats → read
 API → histogram; after group (l) closes: (m) W515 vs W473 message dialect;
 (n) W514 line-numbering; then item-4 (fresh build + full probe list →
 (b), then (c)–(e)) — item-4's full probe list is in `resume-history.md`.
