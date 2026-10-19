@@ -14,15 +14,15 @@ Structure:
 Status legend for claims: `V` verified by probe, `C` confirmed in code (no probe needed),
 `X` claim contradicted (finding opened), `?` unresolved.
 
-**STATUS (2026-10-18 checkpoint — audit IN PROGRESS; skills↔site parity check COMPLETE (T1–T81, all 10 pairs); code review group (a) sql COMPLETE — W477 X → G22; group (b) auto-dispatch COMPLETE — W141 X → G23; NOT closed).**
+**STATUS (2026-10-19 checkpoint — audit IN PROGRESS: code review groups (a)–(k) COMPLETE; group (l) IN PROGRESS — subtopic (2) pty DONE 4/71 rows, next = subtopic (1) logs session W331–W343/W345–W349/W578 (19 rows); skills↔site parity check COMPLETE (T1–T81); NOT closed). Canonical live position: `docs/audit/resume-prompt.md` EXACT POSITION (this region is the audit-log checkpoint record — per-unit COMPLETE blocks below are append-only history). Recovery: `sh docs/audit/resume-check.sh`.**
 (a) page-level complete: R1–R26, U1–U134, I1–I5, A1, C1–C24, P1–P17, S1–S10, AG1–AG11,
 SK1–SK94, W1–W602 (all 29 website pages; W602 = verify-web-links recipe L185–188, page end).
-(a) NOT done: code review groups (c)–(n) (close every remaining `?`; groups (a)
-sql + (b) auto-dispatch are COMPLETE — see Exact position) · fresh build +
+(a) NOT done: code review groups (l)–(n) (close every remaining `?`; groups (a)
+sql–(k) mock-server are COMPLETE — per-unit COMPLETE blocks below) · fresh build +
 full probe list → (b) · sections (b)–(e). 8 components DONE 2026-10-18 (claim prefix **M1+**, chosen per the
 chunking protocol: M1–M17 across Hero/InstallBlock+site.ts/CodeSwitcher/Header/Sidebar/
 Footer/RecipeCard/FeatureCard — 15 C/R-C, M1+M4 probes queued in (b), no X).
-**Exact position: skills↔site parity check IN PROGRESS — T1–T45 on disk** (T1 index
+**Exact position (historical rolling block — superseded by the per-unit COMPLETE blocks below and by resume-prompt.md; kept as audit history): skills↔site parity check IN PROGRESS — T1–T45 on disk** (T1 index
 `skills list` block vs the nine frontmatters → G17; T2–T7 = pipelines pair, T3 → G18;
 T8–T14 = api-testing pair, CLEAN; T15–T21 = load-testing pair, T20 → G19;
 T22–T27 = mock-server pair, T26 → G20; T28–T33 = procs pair, NO X — T33
