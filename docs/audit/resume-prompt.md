@@ -84,10 +84,35 @@ Master plan: `docs/audit/CRUST_GAPS_PLAN.md`. Original audit prompt (scope sourc
   file); histogram L514–618 (BUCKET_BOUNDS, bucketFor L542, overflow
   bucket index = BUCKET_BOUNDS.length, nearest-rank over histogram L586+);
   statsStage L619+ (summary shape L600–609 {count, wallMs, rps, status,
-  p50, p95, p99, meanMs} on disk via U129/W531). Next: read the remaining
-  inventory regions, then write the 71 code halves row by row (subtopic
-  order: pty → logs → procs → wait → tail → grep → stats → read API →
-  histogram), then demote this entry, item-3 (l) line → DONE, Next-move
+  p50, p95, p99, meanMs} on disk via U129/W531). PROGRESS (updated as each
+  subtopic lands — the rows + commit messages carry the detail): (2) pty
+  DONE 4/71 — W68 C (code review closes the row), W224 + W225 code halves
+  (rows stay ? pty-probe-owned), SK34 C (code review + C-by-usage). NEW
+  facts recorded: editor.ts FULL 321 L (keymap: ←/→ CSI C/D L160–171, ↑/↓
+  history CSI A/B L143–159 savedBuf dance, Home = CSI H/1 + Ctrl-A 0x01
+  L248–252, End = CSI F/4 + Ctrl-E 0x05 L253–257, Delete = CSI 3 L182–187,
+  Backspace 0x7f/0x08 L239–246, Ctrl-K/U/W = 0x0b/0x15/0x17 L258–277,
+  Ctrl-L 0x0c L278–282, Ctrl-C prompt 0x03 L214–222, Ctrl-D 0x04 L224–230
+  (empty → null), Tab 0x09 L283–294, Enter 0x0d/0x0a L232–237, printable
+  run L296–313; CSI parse L203–212 regex ^([ABCDHF])|^(\d+)~; 0x02/0x06 =
+  NO handler = Ctrl-B/F unbound; handleStdinData L16–41 = running-line
+  0x03 → drop queue+chunk + fire watcher; onInterrupt L57–68; suspendEditor
+  L91–101); completion.ts L80–95 (safeIsDir, commonPrefix; L1–80 prior
+  session); interrupt.ts L40–88 (endRun L46–58 promise drop + hot-stat
+  comment, interruptPromise L64–73, registerChild L75–88 straggler kill);
+  history.ts FULL 22 L (HISTORY_PATH L4–5, loadHistory L7–14,
+  appendHistory L16–22 dedupe vs preceding line); index.ts L255–311 (pipe
+  branch L271–280 markStdinConsumed + Bun.stdin.text() + runLines, REPL
+  loop L282–305: loadHistory ctx, readLine null → shutdown(0) L296–299,
+  appendHistory L303 BEFORE runLine); builtins.ts L193–208 (exitBuiltin
+  L195–199 parseInt||"0" → ctx.exit(NaN→0), historyBuiltin L201–208
+  numbered 1-based right-aligned). NEXT: subtopic (1) logs session
+  W331–W343, W345–W349 + W578 — fetch the 19 rows' claim cells, read the
+  src they name (src/logs/* was read in (d) for W338 only — the other rows'
+  facts are NOT on disk, so the named regions get read per the rows), write
+  the 19 code halves, checkpoint, commit md-only, push; then subtopics in
+  the locked order procs → wait → tail → grep → stats → read API →
+  histogram, then demote this entry, item-3 (l) line → DONE, Next-move
   head → (m), commit md-only, push.
 - **Completed code-review groups (a)–(k), one line each** — full verdicts (claim-by-claim, with
   `file:line` evidence) live in the rows of `full-audit.md` and in each group's audit commit
