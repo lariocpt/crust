@@ -16,7 +16,220 @@ Master plan: `docs/audit/CRUST_GAPS_PLAN.md`. Original audit prompt (scope sourc
 
 ## EXACT POSITION (rolling — update this block after EVERY unit; verified on disk 2026-10-19)
 
-- Last unit on disk: **code review group (j) `crust/genFixtures/generate` subpath export (W390) + examples/gen-setup.ts + setup-contract exports, COMPLETE 2026-10-19** —
+- Last unit on disk: **code review group (k) mock-server: three import surfaces + exports map + crust_mock_state DDL + __crust/violations endpoint + x-crust-validation header + subset walker + 422 + proxy --report, COMPLETE 2026-10-19** —
+  scope LOCKED at 12 rows: W484, W485, W513, W515, W516, W517, W518, W520,
+  W521, W522, W523, W524 (all were plain `?`, none had a code half; W486/
+  W487–W512/W514/W519 excluded = other groups, W525 done in (i)). src read
+  this unit: src/mockServer/cli.ts in full (226 L — SPEC L48–60: positional
+  spec, -p/--port def 3000, -b/--host def 0.0.0.0, --stateful/--state/
+  --seed/--validate/--strict/--proxy/--proxy-timeout def 30000/--report;
+  --state/--seed imply stateful L105; --strict implies validate only when
+  NOT proxy L106; the exit-2 exclusions: proxy×state L109–112, proxy×seed
+  L113–116, proxy×stateful L117–120, --report-without-proxy L130–133,
+  bad proxy URL L134–141, proxy-timeout≤0 L142–145; redundant --validate+
+  --proxy accepted silently L146–147; flag↔option mapping L159–171 (port,
+  hostname ← --host, spec, stateful, state, seed, validate, strict, proxy,
+  proxyTimeoutMs ← --proxy-timeout, report); loadSpec fail→exit 1 L152–155;
+  boot line `N route(s) from <origin>` L184; listening line L206–211
+  (validate-mode token shown only when NOT proxy); the three boot warnings:
+  webhooks-only L176–182, Express :param L186–195, regex-literal patterns
+  L196–205; startServer fail→exit 1 L172–175; SIGINT/SIGTERM → stop + exit
+  0 L213–221); src/mockServer/proxy.ts in full (93 L —
+  STRIP_REQUEST_HEADERS L24–31 = host/connection/keep-alive/
+  transfer-encoding/content-length/accept-encoding (NOTE: NOT the RFC set
+  the W520 probe anticipates — no proxy-auth/te/trailers; host/
+  content-length/accept-encoding ARE stripped — probe data point),
+  STRIP_RESPONSE_HEADERS L33 = content-encoding/content-length/
+  transfer-encoding; joinUpstreamUrl L35–45 preserves the upstream base
+  path; forward() L47–93: redirect:"manual" so 3xx untouched L67,
+  AbortSignal.timeout(proxyTimeoutMs) L68, body read ONCE as raw bytes L73,
+  bodyless rebuild for 101/204/205/304/HEAD L81–82, bodyText only for JSON
+  content types L88–91; NO header injection into the client response —
+  rebuilt from upstream status/statusText/headers (W520's no-injection half
+  C by construction)); src/mockServer/router.ts in full (171 L —
+  buildRoutes L19–47 (path-item params merged BEFORE operation-level L37;
+  sort literal-segments desc → template-length desc L42–45), compileTemplate
+  L49–53 ({p}→([^/]+), anchored, escaped), matchRoute L65–76 (matched +
+  pathExists → 405-vs-404 + params), percent-decoded params L91–101, the
+  three boot-warning counters L111–122/L135–143/L154–171);
+  src/mockServer/server.ts in full (637 L — startServer L127 (the exact
+  W485 export name), ServerOptions L16–40, RunningServer L44–57 (port =
+  `server.port ?? opts.port` L533 = the port-0 readback), stop L545–552
+  (awaits the listener BEFORE backend.close — the measured 50/50 comment);
+  MAX_VIOLATIONS = 1000 L59, DEFAULT_PROXY_TIMEOUT_MS = 30_000 L60;
+  record() L149–161 = push, shift+dropped++ past 1000 (OLDEST dropped),
+  NDJSON appendFile awaited per record via reportQueue L155–160;
+  GET /__crust/violations L279–281 PROXY-MODE-ONLY + exact pathname →
+  {count: violations.length, dropped, violations} 200; DELETE L282–285
+  clears violations AND dropped → 204; other methods 405 L286–288; handled
+  FIRST, never forwarded (reserved-route precedence C); the mock-mode-only
+  /__crust/override control endpoint L295–330 (PUT/GET/DELETE, 201
+  {armed: N}); the proxy path L367–437: request validation ALWAYS on
+  (matched → validateRequest L371–385, unmatched →
+  [undocumentedOperation(method, pathname)] L387), recorded L389 but still
+  forwarded L392–400, response validated L401–424 with
+  .map(v => ({...v, path: url.pathname})) L421, response as-is L425,
+  UpstreamError → 502 {error: "upstream unreachable", upstream, detail}
+  L429–433 NEVER recorded (comment L428); the mock-mode 422 L461–485: ALL
+  violations recorded L462, body {error: "request validation failed",
+  violations: [{pointer, rule, message, expected?, received?, location}]}
+  with expected/received omitted when undefined L467–476, headers
+  content-type + x-crust-validation: request L479–484; the 422 lands
+  BEFORE any stateful handling L488–509 (creates nothing, comment L489);
+  404/405 L438–442; logLine L520–530: method.padEnd(6) pathname.padEnd(28)
+  status "  " msms + suffix, suffix ` [N violation(s)]` only when N>0,
+  the literal `(s)` even at N=1 L528, admin lines log 0 L289/L328;
+  applySeed L562–610 (empty-only L591, deterministic seed-<Bun.hash> ids
+  L598–604, unknown collection warns L584, bad file throws → CLI exit 1));
+  src/mockServer/state.ts in full (276 L — the sqlite DDL L88–91
+  BYTE-IDENTICAL to the page's W513 block; the postgres twin L107–110
+  (doc JSONB, updated_at timestamptz NOT NULL DEFAULT now()); NUANCE: a
+  SECOND internal table `crust_mock_touched (collection TEXT PRIMARY KEY)`
+  L92/L111 is also created — the "ever written" marker so delete-emptied
+  collections keep 404-ing (comment L149–152); the page's "one table" is
+  the public contract, not the full open-time DDL → row nuance, NOT an X;
+  ensure() L164–175 lazy idempotent DDL (not top-level await — it's
+  bytecode); sqlite put = JSON.stringify(doc) + new Date().toISOString()
+  L202; postgres upsert $3::jsonb + updated_at = now() L112–114;
+  normalizeStateUrl L246–258 (bare path → sqlite://, sqlite/postgres/
+  postgresql pass, else throw → CLI exit 2); stateDialect L260–262;
+  openStateBackend L269–276 (undefined → memory));
+  src/mockServer/validateRequest.ts in full (875 L — header comment L1–13
+  = the governing rule verbatim (never invents; deliberately unsupported:
+  not, patternProperties, uniqueItems, multipleOf, discriminator,
+  dependentSchemas, propertyNames, contains, prefixItems,
+  readOnly/writeOnly; additionalProperties only under strict LITERAL false
+  at plain object nodes, composed exempt); SchemaViolation L19–26; Violation
+  L28–39 adds ts/direction/location/method/path/template/status? (response
+  only) — the W523 six-added-fields C by type; MAX_RECEIVED=200 truncate
+  L41–52; FORMAT_REGEXES L58–64 = uuid/email/date/date-time/uri EXACTLY the
+  W516 five; matchesType L73–92 (unknown type → pass L90); $ref L132–140
+  (same-position cycle pass, unresolvable pass); allOf suppressAP L144–154;
+  anyOf/oneOf L156–191 (pass when ANY branch passes — oneOf exactly-one
+  deliberately not enforced L160–161; on total failure ONE violation, rule
+  "anyOf" L182, message `matches no ${combinator} branch; closest
+  (${bestLabel}) failed: …` L183–185, closest = FEWEST errors L174,
+  expected = the closest branch's errors); enum L193–202 `value not in
+  enum`; type L205–218 `expected X | Y, got Z` + early return L217;
+  format L221–229 `does not match format '<f>'` (unknown format pass L222);
+  pattern L233–263 (u-flag-then-plain compile, msg L258 `does not match
+  pattern`); minLength L268 `length N < minLength M`; maxLength L277;
+  minimum L287–300 (both exclusive forms); maximum L304–321 (`N >=|>
+  maximum M`); minItems/maxItems L323–341; required L361–373 `missing
+  required property 'k'`; properties L374–393 + items L342–358 (fresh guard
+  sets — pointer deepens, recursion finite); additionalProperties strict
+  guard L400–421 (enforced only when strict && !suppressAP && literal false
+  && no allOf/anyOf/oneOf siblings && no patternProperties — EXACTLY the
+  page's exemption set; msg `unexpected property 'k'`); RequestInput
+  L431–440; isJsonContentType L442–646 (application/json, text/json,
+  +json); coerceByType L489–508 (integer /^-?\d+$/, number isFinite,
+  boolean "true"/"false" literals); toViolation L518–533 (stamps ts ISO,
+  direction, location, method, path, template; status only when set);
+  validateRequest L535–635 (path params L552–555, required query params
+  L556–576 `missing required query parameter 'n'`, header/cookie params
+  NOT validated L577, requestBody: required-body L590–604 with the GET/HEAD
+  exemption L590–591 (a required body on GET/HEAD is unenforceable — no
+  client can deliver one), json-parse L611–623, body schema L624–628,
+  non-JSON passthrough L630); validateParamValue L637–665 (coercion FIRST,
+  failed coercion → `expected integer, got 'abc'`); validateQueryValues
+  L667–724 (array serialization: explode form repeated keys /
+  explode:false comma-joined, other styles pass L677–687);
+  validateResponse L738–840 (ctx path = template L747 — server.ts L421
+  re-stamps the actual pathname; NO responses documented → return [] L755–
+  761 (3.1 made responses optional; pickResponse defaults 200 so crust
+  would reject its own mock — the comment cites 7 of 17 react-corpus
+  specs); status selection exact → NXX (case-insensitive) → default
+  L763–785, miss → undocumented-status L774 + return (no body checks);
+  content-type check L797–824 (skipped for 204/304/HEAD/empty body L798–
+  799; the documented-side wildcard match L803–807 (a documented entry
+  equal to star-slash-star, or one ending in star-slash); body schema
+  L826–837); branchLabel L850–860 (0-based index; name = $ref last segment
+  or title, else bare number — the page's `branch #1 Quote` = a $ref'd
+  branch at index 1; the L842–849 comment records the design: closest =
+  fewest errors, NOT the branch the body was built from — the sinao.app
+  case); undocumentedOperation L863–875 (template "", direction "request",
+  rule undocumented-operation — the server.ts L387 consumer); W473
+  message-dialect note: the fixture-side `keyword: ` prefix is added by the
+  fixture runner's formatter layer — two formatters over ONE walker,
+  message-dialect question settled). Verdicts — **W484** C on the CLI
+  surface (all seven forms parse; the implications L105/L106; the six
+  exit-2 exclusions; loadSpec/startServer fail→1; the boot + listening
+  lines L184/L206–211 with the proxy-mode token nuance; the three boot
+  warnings). **W485** C on all four API claims (loadSpec named export real
+  + { spec } shape; startServer named export real + handle.port readback
+  L533 + handle.stop; the exports map = NEITHER package.json has one
+  (group (j) fact) → the subpath is unresolvable as written, the page's
+  own in-repo + not-on-npm caveat stands — recorded, NO X; the flag↔option
+  mapping incl. --host↔hostname + --proxy-timeout↔proxyTimeoutMs).
+  **W513** C on the DDL (byte-identical sqlite L88–91 + postgres twin
+  L107–110; lazy idempotent ensure() L164–175) + the crust_mock_touched
+  second-table nuance (L92/L111) + the bare-doc/ISO/now() put paths
+  (L202/L112–114). **W515** C on the 422 build (all violations,
+  expected/received-when-defined, the two headers L479–484) + the four
+  exhibit messages verbatim (L268/L198/L304–320/L258) + the dialect
+  settlement + the location stamping + the coercion-first +
+  header/cookie-skip. **W516** C on the checked surface (the five formats
+  L58–64; the keyword set incl. both exclusive bound forms L287–320;
+  minItems/maxItems L323–341) + the branch-naming claim (branchLabel
+  L850–860: 0-based + $ref-last-segment/title; closest = fewest errors
+  L174) + the request-level surface (validateRequest L535–635 incl. the
+  GET/HEAD required-body exemption L590–591 + json-parse L611–623).
+  **W517** C on the governing rule (header comment L1–13 = the page's rule
+  verbatim + the unsupported-keyword superset; the pass-not-judge sites
+  L222/L233–263/L136/L134) + the strict additionalProperties guard =
+  exactly the page's exemption set (L400–408) + the non-JSON passthrough
+  (L610/L630) + the --strict implications (cli L106; proxy-always-on
+  server L367–437; redundant --validate accepted cli L146–147) + the
+  exit-2 exclusions (cli L109–120). **W518** C on creates-nothing (422
+  branch L461–485 before stateful L488–509, comment L489) + the
+  422-vs-400 literals (L463/L480). **W520** C on: the strip-set data
+  point (the six request headers L24–31 — NOT the RFC set the probe
+  anticipates), the 3xx-untouched (redirect:"manual" L67), the as-is
+  response (raw bytes L73; rebuilt from upstream L47–93), the NO header
+  injection (no x-crust-validation on proxied responses — by
+  construction), the record-never-enforce (record L389 then forward
+  L392–400; response validation L401–424 with the L421 path re-stamp),
+  the 502 shape {error:"upstream unreachable",upstream,detail} L429–433
+  + NEVER recorded (L428), the shared timeout shape (AbortSignal L68).
+  **W521** C on the logLine (conditional column only when N>0; literal
+  ` violation(s)` even at 1 L528; combined both-directions count by
+  construction; the undocumented-operation counted; admin lines log 0
+  L289/L328). **W522** C on the endpoint (reserved-route precedence —
+  handled first, proxy-mode-only, exact pathname; the mock-only
+  /__crust/override is the other reserved surface L295–330) + the
+  example-line explanation (pointer "" is not nullish → the nullish
+  operator does not fall through → the empty slot is exactly what the
+  code renders; the W522(2) "potential mismatch" resolves faithful-by-
+  code, probe still confirms live). **W523** C on the buffer contract
+  (MAX_VIOLATIONS L59; oldest shift + dropped++ L149–161;
+  {count,dropped,violations} L279–281; DELETE clears violations AND
+  dropped → 204 L282–285; 405 L286–288) + the six added fields by type
+  (L28–39; ts ISO L525; status response-only L531) + the example message
+  form (L213 `expected X, got Y`). **W524** C on the --report append
+  (appendFile via reportQueue L155–160; --report requires --proxy cli
+  L130–133) + the implications (proxy implies both-direction validation by
+  construction server L367–437; redundant --validate accepted cli
+  L146–147) + the exclusions (cli L109–120) + the step-1 shell-& nuance
+  (the & is outside the quoted crust line — shell backgrounding, crust's
+  own & refusal never sees it; the W525 cross-ref).
+  No X (nothing the code disproves as a false page claim — the
+  exports-map state is release-state already conceded on the page, the
+  strip-set delta is probe data not a page error, the touched-table
+  nuance is the public-contract scope the page states deliberately; next
+  free G stays G30) → no plan line, no X-census entry, no (e) line this
+  unit. No code changes (audit only — the two stray-pipe repairs in the
+  W522/W523 cells are md-hygiene only). The 12 rows stay `?` — every (b)
+  probe (the seven boot forms, the module-not-found, the DDL schema-diff,
+  the exact-curl 422, the keyword battery, the never-invent probes, the
+  creates-nothing count-diff, the header-diff + as-is byte-diff, the
+  stderr format, the summary line, the 1000-cap burn-in, the DELETE
+  reset, the field-by-field diff, the CI gate run) stays in (b).
+  Next unit = **code review group (l) logs ring buffer / pty keymap /
+  procs stream kinds / wait item shape / tail / grep / stats --every /
+  read API / histogram bucketing (W539 C-half)**.
+  Last unit before this one: **code review group (j) `crust/genFixtures/
+  generate` subpath export (W390) + examples/gen-setup.ts + setup-contract
+  exports, COMPLETE 2026-10-19** —
   src read this unit: src/genFixtures/cli.ts in full (130 L —
   DEFAULT_OUT tests/gen L7, DEFAULT_SETUP ./tests/gen-setup.ts L8;
   USAGE L10–34 incl. the required-exports list L23–27 + the
@@ -694,12 +907,8 @@ truncation + a "sh: line after that" the code cannot produce; G28 file +
 plan line + X-census entry + (e) line; W216's two nuances recorded; all (g)
 probes stay (b)) are
 ALL DONE.**
-Next unit = **code review group (k) mock-server: three import surfaces + exports map + crust_mock_state DDL + __crust/violations endpoint + x-crust-validation header + subset walker + 422 + proxy --report**
-(item-3 group (k); group (j) is DONE 2026-10-19: W390 C on every code
-half (no exports map in either package.json — the subpath is in-repo
-relative only; the swagger arg fetches when a URL, $refs stay local), U82
-C, W420 C full close, W421/W422/W423 C code halves, no new G, next free
-G = G30; see the EXACT POSITION block)
+Next unit = **code review group (l) logs ring buffer / pty keymap / procs stream kinds / wait item shape / tail source / grep native-subset / stats --every / read/lines/readAll/read API surface / histogram bucketing code (W539 C-half)**
+(item-3 group (l); group (k) is DONE 2026-10-19: all 12 rows (W484/W485/W513/W515/W516/W517/W518/W520/W521/W522/W523/W524) got code halves from full reads of cli.ts/proxy.ts/router.ts/server.ts/state.ts/validateRequest.ts — DDL byte-identical + the crust_mock_touched second-table nuance, the 422 build + message-dialect settled (two formatters over one walker), the exports-map state (neither package.json has one; the page's in-repo caveat stands, no X), the strip-set data point (six request headers, not the RFC set), the 1000-cap oldest-shift + DELETE-resets-dropped, 502-not-recorded, the logLine format with always-`(s)`, the --report appendFile; no new G, next free G = G30; see the EXACT POSITION block)
 — a review, NOT a fix gate: close every
 open `?` row to C/V/X in place, with the verdict carrying `file:line`
 evidence; an X row becomes a NEW G task file (next free = G30, same shape as
@@ -749,7 +958,7 @@ half; W251 C on every half; W525 `&` half C; W525 row truncation repaired;
 no new G, next free G = G30); (j) genFixtures subpath export — **DONE
 2026-10-19** (W390 C on every code half; U82 C; W420 C full close;
 W421/W422/W423 C code halves; no new G, next free G = G30); (k)
-mock-server surfaces; (l) logs ring buffer / pty keymap / procs stream kinds /
+mock-server surfaces — **DONE 2026-10-19** (12 rows W484/W485/W513/W515/W516/W517/W518/W520/W521/W522/W523/W524 code halves; no new G, next free G = G30); (l) logs ring buffer / pty keymap / procs stream kinds /
 wait item shape / tail / grep / stats --every / read API / histogram
 bucketing (W539 C-half); (m) W515 vs W473 message dialect; (n) W514
 line-numbering. Also close the SK rows' `?`-as-code-review half where a group
