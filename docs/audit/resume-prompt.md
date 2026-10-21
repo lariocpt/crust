@@ -57,11 +57,7 @@ truth for verdicts): `docs/audit/full-audit.md`. Master plan:
   (minted PER REQUEST; a caller-supplied signal always wins; only a
   MINTED abort may classify as timeout) — carried for a possible (m)
   W473 message-dialect cross-ref; the (8) rows closed on the L123–202
-  half (makeHttp/httpRequest body) per the facts-in-rows rule. (9)
-  transforms.ts histogram L514–618 (BUCKET_BOUNDS L533–540; bucketFor
-  L542–553; overflow bucket index = BUCKET_BOUNDS.length; nearest-rank
-  over the histogram L586+; summary shape L600–609 {count, wallMs, rps,
-  status, p50, p95, p99, meanMs} on disk via U129/W531).
+  half (makeHttp/httpRequest body) per the facts-in-rows rule.
   PROGRESS: (2) pty DONE 4/71 — W68 C (code review closes the row), W224 +
   W225 code halves (rows stay ? pty-probe-owned), SK34 C (code review +
   C-by-usage); the subtopic's read record (editor.ts 321 L keymap map,
@@ -163,14 +159,36 @@ truth for verdicts): `docs/audit/full-audit.md`. Master plan:
   the region it reads; the shell-side dispatch refusal stays (b));
   (13) W265 the eight-traps catalog (mostly cross-refs to on-disk
   rows: (e) map/filter/parallel/expect, (i) builtins, (l)(6) grep +
-  lines, lexer (i) JSON-head, (l)(7) stats). NEXT: subtopic (9)
-  histogram W539 (1 row; NO new read — the L514–618 region is inside
-  the never-reread L505–703 (l)(7) and its facts are in FACTS IN
-  CONTEXT above): fetch W539's claim cell, write the code half from
-  the held facts, checkpoint, commit md-only, push; then the
-  scope-decision subtopics (10)–(13); after group (l) closes: demote
-  this entry, add the (l) line to resume-history.md's completed block,
-  Next-move head → (m) W473 (+ W515 cross-ref), commit md-only, push.
+  lines, lexer (i) JSON-head, (l)(7) stats). + (9) histogram DONE
+  62/71 (1 row W539 — NO new read: the L514–618 region is inside the
+  never-reread L505–703 (l)(7); the code half written from the held
+  facts: constant BUCKET_BOUNDS grid L533–540 + bucketFor L542–553 +
+  overflow bucket = BUCKET_BOUNDS.length → percentiles by nearest-rank
+  over the histogram L586+ (bucket counts, never per-sample — constant
+  memory on any soak) + summary L600–609 {count, wallMs, rps, status,
+  p50, p95, p99, meanMs} = the two-class shape the page names; the
+  three behavioral pins (grid step widths 0.1/1ms, upper-bound
+  reporting = never faster, meanMs float exactness) stay (b)-probe-
+  owned per the row's own plan; FACTS pruned of the (9) chunk — see
+  the commit). NEXT: scope-decision subtopic (10) W33 globals caveat
+  (1 row; evidence mostly on disk — the injection/global-existence
+  side = W227 (d) + W82 (l)(8) on disk; the file-locations side: U129
+  (d) pins parallel→transforms L253 + statsStage→transforms L619, the
+  (e) READ MAP pins expect→transforms L185–222, W82 pins GET→sources
+  L418 — the NEW work is the `range` file-location grep (sources.ts
+  expected; confirm, do not assume) + the npm/package.json "library on
+  npm" check (launcher package, no exports map — U129's "once
+  published" parking already says this on disk). W33's page text names
+  THREE files for the FIVE names; pipeline.ts holds Pipeline (a
+  different listed global), so the row must adjudicate whether the
+  3-file list is collectively true (each name in one of the three) or
+  a loose overstatement — expected C with the reading recorded; the
+  "crust installs globals wherever crust starts its runtime" half is
+  W227 (d) verbatim on disk (the W136 entry-mode list)). After (10):
+  (11) W21, (12) W81, (13) W265 in the locked order; after group (l)
+  closes: demote this entry, add the (l) line to resume-history.md's
+  completed block, Next-move head → (m) W473 (+ W515 cross-ref),
+  commit md-only, push.
 - Completed code-review groups (a)–(k): one line each in `resume-history.md`
   (append-only; no progress annotations there). **next free G = G30.** G
   task files: `docs/audit/gaps/`; plan lines: `CRUST_GAPS_PLAN.md`;
@@ -259,22 +277,26 @@ compaction that failed and the session was restarted):
 
 ## Next move (first unit of a resuming session)
 
-Next unit = **code review group (l), subtopic (9) histogram** —
-W539 (1 row; C-half named). NO new read: W539's region (transforms.ts
-L514–618) is inside the never-reread L505–703 (l)(7), and its facts
-(BUCKET_BOUNDS L533–540; bucketFor L542–553; overflow bucket index =
-BUCKET_BOUNDS.length; nearest-rank over the histogram L586+; summary
-shape L600–609 {count, wallMs, rps, status, p50, p95, p99, meanMs})
-are in the EXACT POSITION FACTS IN CONTEXT. A review, NOT a fix gate:
+Next unit = **code review group (l), scope-decision subtopic (10)
+W33 globals caveat** — W33 (1 row; L175). A review, NOT a fix gate:
 close `?` rows to C/V/X in place, verdict carries `file:line` evidence;
 an X row becomes a NEW G task file (next free G30, same shape as
 G13–G29) + a plan line — no code fixes while reviewing (a fix landing
 mid-audit would make later findings stale). Method: rules above + the
-chunking protocol in `resume-history.md`; fetch W539's claim cell,
-write the code half from the held facts, NEVER re-read a src file
-after its verdict is on disk. Write the code half into the row, then
-checkpoint EXACT POSITION, commit `docs/audit/` (md-only) and push.
-Then the scope-decision subtopics in the locked order (10) W33,
+chunking protocol in `resume-history.md`; fetch W33's claim cell;
+evidence is mostly on disk (injection/global-existence = W227 (d) +
+W82 (l)(8); file locations = U129 (d) parallel/statsStage + (e) READ
+MAP expect + W82 GET) — the ONLY new reads are (a) a bounded `range`
+export-location grep in sources.ts (confirm, do not assume) and (b)
+npm/package.json (non-src; the "library on npm" status — launcher
+package, no exports map); NEVER re-read a src file after its verdict
+is on disk. Adjudicate in the row: the page's 3-file list for the
+five names (pipeline.ts holds Pipeline, not any of the five) —
+collectively true vs loose overstatement (expected C with the reading
+recorded); the "crust installs globals wherever crust starts its
+runtime" half = W227 (d) on disk. Write the code half into the row,
+then checkpoint EXACT POSITION, commit `docs/audit/` (md-only) and
+push. Then the remaining scope-decision subtopics in the locked order
 (11) W21, (12) W81, (13) W265 (assignment + evidence notes in the
 (8) progress entry above); after group (l) closes: (m) W473 vs W515
 message dialect (W515 already carries a code half — (m) closes W473
