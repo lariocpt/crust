@@ -170,25 +170,42 @@ truth for verdicts): `docs/audit/full-audit.md`. Master plan:
   three behavioral pins (grid step widths 0.1/1ms, upper-bound
   reporting = never faster, meanMs float exactness) stay (b)-probe-
   owned per the row's own plan; FACTS pruned of the (9) chunk — see
-  the commit). NEXT: scope-decision subtopic (10) W33 globals caveat
-  (1 row; evidence mostly on disk — the injection/global-existence
-  side = W227 (d) + W82 (l)(8) on disk; the file-locations side: U129
-  (d) pins parallel→transforms L253 + statsStage→transforms L619, the
-  (e) READ MAP pins expect→transforms L185–222, W82 pins GET→sources
-  L418 — the NEW work is the `range` file-location grep (sources.ts
-  expected; confirm, do not assume) + the npm/package.json "library on
-  npm" check (launcher package, no exports map — U129's "once
-  published" parking already says this on disk). W33's page text names
-  THREE files for the FIVE names; pipeline.ts holds Pipeline (a
-  different listed global), so the row must adjudicate whether the
-  3-file list is collectively true (each name in one of the three) or
-  a loose overstatement — expected C with the reading recorded; the
-  "crust installs globals wherever crust starts its runtime" half is
-  W227 (d) verbatim on disk (the W136 entry-mode list)). After (10):
-  (11) W21, (12) W81, (13) W265 in the locked order; after group (l)
-  closes: demote this entry, add the (l) line to resume-history.md's
-  completed block, Next-move head → (m) W473 (+ W515 cross-ref),
-  commit md-only, push.
+  the commit). + (10) W33 globals caveat DONE 63/71 (1 row W33 —
+  FULL C CLOSE, code-review-only row: the row's own plan names no
+  probe half, W68/SK34 (2) house format `C (group (l) subtopic (10),
+  2026-10-21; …): … No X.)`; new reads: `range` grep-verified at
+  sources.ts L50 (the L50 region is already READ-MAP-marked "(d)") +
+  npm/package.json checked (launcher package: bin ./bin/crust, files
+  bin/lib/scripts/skills/README, NO main/exports/module — no
+  importable library surface, so the "once published" `crust/…`
+  subpath stays parked with G13 per U129 (d) on disk); the rest on
+  disk: W227 (d) the runtime-install + plain-bun halves, U129 (d)
+  parallel L253 + statsStage L619, (e) READ MAP expect L185–222, W82
+  (l)(8) GET L418; adjudication recorded in the row: the five names
+  live in exactly TWO of the three stated files (pipeline.ts holds
+  Pipeline, not any of the five) — the 3-file import-guidance list is
+  collectively true, loose, not false — C, no X, no G — see the
+  commit). NEXT: scope-decision subtopic (11) W21 the TS-script five
+  examples (1 row W21 — code-review-only row → FULL C CLOSE per the
+  (10) precedent, or the X form if the `stats` check fails → G30; the
+  row's plan: export surface of `readAll`, `glob`, `POST`,
+  `expectStage`, `stats`, `statsStage` + the `Bun.sql` tagged template
+  as per-item transform; evidence mostly on disk: the injection map
+  (W82 (l)(8)) carries readAll L74 / glob L72 / POST L79 / expectStage
+  L83 / statsStage L88 — the NEW work is (a) the `stats` name check:
+  `stats` is NOT a L70–90 injected global — grep the export surface
+  (transforms.ts/sinks.ts) for a `stats` export and check the page's
+  example context (the intro page's five TS examples — does the page
+  show an import above them? website read, W40/288b2d3 family) — if
+  no `stats` export AND no import in the page context: X candidate
+  (website-fix family) → G30; if the page context resolves it: C with
+  the reading; (b) the Bun.sql half = the per-item transform contract
+  — W433 (e) on disk: pipe fn-arm L75–83 yields the fn return as ONE
+  item (any value, tagged template included), map L88–90 delegates to
+  pipe). After (11): (12) W81, (13) W265 in the locked order; after
+  group (l) closes: demote this entry, add the (l) line to
+  resume-history.md's completed block, Next-move head → (m) W473
+  (+ W515 cross-ref), commit md-only, push.
 - Completed code-review groups (a)–(k): one line each in `resume-history.md`
   (append-only; no progress annotations there). **next free G = G30.** G
   task files: `docs/audit/gaps/`; plan lines: `CRUST_GAPS_PLAN.md`;
@@ -277,29 +294,36 @@ compaction that failed and the session was restarted):
 
 ## Next move (first unit of a resuming session)
 
-Next unit = **code review group (l), scope-decision subtopic (10)
-W33 globals caveat** — W33 (1 row; L175). A review, NOT a fix gate:
-close `?` rows to C/V/X in place, verdict carries `file:line` evidence;
-an X row becomes a NEW G task file (next free G30, same shape as
-G13–G29) + a plan line — no code fixes while reviewing (a fix landing
-mid-audit would make later findings stale). Method: rules above + the
-chunking protocol in `resume-history.md`; fetch W33's claim cell;
-evidence is mostly on disk (injection/global-existence = W227 (d) +
-W82 (l)(8); file locations = U129 (d) parallel/statsStage + (e) READ
-MAP expect + W82 GET) — the ONLY new reads are (a) a bounded `range`
-export-location grep in sources.ts (confirm, do not assume) and (b)
-npm/package.json (non-src; the "library on npm" status — launcher
-package, no exports map); NEVER re-read a src file after its verdict
-is on disk. Adjudicate in the row: the page's 3-file list for the
-five names (pipeline.ts holds Pipeline, not any of the five) —
-collectively true vs loose overstatement (expected C with the reading
-recorded); the "crust installs globals wherever crust starts its
-runtime" half = W227 (d) on disk. Write the code half into the row,
-then checkpoint EXACT POSITION, commit `docs/audit/` (md-only) and
-push. Then the remaining scope-decision subtopics in the locked order
-(11) W21, (12) W81, (13) W265 (assignment + evidence notes in the
-(8) progress entry above); after group (l) closes: (m) W473 vs W515
-message dialect (W515 already carries a code half — (m) closes W473
-+ the cross-ref); (n) W514 line-numbering; then item-4 (fresh build +
-full probe list → (b), then (c)–(e)) — item-4's full probe list is in
+Next unit = **code review group (l), scope-decision subtopic (11)
+W21 the TS-script five examples** — W21 (1 row; L38–79). A review,
+NOT a fix gate: close `?` rows to C/V/X in place, verdict carries
+`file:line` evidence; an X row becomes a NEW G task file (next free
+G30, same shape as G13–G29) + a plan line — no code fixes while
+reviewing (a fix landing mid-audit would make later findings stale).
+Method: rules above + the chunking protocol in `resume-history.md`;
+fetch W21's claim cell. The row is CODE-REVIEW-ONLY (its plan names
+no probe half) → FULL C CLOSE per the (10) W33 / (2) W68/SK34 house
+format — or the X form if the `stats` check fails. Evidence mostly on
+disk: the injection map (W82 (l)(8)) carries readAll L74 / glob L72 /
+POST L79 / expectStage L83 / statsStage L88; the per-item transform
+contract (the `Bun.sql` tagged template as an item value) = W433 (e)
+on disk (pipe fn-arm L75–83 yields the fn return as ONE item — any
+value — map L88–90 delegates). The ONLY new work is the `stats` name
+check: `stats` is NOT a L70–90 injected global — (a) grep the export
+surface of transforms.ts + sinks.ts for a `stats` export (bounded
+byte-cut; the never-reread regions stay untouched) and (b) check the
+intro page's example context in the website repo (../crust-website —
+do the five TS examples carry an import line? W40/288b2d3 family —
+the 2026-10-06 drift-fix touched intro.mdx for exactly this kind of
+issue). Adjudicate in the row: no `stats` export + no import shown →
+X (website-fix family) → G30 + plan line; import shown or export
+found → C with the reading recorded. NEVER re-read a src file after
+its verdict is on disk. Write the verdict into the row, then
+checkpoint EXACT POSITION, commit `docs/audit/` (md-only) and push.
+Then the remaining scope-decision subtopics in the locked order
+(12) W81, (13) W265 (assignment + evidence notes in the (8) progress
+entry above); after group (l) closes: (m) W473 vs W515 message
+dialect (W515 already carries a code half — (m) closes W473 + the
+cross-ref); (n) W514 line-numbering; then item-4 (fresh build + full
+probe list → (b), then (c)–(e)) — item-4's full probe list is in
 `resume-history.md`.
