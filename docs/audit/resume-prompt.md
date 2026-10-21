@@ -43,24 +43,25 @@ truth for verdicts): `docs/audit/full-audit.md`. Master plan:
   L62–72 (g); sinks.ts (e); builtins.ts L547–571 (i); genFixtures/
   mockServer (j)/(k); src/logs/cli.ts + ring.ts + session.ts (l)(1);
   sources.ts L175–1000 (l)(3)+(5); transforms.ts L1–122 (l)(6);
-  transforms.ts L505–703 (l)(7); lexer.ts L440–576 (l)(6)):
+  transforms.ts L505–703 (l)(7); lexer.ts L440–576 (l)(6);
+  sources.ts L371–466 (l)(8); transforms.ts L106–202 (l)(8);
+  config.ts L55–99 (l)(8); pipeline.ts L80–139 (l)(8)):
    editor.ts in full (321 L), completion.ts L80–95,
-  interrupt.ts L40–88, builtinFns/wait.ts in full (76 L — facts below),
-  sources.ts L371–466 (mergeAsync body + readiness-probe internals +
-  GET L418 / request L425 for (8)),
-  transforms.ts L123+ (httpRequest body — (8)),
-  config.ts L60–95 (injection map re-verify
-  for W82 — (e) precedent).
+  interrupt.ts L40–88, builtinFns/wait.ts in full (76 L — facts below).
+  (9) histogram W539 needs NO new read: its region (transforms.ts
+  L514–618) is inside the never-reread L505–703 (l)(7), and its facts
+  are in FACTS IN CONTEXT below.
   FACTS IN CONTEXT (holding spot — these are read but NOT yet in rows;
   write each into its row as that subtopic lands, and delete it from here
-  once the row carries it): (8) GET L418 / request L425 (read API source
-  stages) + transforms.ts httpRequest L106–122 read under (l)(6) (signal
-  minted PER REQUEST L114–122; a caller-supplied signal always wins and
-  only a MINTED abort may classify as a timeout). (9) transforms.ts:
-  histogram L514–618 (BUCKET_BOUNDS, bucketFor L542, overflow bucket
-  index = BUCKET_BOUNDS.length, nearest-rank over histogram L586+);
-  statsStage L619+ (summary shape L600–609 {count, wallMs, rps, status,
-  p50, p95, p99, meanMs} on disk via U129/W531).
+  once the row carries it): (8) httpRequest L106–122 signal minting
+  (minted PER REQUEST; a caller-supplied signal always wins; only a
+  MINTED abort may classify as timeout) — carried for a possible (m)
+  W473 message-dialect cross-ref; the (8) rows closed on the L123–202
+  half (makeHttp/httpRequest body) per the facts-in-rows rule. (9)
+  transforms.ts histogram L514–618 (BUCKET_BOUNDS L533–540; bucketFor
+  L542–553; overflow bucket index = BUCKET_BOUNDS.length; nearest-rank
+  over the histogram L586+; summary shape L600–609 {count, wallMs, rps,
+  status, p50, p95, p99, meanMs} on disk via U129/W531).
   PROGRESS: (2) pty DONE 4/71 — W68 C (code review closes the row), W224 +
   W225 code halves (rows stay ? pty-probe-owned), SK34 C (code review +
   C-by-usage); the subtopic's read record (editor.ts 321 L keymap map,
@@ -119,18 +120,57 @@ truth for verdicts): `docs/audit/full-audit.md`. Master plan:
   the classifyStats flag-parse boundary (lexer L507–537, read (l)(6):
   --every N[s] / --out file with or without =, ANY other token → shell
   fallback, bare stats admitted) is carried in this entry per the
-  facts-in-rows rule — see the commit). NEXT: subtopic
-  (8) read API W82, W379, W430 (3 rows; W455 already (d)-C, out of
-  scope) — fetch the claim cells, read the src the rows name:
-  sources.ts L371–466 (mergeAsync body + readiness-probe internals +
-  GET L418 / request L425) + transforms.ts L123+ (the httpRequest body —
-  the L106–122 header facts: signal minted PER REQUEST, caller signal
-  always wins, only a MINTED abort may classify as a timeout, are in
-  FACTS IN CONTEXT) + config.ts L60–95 (the injection map re-verify for
-  W82 — (e) precedent), write the 3 code halves immediately, checkpoint,
-  commit md-only, push; then subtopics in the locked order histogram,
-  then demote this entry, add the (l) line to resume-history.md's
-  completed block, Next-move head → (m), commit md-only, push.
+  facts-in-rows rule — see the commit). + (8) read API DONE 61/71 (3
+  rows W82/W379/W430 — config.ts L55–99 + pipeline.ts L80–139 +
+  sources.ts L371–466 + transforms.ts L106–202 read/re-verified
+  2026-10-20: provenance comment L64–68 (the map must stay in step with
+  W82's page table; tests/globals.test.ts asserts it) + injection map
+  L70–90 (all 20 of the page's bare names: Pipeline L70, range L71, …,
+  `g.expectStage = expect` L83, …, `g.$ = Bun.$` L90); pipeline.ts
+  filter L92–99 = per-item predicate (W430's bash half; no line
+  splitting); sources.ts GET L418–420 + request L425–442 (method locked
+  "GET"|"DELETE" L426; minted timeout signal L436–440; teardown's
+  g.return() deliberately NOT awaited L405–415); transforms.ts
+  httpRequest body L125–138 + makeHttp L157–168 (per-item `yield await
+  httpRequest(url, method, item, opts, timeoutMs)` L162–163 — upstream
+  item IS the body) + httpItem L170–178 + POST/PUT/PATCH/DELETE exports
+  L180–183 + expect matches L198–209 — per-row evidence on disk — see
+  the commit). SCOPE CENSUS 2026-10-20 (pre-commit re-run): enumerated
+  (1)–(9) = 60 unique rows; closed after (7) = 58 halves / 56 unique
+  rows (W363/W577 double-counted in (3)+(4)); remaining open in plan =
+  W82/W379/W430 ((8), closed by this entry), W539 ((9)), W473 ((m) —
+  W515 already carries a (k) code half, so (m) closes W473 +
+  cross-ref), W514 ((n)) = 6 rows → 58+6 = 64 ≠ 71, GAP = 7:
+  pre-existing bookkeeping ambiguity (71 was locked as "all verified
+  plain ?" at lock time; its derivation is not reconstructable from
+  disk artifacts) — the denominator stays LOCKED, do NOT silently
+  change it. On-disk census of bare-? zero-code-half rows outside the
+  enumerated scope, identified as (l)-family code-review rows: W21,
+  W33, W81, W265 (4 rows) + W240 (probe-owned — W237's sub-claim 4
+  stays open with it per the lock note; no named code half → (b)) = 5
+  identified of the 7-row gap, ~2 still unidentified. SCOPE DECISION
+  2026-10-20 (recorded, not silent): W21/W33/W81/W265 are NOT folded
+  into (8) — (8) closes exactly the 3 locked rows (58→61); they are
+  assigned to NEW group (l) subtopics after (9), in order: (10) W33
+  globals caveat (evidence mostly on disk — U129 (d) + W227 (d) + the
+  (e) READ MAP; new = the `range` file-location grep + the
+  npm/package.json "library on npm" check); (11) W21 the TS-script
+  five examples (export surface incl. the `stats` name check — the
+  page example's `.to(stats())` is NOT a L70–90 injected global; W40/
+  288b2d3 website-fix family; may touch website parity); (12) W81
+  sinks.ts export surface (needs a bounded sinks.ts export-line read —
+  the (e) READ MAP marks sinks.ts never-reread, so unit (12) re-marks
+  the region it reads; the shell-side dispatch refusal stays (b));
+  (13) W265 the eight-traps catalog (mostly cross-refs to on-disk
+  rows: (e) map/filter/parallel/expect, (i) builtins, (l)(6) grep +
+  lines, lexer (i) JSON-head, (l)(7) stats). NEXT: subtopic (9)
+  histogram W539 (1 row; NO new read — the L514–618 region is inside
+  the never-reread L505–703 (l)(7) and its facts are in FACTS IN
+  CONTEXT above): fetch W539's claim cell, write the code half from
+  the held facts, checkpoint, commit md-only, push; then the
+  scope-decision subtopics (10)–(13); after group (l) closes: demote
+  this entry, add the (l) line to resume-history.md's completed block,
+  Next-move head → (m) W473 (+ W515 cross-ref), commit md-only, push.
 - Completed code-review groups (a)–(k): one line each in `resume-history.md`
   (append-only; no progress annotations there). **next free G = G30.** G
   task files: `docs/audit/gaps/`; plan lines: `CRUST_GAPS_PLAN.md`;
@@ -219,22 +259,25 @@ compaction that failed and the session was restarted):
 
 ## Next move (first unit of a resuming session)
 
-Next unit = **code review group (l), subtopic (8) read API** —
-W82, W379, W430 (3 rows; W455 already (d)-C, out of scope). A review,
-NOT a fix gate: close
-`?` rows to C/V/X in place, verdict carries `file:line` evidence; an X row
-becomes a NEW G task file (next free G30, same shape as G13–G29) + a plan
-line — no code fixes while reviewing (a fix landing mid-audit would make
-later findings stale). Method: rules above + the chunking protocol in
-`resume-history.md`; fetch the 3 claim cells, read only the src the rows
-name: sources.ts L371–466 (mergeAsync body + readiness-probe internals +
-GET L418 / request L425) + transforms.ts L123+ (the httpRequest body —
-the L106–122 header facts: signal minted PER REQUEST, caller signal
-always wins, only a MINTED abort may classify as a timeout, are in the
-EXACT POSITION FACTS IN CONTEXT) + config.ts L60–95 (the injection map
-re-verify for W82 — (e) precedent); NEVER re-read a src file
-after its verdict is on disk. Write the 3 code halves into the rows, then
-checkpoint EXACT POSITION, commit `docs/audit/` (md-only) and push. Then
-subtopics in the locked order histogram; after group (l) closes: (m) W515 vs W473 message dialect;
-(n) W514 line-numbering; then item-4 (fresh build + full probe list →
-(b), then (c)–(e)) — item-4's full probe list is in `resume-history.md`.
+Next unit = **code review group (l), subtopic (9) histogram** —
+W539 (1 row; C-half named). NO new read: W539's region (transforms.ts
+L514–618) is inside the never-reread L505–703 (l)(7), and its facts
+(BUCKET_BOUNDS L533–540; bucketFor L542–553; overflow bucket index =
+BUCKET_BOUNDS.length; nearest-rank over the histogram L586+; summary
+shape L600–609 {count, wallMs, rps, status, p50, p95, p99, meanMs})
+are in the EXACT POSITION FACTS IN CONTEXT. A review, NOT a fix gate:
+close `?` rows to C/V/X in place, verdict carries `file:line` evidence;
+an X row becomes a NEW G task file (next free G30, same shape as
+G13–G29) + a plan line — no code fixes while reviewing (a fix landing
+mid-audit would make later findings stale). Method: rules above + the
+chunking protocol in `resume-history.md`; fetch W539's claim cell,
+write the code half from the held facts, NEVER re-read a src file
+after its verdict is on disk. Write the code half into the row, then
+checkpoint EXACT POSITION, commit `docs/audit/` (md-only) and push.
+Then the scope-decision subtopics in the locked order (10) W33,
+(11) W21, (12) W81, (13) W265 (assignment + evidence notes in the
+(8) progress entry above); after group (l) closes: (m) W473 vs W515
+message dialect (W515 already carries a code half — (m) closes W473
++ the cross-ref); (n) W514 line-numbering; then item-4 (fresh build +
+full probe list → (b), then (c)–(e)) — item-4's full probe list is in
+`resume-history.md`.
