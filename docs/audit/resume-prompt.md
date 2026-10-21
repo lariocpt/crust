@@ -185,29 +185,46 @@ truth for verdicts): `docs/audit/full-audit.md`. Master plan:
   live in exactly TWO of the three stated files (pipeline.ts holds
   Pipeline, not any of the five) — the 3-file import-guidance list is
   collectively true, loose, not false — C, no X, no G — see the
-  commit). NEXT: scope-decision subtopic (11) W21 the TS-script five
-  examples (1 row W21 — code-review-only row → FULL C CLOSE per the
-  (10) precedent, or the X form if the `stats` check fails → G30; the
-  row's plan: export surface of `readAll`, `glob`, `POST`,
-  `expectStage`, `stats`, `statsStage` + the `Bun.sql` tagged template
-  as per-item transform; evidence mostly on disk: the injection map
-  (W82 (l)(8)) carries readAll L74 / glob L72 / POST L79 / expectStage
-  L83 / statsStage L88 — the NEW work is (a) the `stats` name check:
-  `stats` is NOT a L70–90 injected global — grep the export surface
-  (transforms.ts/sinks.ts) for a `stats` export and check the page's
-  example context (the intro page's five TS examples — does the page
-  show an import above them? website read, W40/288b2d3 family) — if
-  no `stats` export AND no import in the page context: X candidate
-  (website-fix family) → G30; if the page context resolves it: C with
-  the reading; (b) the Bun.sql half = the per-item transform contract
-  — W433 (e) on disk: pipe fn-arm L75–83 yields the fn return as ONE
-  item (any value, tagged template included), map L88–90 delegates to
-  pipe). After (11): (12) W81, (13) W265 in the locked order; after
+  commit). + (11) W21 the TS-script five examples DONE 64/71 (1 row W21 —
+  X → G30, the website-fix family: the unit's locked X branch fired —
+  no `stats` export AND no import shown in the page). New reads this
+  unit: (a) bounded `^export` grep across transforms.ts/sinks.ts/
+  sources.ts/pipeline.ts/index.ts — NO `stats` export anywhere (only
+  `statsStage` transforms L619); `expectStage` ALSO not exported (the
+  export name is `expect`, transforms L211; `expectStage` = map alias
+  config L83); readAll ✓ sources L139, glob ✓ sources L81, POST ✓
+  transforms L180, statsStage ✓ transforms L619; (b) config.ts L75–90
+  map tail re-verified (no `stats`; `statsStage` L88); (c) index.ts
+  L235–290 script mode → `bootstrapCtx` → the map applies, so `stats`
+  is unresolvable even in the one runtime where the other bare names
+  resolve; (d) website `docs/intro.mdx` L36–82 read — NO import line
+  above the five examples; the L39–42 comment names `bun script.ts` /
+  `bun repl` + "auto-loaded when the script imports from 'crust'" —
+  plain bun never enters loadConfig (W227 (d) on disk) and `import
+  "crust"` has no entry ((10) on disk + G13 Q1 P5: `Cannot find package
+  'crust'`); (e) W40's row fetched (the same `.to(stats())` shape, X on
+  disk, a trivial in-place candidate — separate page, not closed) +
+  G13's fix list read (covers npm-packages/db-drivers/AGENTS.md — NOT
+  intro.mdx, so a new G) + G24/G26 files read (the fix shape + the
+  REMOVED-sink tombstone: `.to(…)` never consumes a stage — the real
+  terminal form is `.pipe(statsStage())` consumed by iteration).
+  Verdict on the row: X on two claims — (1) the import mechanism (all
+  five bare-name examples ReferenceError under both named runtimes) and
+  (2) `stats()` = the removed sink in the wrong `.to` shape; the six
+  names' export-surface verdict recorded; the Bun.sql half C on disk
+  (W433 (e)). G30 file in gaps/ + plan line + X-census entry + (e)
+  entry; (b) queue item added to the row (run the five examples as
+  written under plain bun and as a `crust file.crust` script; record
+  which names resolve). NEXT: scope-decision subtopic (12) W81
+  sinks.ts export surface (1 row W81 — needs the bounded sinks.ts
+  export-line read; the (e) READ MAP marks sinks.ts never-reread, so
+  this unit re-marks the region it reads; the shell-side dispatch
+  refusal stays (b)). After (12): (13) W265 in the locked order; after
   group (l) closes: demote this entry, add the (l) line to
   resume-history.md's completed block, Next-move head → (m) W473
   (+ W515 cross-ref), commit md-only, push.
 - Completed code-review groups (a)–(k): one line each in `resume-history.md`
-  (append-only; no progress annotations there). **next free G = G30.** G
+  (append-only; no progress annotations there). **next free G = G31.** G
   task files: `docs/audit/gaps/`; plan lines: `CRUST_GAPS_PLAN.md`;
   X-census: `full-audit.md`. Parity T1–T81 / components M1–M17 / page
   boundaries / DONE page-level: `resume-history.md`.
@@ -294,36 +311,37 @@ compaction that failed and the session was restarted):
 
 ## Next move (first unit of a resuming session)
 
-Next unit = **code review group (l), scope-decision subtopic (11)
-W21 the TS-script five examples** — W21 (1 row; L38–79). A review,
-NOT a fix gate: close `?` rows to C/V/X in place, verdict carries
+Next unit = **code review group (l), scope-decision subtopic (12)
+W81 sinks.ts export surface** — W81 (1 row; L87–89). A review, NOT a
+fix gate: close `?` rows to C/V/X in place, verdict carries
 `file:line` evidence; an X row becomes a NEW G task file (next free
-G30, same shape as G13–G29) + a plan line — no code fixes while
+G31, same shape as G13–G30) + a plan line — no code fixes while
 reviewing (a fix landing mid-audit would make later findings stale).
 Method: rules above + the chunking protocol in `resume-history.md`;
-fetch W21's claim cell. The row is CODE-REVIEW-ONLY (its plan names
-no probe half) → FULL C CLOSE per the (10) W33 / (2) W68/SK34 house
-format — or the X form if the `stats` check fails. Evidence mostly on
-disk: the injection map (W82 (l)(8)) carries readAll L74 / glob L72 /
-POST L79 / expectStage L83 / statsStage L88; the per-item transform
-contract (the `Bun.sql` tagged template as an item value) = W433 (e)
-on disk (pipe fn-arm L75–83 yields the fn return as ONE item — any
-value — map L88–90 delegates). The ONLY new work is the `stats` name
-check: `stats` is NOT a L70–90 injected global — (a) grep the export
-surface of transforms.ts + sinks.ts for a `stats` export (bounded
-byte-cut; the never-reread regions stay untouched) and (b) check the
-intro page's example context in the website repo (../crust-website —
-do the five TS examples carry an import line? W40/288b2d3 family —
-the 2026-10-06 drift-fix touched intro.mdx for exactly this kind of
-issue). Adjudicate in the row: no `stats` export + no import shown →
-X (website-fix family) → G30 + plan line; import shown or export
-found → C with the reading recorded. NEVER re-read a src file after
+fetch W81's claim cell. The row's claim: "Sinks. `write(path)` and
+`dest(dir)` are imported directly, not exposed as shell stages" +
+types; importability. Plan: (a) code half — the BOUNDED sinks.ts
+export-line read (L1–20 — the two `^export` lines, `write` L5 /
+`dest` L14, is the whole surface; the (e) READ MAP marks sinks.ts
+never-reread, so THIS UNIT RE-MARKS THE REGION it reads:
+sinks.ts L1–20 (l)(12)); verify the exported names are exactly
+`write`/`dest` with those arities (unit (11)'s `^export` grep
+already pinned exactly two export lines in sinks.ts). (b) probe half
+— `write`/`dest` as shell stage names must not dispatch (refusal
+probe; stays (b) per the row's own plan — the row stays `?`
+probe-owned with the code half on disk, the (2) W224/W225
+precedent). Adjudicate in the row: export surface exactly
+write/dest with the page's arities → C code half, probe queued;
+anything else (extra export, different arity) → X (the page's
+"exactly" claim) → G31 + plan line. NEVER re-read a src file after
 its verdict is on disk. Write the verdict into the row, then
 checkpoint EXACT POSITION, commit `docs/audit/` (md-only) and push.
-Then the remaining scope-decision subtopics in the locked order
-(12) W81, (13) W265 (assignment + evidence notes in the (8) progress
-entry above); after group (l) closes: (m) W473 vs W515 message
-dialect (W515 already carries a code half — (m) closes W473 + the
-cross-ref); (n) W514 line-numbering; then item-4 (fresh build + full
-probe list → (b), then (c)–(e)) — item-4's full probe list is in
-`resume-history.md`.
+Then the remaining scope-decision subtopic in the locked order
+(13) W265 the eight-traps catalog (mostly cross-refs to on-disk
+rows: (e) map/filter/parallel/expect, (i) builtins, (l)(6) grep +
+lines, lexer (i) JSON-head, (l)(7) stats — assignment note in the
+(8) progress entry above); after group (l) closes: (m) W473 vs W515
+message dialect (W515 already carries a code half — (m) closes W473
++ the cross-ref); (n) W514 line-numbering; then item-4 (fresh build
++ full probe list → (b), then (c)–(e)) — item-4's full probe list
+is in `resume-history.md`.
