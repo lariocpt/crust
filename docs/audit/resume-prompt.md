@@ -93,10 +93,10 @@ truth for verdicts): `docs/audit/full-audit.md`. Master plan:
   silently changed).
 - Next phase on disk: **ITEM-4 — the probe phase** (Phase 1 step 4 of
   the audit prompt; the full probe list is item 4 of
-  `resume-history.md`). First unit: the FRESH BUILD — `cd
-  /home/lario/Projects/personal/crust && bun run build` →
-  `bin/crust-bin`, then VERIFY it is newer than main's last commit
-  before trusting it (timestamp + a `--version`/behavior spot-check).
+  `resume-history.md`). FRESH BUILD DONE + VERIFIED 2026-10-22 10:31
+  (`bun run build` → `bin/crust-bin` 93411296 bytes, mtime Oct 22
+  10:31 > HEAD aaf04df 10:29:44; `CRUST_CONFIG=/dev/null
+  bin/crust-bin --version` → `0.2.0-dev` exit 0). Next unit:
   Then run the probe list IN ORDER, logging every probe into
   `full-audit.md` section (b) with the EXACT command + output + exit
   code (the house rules: prefix every probe with
@@ -230,11 +230,9 @@ audit prompt). The CODE REVIEW PHASE IS COMPLETE: (a)–(l) + (m) +
 (n) = 68/71 rows (W240 + ~2 unidentified gap rows close in the probe
 phase or stay recorded — denominator LOCKED, gap recorded at the (l)
 close). The EXACT POSITION block above carries the full item-4
-bullet (the whole probe list in order). The first unit is the FRESH
-BUILD: `cd /home/lario/Projects/personal/crust && bun run build` →
-`bin/crust-bin`, then VERIFY it is newer than main's last commit
-before trusting it (timestamp + a `--version`/behavior spot-check).
-Then run the probe list IN ORDER (gen-fixtures minimal-spec runs →
+bullet (the whole probe list in order). The fresh build is DONE +
+VERIFIED (2026-10-22 10:31 — `bin/crust-bin` from HEAD aaf04df,
+`0.2.0-dev`, exit 0). First unit: run the probe list IN ORDER (gen-fixtures minimal-spec runs →
 log-mining matrix → api-smoke-tests W453–W481 → mock-server
 W484–W525 → ci-load-gates W528–W548 → stress-testing W549–W552+ →
 the pre-existing probes → the one-offs → the load-testing /
