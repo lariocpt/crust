@@ -7,7 +7,7 @@ parity/component/boundary inventories. CURRENT POSITION lives in
 are never annotated with progress — completion state lives in the EXACT
 POSITION entry (rolling) and the one-line-per-group block below (append-only).
 
-## Completed code-review groups (a)–(k), one line each
+## Completed code-review groups (a)–(l), one line each
 
 Full verdicts (claim-by-claim, with `file:line` evidence) live in the rows of
 `full-audit.md` and in each group's audit commit message; they are NOT
@@ -31,7 +31,56 @@ W525 `&` half C; W525 row truncation (group (e) commit bae078f) repaired.
 (j) genFixtures — W390 C all code halves; U82 C; W420 C full close;
 W421/W422/W423 C code halves. (k) mock-server — 12 rows (W484/W485/W513/
 W515/W516/W517/W518/W520/W521/W522/W523/W524) code halves: DDL byte-identical,
-422 build, message-dialect settled, 1000-cap, 502-not-recorded. G task files:
+422 build, message-dialect settled, 1000-cap, 502-not-recorded. (l) logs
+session / pty keymap / procs stream kinds / wait item shape / tail source /
+grep native-subset / stats --every / read API / histogram + scope-decision
+(W21/W33/W81/W265) — 66/71 rows closed 2026-10-19→2026-10-22: (1) logs
+session 19 rows (W331–W343, W345–W349, W578); (2) pty 4 rows (W68 FULL C;
+W224/W225 code halves, rows stay ? pty-probe-owned; SK34 C); (3) procs 20
+rows (W351, W353–W364, W570–W575, W577 — sources.ts L460–1000 full read:
+readyGen/liveGen/exitGen, restart backoff 250→2s cap, killGroup/terminate);
+(4) wait 3 rows (W363/W576/W577 — wait.ts 76 L full: item shape
+{target, ready, ms, attempts}, --timeout 30s / --interval 500ms /
+--probe-timeout min(interval*4, 2s)); (5) tail 2 rows (W435/W258 — sources
+L175–370: holder-owned signal, 64KB-backward byte-safe window scan,
+inode-change rotation reset); (6) grep 4 rows (SK69/W442/U33/U34 —
+grepStage L12–40 per-line JS regex, -F substring, classifyGrep L458–503
+rejection set; W442's `{3}` brace-trigger correction in-row); (7) stats
+--every 6 rows (U39/W543/W559/W560/SK42/SK44 — two-accumulator design:
+delta windows {window: N} vs cumulative final {final: true}, flush ONLY on
+the item path, --out .json write-then-rename after every window); (8) read
+API 3 rows (W82/W379/W430 — the 20-name injection map L70–90 provenance,
+GET/request minted-per-request timeout, httpRequest body "upstream item IS
+the body"); (9) histogram 1 row (W539 — BUCKET_BOUNDS constant grid +
+nearest-rank percentiles over bucket counts, constant memory); (10) W33
+FULL C (the five names live in exactly TWO of the three stated files —
+pipeline.ts holds Pipeline, a different listed global; the 3-file list is
+collectively true, loose, not false; the npm launcher has NO importable
+surface — the `crust/…` subpath stays parked with G13); (11) W21 **X → G30**
+(intro.mdx TS slot — the only new G of the group: `stats()` = the REMOVED
+sink in the wrong `.to(…)` shape per the G26 tombstone + "globals auto-
+loaded when the script imports from 'crust'" has no entry to resolve to —
+G13 Q1; `expectStage` is a map alias only, the export is `expect`; W40's
+same shape on npm-packages is a separate page, trivial in-place candidate);
+(12) W81 C code halves (sinks.ts export surface is EXACTLY
+`write`/`dest` with the page's arities; NO write/dest in the 22-kind
+StageKind union — the refusal probe stays (b)); (13) W265 C code halves on
+ALL EIGHT traps (assert is a FULL stage — empty upstream fails, the code
+comment names "the sql-returned-zero-rows trap" verbatim; filterStage
+`if (keep) yield` drops falsy, silent on empty; looksJsonish parse-first
+with spaced=shell / tight-with-$/quote/colon/comma=literal-attempt and the
+false-pass ordering rationale; builtinInShellRefusal via the
+!hasUnquotedShellMeta dispatch gate; parallel completion order per W551 (d);
+all eight probes stay (b)). 71-row scope bookkeeping (recorded at the
+close): 66 closed by (l); remaining in the locked scope = W473 ((m)) +
+W514 ((n)) → 68; of the 7-row 71-gap, 5 identified (W21/W33/W81/W265 —
+closed by (10)–(13); W240 — probe-owned, stays (b) with W237's sub-claim
+4) + ~2 unidentified (pre-existing bookkeeping ambiguity — 71's derivation
+is not reconstructable from disk artifacts; the denominator stays LOCKED,
+the gap is recorded, never silently changed). NEXT after (l): (m) W473 vs
+W515 message dialect (W515 carries its code half from (k)) → (n) W514
+line-numbering → item-4 (fresh build + full probe list → (b), then
+(c)–(e)). G task files:
 `docs/audit/gaps/`; plan lines: `CRUST_GAPS_PLAN.md`; X-census:
 `full-audit.md`.
 
