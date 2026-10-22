@@ -25,6 +25,11 @@ context-tight model. The context-discipline rules below are NON-NEGOTIABLE and
 - Scratch files: create ONE dir `/tmp/crustfix/`; all probe/scratch output goes
   there; `rm -rf /tmp/crustfix` at the END of each task. Never create repo
   files that are not part of the fix.
+- Binary freshness: after ANY change to `src/` in the crust repo, run
+  `bun run build` BEFORE the website gates or any runtime check — the website
+  lint-examples and every probe run against `bin/crust-bin`, and a stale binary
+  silently tests the old behavior. Sanity check: the binary's mtime must be
+  newer than the newest commit that touched `src/`.
 - One task = one G. Per-task context budget: the NEXT line of the progress file
   + the gap file (≤105 lines) + the src regions the gap file names. Do not
   explore beyond the gap file's scope. If stuck, record `- GNN | BLOCKED | <why>`
