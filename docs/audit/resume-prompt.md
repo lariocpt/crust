@@ -73,22 +73,70 @@ truth for verdicts): `docs/audit/full-audit.md`. Master plan:
   validateSchema from ../mockServer/validateRequest; (6) gen-fixtures
   emits the key conditionally — generate.ts L952 + L986 ("nothing is
   invented" code-true; W397's probes stay (b) on its row). NO X, NO G.
-- Next unit on disk: **code review (n) W514 line-numbering** (1 row
-  W514 — mock-server page L370–398, the SQL-assert `.pipes` suite).
-  Fetch W514's claim cell. The subtopic is the PASS-line `:N`
-  numbering: the page's transcript shows `PASS mock-state.pipes:2 …`
-  and the row's plan asks whether the `:N` numbers count
-  comments/blanks (W465's (c) full read of testPipes/runner.ts — 180 L
-  — is the likely on-disk home for the numbering mechanism; if the
-  mechanism is NOT on disk, a bounded testPipes read re-marks the
-  region; NEVER re-read a src file after its verdict is on disk). The
-  row's other halves (the sqlite DATABASE_URL, `$.name` surviving env
-  expansion, `$TID` capture expansion, the 5-pass summary count, the
-  postgres-swap note) are probe-owned per the row's plan — they stay
-  (b). Adjudicate in the row; write the verdict, checkpoint EXACT
-  POSITION, commit `docs/audit/` (md-only) and push. After (n):
-  item-4 (fresh build + full probe list → (b), then (c)–(e)) —
-  item-4's full probe list is in `resume-history.md`.
+- **+ (n) W514 line-numbering DONE 68/71** (1 row W514 — C on the
+  line-numbering half; row stays `?` probe-owned, the five probe
+  sub-claims stay (b)). New read this unit (RE-MARKS the (c)-read
+  file — (c) read testPipes/runner.ts in full for W465's hermeticity
+  verdict; this unit re-marks the numbering region): testPipes/runner.ts
+  L130–160 — L132 `text.split("\n")` (every line), L137–138 `if
+  (!line || line.startsWith("#")) continue;` (blanks + `#` comments
+  skipped — not run, no result), L146/L154 `lineNo: i + 1` over the
+  RAW split — the `:N` in `PASS <file>:N` is the 1-based FILE POSITION
+  (counts comments/blanks when present — a position, not a run
+  ordinal); the pass-count summary derives from `results`, which
+  records ONLY run lines. The page's 5-line block (no comments shown)
+  + `:2` + `5 pass` is consistent on both counts; the comment-shift
+  diff stays (b). NO X, NO G. **CODE REVIEW PHASE COMPLETE** —
+  (a)–(l) + (m) + (n) = 68/71 rows; W240 (probe-owned, W237 sub-claim
+  4) + ~2 unidentified gap rows close in the probe phase or stay
+  recorded (denominator LOCKED, gap recorded at the (l) close — never
+  silently changed).
+- Next phase on disk: **ITEM-4 — the probe phase** (Phase 1 step 4 of
+  the audit prompt; the full probe list is item 4 of
+  `resume-history.md`). First unit: the FRESH BUILD — `cd
+  /home/lario/Projects/personal/crust && bun run build` →
+  `bin/crust-bin`, then VERIFY it is newer than main's last commit
+  before trusting it (timestamp + a `--version`/behavior spot-check).
+  Then run the probe list IN ORDER, logging every probe into
+  `full-audit.md` section (b) with the EXACT command + output + exit
+  code (the house rules: prefix every probe with
+  `CRUST_CONFIG=/dev/null`; capture exit codes without piping through
+  `head` — `> /tmp/out 2> /tmp/err; echo exit=$?`; in zsh quote
+  `=`-leading words; `crust --check '<line>'` separates "grammar says
+  no" from "runtime misbehaves"): gen-fixtures minimal-spec runs →
+  log-mining matrix → api-smoke-tests matrix (W453–W481, incl. the
+  W473 five probe sub-claims + the W477/G22 sql probes) → mock-server
+  matrix (W484–W525: boot forms ×7, flag exclusions, seed
+  empty-only/restart, envelope detect/unwrap, table DDL diff,
+  sql-assert suite, 422 body diff, never-invent battery, --strict,
+  2.0 body param, GET-body discard, proxy forwarding/502/records,
+  violations endpoint + cap + DELETE, CI gate 3 steps, in-process
+  builtin + `&` refusal, wait `:4000` vs `:4000/pets` vs `port:4000`,
+  burn-in 10k stats) → ci-load-gates matrix (W528–W548 notes) →
+  stress-testing matrix (W549–W552+ notes: burst-arrival histogram,
+  ramp count = phase sum, drop line E+D==T, maxLagMs, --timeout
+  pinned shapes, --every window deltas/final) → the pre-existing
+  probes (R24, U3, U16, U30, U33–U34, U47, U51–U57, G07, G08,
+  C1/C2/C6/C7, C14, A1, SK2, SK14, SK17–SK24, SK25–SK32, SK38–SK44,
+  SK53, SK54–SK66, SK68–SK77, SK78–SK86) → the one-offs (`bun -e
+  'console.log(typeof Bun.SQL, typeof Bun.sql)'`; `range(0, 3) | cat`
+  count; `echo hi | wrap [ ]` verbatim; `sql "select 1"` without
+  DATABASE_URL; `CRUST_DEBUG=1 CRUST_CONFIG=/dev/null bin/crust -c
+  '…'` stderr; `bun -e 'console.log(typeof range)'`;
+  `ls ~/.bun/install/global/node_modules`; W9, W16 install.mjs, W84,
+  W37, W52, W53, W55, W58, W60, W61, W67) → the load-testing /
+  verify-web-links matrices in the W-row notes → AND the PER-ROW (b)
+  QUEUE accumulated across the review groups (each `?` probe-owned row
+  carries its queue item in its plan cell — e.g. W21's five-example
+  runs, W81's write/dest refusal, W265's eight traps, W224/W225 pty
+  keymap, W240, group (b)'s W137/W143/W147/W152/W158/W163/W164,
+  W473's five sub-claims, W514's five sub-claims, W462/W465's probes,
+  W68's editor-keymap pty probe, W217/W218's verbatim captures, …).
+  As probes land: record them in (b), close the owning rows' probe
+  halves (the row flips to C/V only when every half is on disk), and
+  feed (c) findings / (d) fixed-in-place / (e) G31+ as the loop
+  requires. Gates after any fix: the (Gates) section below, both
+  repos.
 - Completed code-review groups (a)–(l): one line each in `resume-history.md`
   (append-only; no progress annotations there). **next free G = G31.** G
   task files: `docs/audit/gaps/`; plan lines: `CRUST_GAPS_PLAN.md`;
@@ -177,38 +225,33 @@ compaction that failed and the session was restarted):
 
 ## Next move (first unit of a resuming session)
 
-Next unit = **code review (n) W514 line-numbering** — W514 (1 row;
-mock-server page L370–398, "### SQL-assert the mock from a `.pipes`
-suite"). Group (l) is CLOSED (66/71) and (m) W473 is DONE (67/71 —
-the (m) entry in this file's EXACT POSITION block carries the
-verdict's facts). A review, NOT a fix gate: close `?` rows to C/V/X
-in place, verdict carries `file:line` evidence; an X row becomes a
-NEW G task file (next free G31, same shape as G13–G30) + a plan line
-— no code fixes while reviewing (a fix landing mid-audit would make
-later findings stale). Method: rules above + the chunking protocol
-in `resume-history.md`; fetch W514's claim cell. The subtopic is the
-PASS-line `:N` numbering: the page's transcript shows `PASS
-mock-state.pipes:2 …` / `1 file(s): 5 pass, 0 fail` and the row's
-plan asks whether the `:N` numbers count comments/blanks (the plan
-cell: "the line numbers count comments/blanks (the W462 file:line
-numbering includes non-run lines — the audit flags the discrepancy
-if the page's :2 implies comment-counted numbering — the probe
-settles it)" and "the comment line is excluded from the pass count
-but included in the numbering — the probe's summary line is
-diffed"). Code half: W465's (c) full read of testPipes/runner.ts
-(180 L) is the likely on-disk home for the numbering mechanism —
-fetch W465's row first; if the mechanism is NOT on disk, a bounded
-testPipes read re-marks the region (NEVER re-read a src file after
-its verdict is on disk — the (c) read marked the file, so any re-read
-is a re-mark). The row's other halves (the sqlite `DATABASE_URL`,
-`$.name` surviving env expansion, `$TID` capture expansion, the
-5-pass summary count, the postgres-swap note) are probe-owned per
-the row's plan — they stay (b). Adjudicate in the row (C code half +
-probe-owned `?`, the W224/W225 (2) precedent; or X → G31 + plan line
-if the numbering contradicts the code). Write the verdict into the
-row, then checkpoint EXACT POSITION, commit `docs/audit/` (md-only)
-and push. After (n): the CODE REVIEW PHASE IS COMPLETE ((a)–(l) +
-(m) + (n) = 68/71 rows; W240 + ~2 unidentified gap rows close in the
-probe phase or stay recorded) — then item-4 (fresh build + full
-probe list → (b), then (c)–(e)) — item-4's full probe list is in
-`resume-history.md`.
+Next unit = **ITEM-4 — the probe phase** (Phase 1 step 4 of the
+audit prompt). The CODE REVIEW PHASE IS COMPLETE: (a)–(l) + (m) +
+(n) = 68/71 rows (W240 + ~2 unidentified gap rows close in the probe
+phase or stay recorded — denominator LOCKED, gap recorded at the (l)
+close). The EXACT POSITION block above carries the full item-4
+bullet (the whole probe list in order). The first unit is the FRESH
+BUILD: `cd /home/lario/Projects/personal/crust && bun run build` →
+`bin/crust-bin`, then VERIFY it is newer than main's last commit
+before trusting it (timestamp + a `--version`/behavior spot-check).
+Then run the probe list IN ORDER (gen-fixtures minimal-spec runs →
+log-mining matrix → api-smoke-tests W453–W481 → mock-server
+W484–W525 → ci-load-gates W528–W548 → stress-testing W549–W552+ →
+the pre-existing probes → the one-offs → the load-testing /
+verify-web-links matrices → AND the per-row (b) queue on every
+`?` probe-owned row — each row's plan cell carries its queue item),
+logging every probe into `full-audit.md` section (b) with the EXACT
+command + output + exit code. House probe rules: prefix every probe
+with `CRUST_CONFIG=/dev/null`; capture exit codes without piping
+through `head` (`> /tmp/out 2> /tmp/err; echo exit=$?`); in zsh
+quote `=`-leading words; `crust --check '<line>'` separates
+"grammar says no" from "runtime misbehaves". As probes land: record
+in (b), close the owning rows' probe halves (a row flips to C/V only
+when EVERY half is on disk), feed (c) findings / (d) fixed-in-place
+/ (e) G31+ as the loop requires; commit md-only per probe group and
+push. Gates after any fix: the (Gates) section, both repos. After
+item-4: Phase 2 (act on findings — immediately-broken FIRST) → Phase
+3 (the G06→G12 gap loop, with G13+ woven in — the user gate on
+Phase 3 is the explicit "Phase 1 fully recorded" condition in the
+(Blocked) section; it is met when item-4's recording is complete) →
+Phase 4 wrap-up.
