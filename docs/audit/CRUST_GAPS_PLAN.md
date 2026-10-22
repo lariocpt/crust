@@ -75,7 +75,7 @@ Cheapest and least risky first; the two doc-only ones open the branch.
 - [x] **G03** — redirect refusal coverage hole → [file](gaps/G03-redirect-refusal-coverage.md) · crust `9852e4a`, site `02634ee`, KB `68e5035`
 - [x] **G04** — `FOO=x` persists → [file](gaps/G04-plain-env-assignment.md) · crust `b992c6b`, site `d97fc84`, KB `70d88ca`
 - [x] **G05** — `$0/$1/$@/$*` for scripts → [file](gaps/G05-positional-script-args.md) · crust `634011d`, site `efbca00`, KB `de72a53b`
-- [ ] **G06** — `source` runs bash scripts → [file](gaps/G06-source-bash.md)
+- [x] **G06** — `source` runs bash scripts → [file](gaps/G06-source-bash.md) · crust `940658a`, site `f40f6b6`, KB `22d1634d`
 - [ ] **G07** — `$(…)` / backticks in cross-stage position → [file](gaps/G07-command-substitution.md)
 - [ ] **G08** — multi-line input + heredocs at the REPL → [file](gaps/G08-repl-multiline.md)
 - [ ] **G09** — Ctrl-R fuzzy history → [file](gaps/G09-ctrl-r-history.md)
