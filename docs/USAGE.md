@@ -819,7 +819,7 @@ export FOO=bar    # set env var
 alias g=git       # define alias (also: alias g='git status')
 alias             # list aliases
 unalias g
-source <file> [args…]   # .ts/.js imported; anything else runs line-by-line in this session, [args…] as its $1…
+source <file> [args…]   # .ts/.js imported; bash scripts run in a child shell (exported env comes back); anything else line-by-line — [args…] are its $1… only in that form
 history           # list this session's lines
 exit [code]
 help
@@ -1094,7 +1094,7 @@ The TS-test ecosystem owns the name `expect`. Crust exports the API name as `exp
 | `export KEY=value` | Sets `process.env[KEY]`. Multiple `KEY=value` pairs accepted; bare `export` and `export -p` list. A bare `FOO=value` line does the same thing without the word — see [Environment assignments](#environment-assignments). |
 | `alias name='cmd'` | Adds an alias. Bare `alias` lists. Quotes optional. Expands at the head of **every stage**, so `range(0,99) \| parallel 50 \| hc` resolves `hc`. Single pass — an expansion is not rescanned, so `alias ls='ls -la'` terminates. |
 | `unalias name` | Removes an alias. |
-| `source file` | `.ts`/`.js`/`.mjs` dynamically imported; anything else (`.crust`) runs line-by-line through the crust parser **in this session** — aliases, `export`s, and `capture`s persist. To run a bash script, run it with `sh` instead. |
+| `source file` | `.ts`/`.js`/`.mjs` dynamically imported. A `.sh`/`.bash`/`.zsh` file (or one whose first line is a `#!` shebang naming a shell) runs **once in a child shell**: its exported `KEY=value` delta comes back into the session, its exit code is the line's, its side effects are real — but unsets don't propagate and its cwd never comes back. Anything else runs line-by-line through the crust parser **in this session** — aliases, `export`s, and `capture`s persist. An unmarked file that looks like multi-line shell — or simply doesn't parse as crust — is refused outright, never half-run. The `[args…]` bind as the file's `$1…` (with `$0` its own path) in the line-by-line form only, and the caller's positionals are restored when it ends; the shell form's child shell's `$1…` are its own, so it never receives them. |
 | `history` | Numbered list of this session's lines. Persistent at `~/.local/share/crust/history`. |
 | `dotenv [<path>] [-a]` | Loads `.env` files into the session. Tracks history, supports `dotenv status` and `dotenv clear`. See [dotenv](#dotenv). |
 | `test-fixture <glob> [-o p] [-j N] [-n N] [-t ms] [-b]` | Runs `.crust.ts` HTTP fixtures. See [test-fixture](#test-fixture). |
@@ -2290,9 +2290,13 @@ Honest about what doesn't work yet:
   stdin — its shell stages inherit the pipe and will drink it, so never pipe
   *data* into a script that also reads stdin. The rule is one stdin per run:
   the program, the `stdin` source, or the shell stages, never two of them.
-- **`source` doesn't run bash scripts.** Non-`.ts`/`.js` files are parsed as
-  crust lines; multi-line bash constructs (`if`/`fi`, loops) won't survive
-  line-by-line execution — run those with `sh file.sh`.
+- **From a sourced shell script, only the exported env comes back.** `source`
+  runs a `.sh`/`.bash`/`.zsh` file (or one with a shell `#!` shebang) once in a
+  child shell: the exported `KEY=value` diff is applied to the session, the
+  script's exit code is the line's, and its side effects are real — but unsets
+  don't propagate, and the child's cwd never comes back. An unmarked file
+  that looks like multi-line shell, or that doesn't parse as crust, is
+  refused, never half-run.
 - **No `$(...)` substitution across stages.** Within a single shell stage it works (delegated to `sh`).
 - **No redirects on crust stages.** `<` / `>` belong to the shell stage, whose
   text goes to `sh` as-is; anywhere else the line is refused — including when the

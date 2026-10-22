@@ -1,3 +1,4 @@
+import { tmpdir } from "node:os";
 import {
   type AssignError,
   assignEnv,
@@ -8,6 +9,8 @@ import {
   parseFlags,
   splitArgs,
 } from "./args";
+import { classify, shellSyntaxPreflight, tokenize } from "./lexer";
+import { parse } from "./parser";
 import { withPositionals } from "./positionals";
 import type { Context } from "./types";
 
@@ -160,6 +163,164 @@ const unaliasBuiltin: Builtin = (rawArgs, ctx) => {
   return 0;
 };
 
+// `source`'s shape detection for extensionless and unmarked files. A line
+// STARTING with an opener (`if`/`for`/`while`/`case`) that doesn't close on
+// the SAME line, or a line starting with a bare closer (`do`/`done`/`fi`/
+// `esac` — its opener is an earlier line), is a multi-line shell construct:
+// fed to line-by-line crust it dies in sh (the measured G06 failure). A
+// construct that opens AND closes on one line is safe line-by-line, so it
+// must NOT flag, or every one-liner in a crust file becomes "ambiguous".
+const BASH_OPENERS: Record<string, RegExp> = {
+  if: /\bfi\b/,
+  for: /\bdone\b/,
+  while: /\bdone\b/,
+  case: /\besac\b/,
+};
+
+function sniffMultiLineShell(text: string): boolean {
+  for (const raw of text.split("\n")) {
+    const t = raw.trim();
+    if (!t || t.startsWith("#")) continue;
+    const first = t.split(/\s+/)[0]!;
+    if (first in BASH_OPENERS) {
+      if (!BASH_OPENERS[first]!.test(t)) return true;
+    } else if (first === "do" || first === "done" || first === "fi" || first === "esac") {
+      return true;
+    }
+  }
+  return false;
+}
+
+// The `#!` first line, when it names a shell: `#!/bin/bash`,
+// `#!/usr/bin/env bash`, `#!/bin/sh`… Non-shell shebangs (node, python)
+// return null — a crust file may well carry none of the markers at all.
+function shebangShell(text: string): string | null {
+  const first = text.split("\n", 1)[0] ?? "";
+  if (!first.startsWith("#!")) return null;
+  const parts = first.slice(2).trimStart().split(/\s+/);
+  const tok0 = parts[0] ?? "";
+  const base0 = tok0.split("/").pop() ?? tok0;
+  if (base0 === "env") {
+    const base = (parts[1] ?? "").split("/").pop() ?? "";
+    return /^(bash|zsh|dash|ksh|sh)$/.test(base) ? base : null;
+  }
+  return /^(bash|zsh|dash|ksh|sh)$/.test(base0) ? base0 : null;
+}
+
+// bash/zsh resolved by well-known paths — Bun.spawn THROWS on a missing
+// executable, and source's contract is `source: …`, not a stack trace.
+// `sh` itself is never resolved: it is the interpreter crust already runs
+// every shell stage with.
+async function resolveShellBin(wanted: string | null): Promise<string> {
+  if (!wanted || wanted === "sh") return "sh";
+  for (const dir of ["/usr/bin", "/bin", "/usr/local/bin"]) {
+    const p = `${dir}/${wanted}`;
+    if (await Bun.file(p).exists()) return p;
+  }
+  return "sh";
+}
+
+// Wrap for a sh -c command string: single quotes, embedded ones escaped.
+// The FILE itself is read from disk by the dot-source, so its contents keep
+// their quoting — this only quotes the PATH, which argv parsing already
+// unquoted, so it needs no further expansion.
+function shQuote(s: string): string {
+  return `'${s.replaceAll("'", `'\\''`)}'`;
+}
+
+// The "whole file parses" gate for ambiguous shapes: every non-blank,
+// non-comment line must survive the lexer (parse() — unbalanced stages and
+// quotes throw) and, for shell lines, `sh -n` (noexec: nothing runs). This
+// is what separates "runs fine line-by-line" from "would be mangled", so
+// the ambiguous case can pick a path without ever running half a file.
+async function crustFileParses(text: string): Promise<boolean> {
+  for (const raw of text.split("\n")) {
+    const t = raw.trim();
+    if (!t) continue;
+    if (t.startsWith("#")) continue;
+    const head = t.split(/\s+/)[0]!;
+    // Builtin lines execute in-process, one line each — nothing spans lines
+    // through them, so they can't be mangled line-by-line.
+    if (isBuiltin(head)) continue;
+    try {
+      parse(t);
+    } catch {
+      return false;
+    }
+    if (classify(t).kind === "shell") {
+      const problem = await shellSyntaxPreflight(tokenize(t));
+      if (problem) return false;
+    }
+  }
+  return true;
+}
+
+// Runs a marked shell script ONCE in a child shell and brings the exported
+// environment back — the only thing a real `source` means across a process
+// boundary. Honesty rules: the script executes for real (side effects are
+// real), stdout/stderr are inherited, and the script's exit code is the
+// line's code, so a failing source stops the chain exactly like runLines'
+// fail-fast does.
+//
+// The child DOT-sources the path (`sh -c '. <path>'` — argv form, the file
+// is read from disk, quoting survives) and then dumps its env NUL-separated
+// via `env -0`, so values containing spaces or NEWLINES round-trip intact.
+// The diff is against process.env: added/changed keys are applied, keys the
+// script unset stay (crust never unsets on a source). A dump record without
+// an `=` cannot be split — that is refused loudly, never truncated.
+async function sourceShellScript(path: string, text: string): Promise<number> {
+  const shebang = shebangShell(text);
+  const wanted = shebang ?? (/\.(bash|zsh)$/.test(path) ? path.match(/\.([a-z]+)$/)![1] : null);
+  const bin = await resolveShellBin(wanted);
+  if (wanted && bin === "sh" && wanted !== "sh") {
+    process.stderr.write(
+      `source: ${path} asks for ${wanted}, but no ${wanted} was found — running with sh\n`,
+    );
+  }
+  const dump = `${tmpdir()}/crust-source-${process.pid}-${Date.now()}`;
+  try {
+    // `;` separates the steps, never `&&`: a dot-source that is the left
+    // operand of `&&` makes the shell IGNORE `set -e` inside the script, and
+    // a set -e failure would sail through with exit 0. With `;`, a set -e or
+    // `exit N` inside the script terminates the child with the script's own
+    // code before the dump runs; otherwise the script's code lands in $ec
+    // and is restored by the final `exit`, so the code we read is always the
+    // script's, and a dump present at code 0 is the script's.
+    const proc = Bun.spawn(
+      [bin, "-c", `. ${shQuote(path)}; ec=$?; env -0 > ${shQuote(dump)}; exit $ec`],
+      // Bun does not forward runtime process.env mutations to children unless
+      // env is passed, so snapshot it — the script must see the session's env
+      // (e.g. SB_OUT in the G06 tests), not a stale launch-time copy.
+      { stdout: "inherit", stderr: "inherit", stdin: "ignore", env: { ...process.env } },
+    );
+    const code = (await proc.exited) ?? 1;
+    if (code !== 0) return code;
+    const raw = await Bun.file(dump).text();
+    for (const record of raw.split("\0")) {
+      if (record === "") continue;
+      const eq = record.indexOf("=");
+      if (eq <= 0) {
+        // Undecidable: the record has no `=`, so its value cannot be told
+        // from its key. Refuse the whole capture rather than guess.
+        process.stderr.write(
+          `source: ${path}: refusing env capture — the script left an environment record without an '=' (value: ${record.slice(0, 40)}); nothing was applied\n`,
+        );
+        return 1;
+      }
+      const key = record.slice(0, eq);
+      const value = record.slice(eq + 1);
+      if (process.env[key] !== value) process.env[key] = value;
+    }
+    return code;
+  } finally {
+    try {
+      await Bun.file(dump).delete();
+    } catch {
+      // The child never created it (it died before the dump) — fine.
+    }
+  }
+}
+
 const sourceBuiltin: Builtin = async (rawArgs, ctx) => {
   // The spec is the rest of the line; the FIRST word is the file, the rest
   // are that file's positional arguments — `source deploy.crust prod` gives
@@ -177,15 +338,28 @@ const sourceBuiltin: Builtin = async (rawArgs, ctx) => {
       await import(resolved);
       return 0;
     }
-    // Anything else runs line-by-line through the crust parser with the
-    // SHARED ctx — aliases, exports, and captures persist in this session,
-    // which is what `source` means. (The old behavior handed the file to a
-    // `sh` subprocess, where nothing could persist anyway; to run a bash
-    // script, run it with sh.)
+    const text = await Bun.file(path).text();
     const { runLines } = await import("./runLine");
-    return await withPositionals(path, words.slice(1), async () =>
-      runLines(await Bun.file(path).text(), ctx),
-    );
+    const marked = /\.(sh|bash|zsh)$/.test(path) || shebangShell(text) !== null;
+    if (marked) {
+      return await withPositionals(path, words.slice(1), () => sourceShellScript(path, text));
+    }
+    if (sniffMultiLineShell(text) || !(await crustFileParses(text))) {
+      // The shape says "multi-line shell" (or the file doesn't parse as
+      // crust at all), but it carries no shell marker — running it either
+      // way would be a guess, and a wrong guess runs HALF a file. Refuse
+      // with both options named instead.
+      process.stderr.write(
+        `source: '${path}' is ambiguous — no .sh/.bash/.zsh extension, no shell shebang, and it does not parse as a crust file, ` +
+          `so crust will not run it partially. Two options: name it as a shell script (e.g. '${path}.sh', or give it a #!/usr/bin/env bash shebang) ` +
+          `to run it once as a bash script, or make every line parse as crust (keep each if/fi on one line) to run it line-by-line.\n`,
+      );
+      return 1;
+    }
+    // A crust file: line-by-line through the crust parser with the SHARED
+    // ctx — aliases, exports, and captures persist in this session, which
+    // is what `source` means.
+    return await withPositionals(path, words.slice(1), async () => runLines(text, ctx));
   } catch (err) {
     process.stderr.write(`source: ${(err as Error).message}\n`);
     return 1;

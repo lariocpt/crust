@@ -16,10 +16,25 @@ left to sh. `procs`, `range`, `load`, `read`, `tail` and friends are **sources**
 not builtins.
 
 `source` is the only session builtin with its own argument grammar:
-`source <file> [args…]` — a `.ts`/`.js` file is imported, anything else runs
-line-by-line in this session — and the args become the *sourced file's*
-positional arguments (`$0` is its own path); the caller's positionals are
-restored when the file ends.
+`source <file> [args…]` — a `.ts`/`.js` file is imported; a `.sh`/`.bash`/`.zsh`
+file (or one whose first line is a `#!` shebang naming a shell) runs **once in
+a child shell** — its exported `KEY=value` delta comes back into the session,
+its exit code is the line's, its side effects are real, but unsets don't
+propagate and its cwd never comes back; anything else runs line-by-line in this
+session (aliases, `export`s and `capture`s persist). An unmarked file that
+looks like multi-line shell, or that doesn't parse as crust, is refused,
+never half-run. In the line-by-line form the args are the *sourced file's*
+positional arguments (`$1`, `$2`, … — `$0` is its own path), and the caller's
+positionals are restored when the file ends; the shell form's child never sees
+them — its `$1…` are its own shell's, not the file's:
+
+```crust
+# demo.sh does `export DEMO=one` and changes cwd; only the export survives
+source ./demo.sh
+export   # → … DEMO=one … — the env delta came back, the cwd did not
+# line-by-line only: the args are the file's $1… ($0 its path)
+source ./more.crust one two
+```
 
 The single most common mistake is writing the JS form:
 
