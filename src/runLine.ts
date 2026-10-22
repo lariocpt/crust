@@ -8,7 +8,13 @@ import {
 } from "./builtins";
 import { formatItem } from "./format";
 import * as interrupt from "./interrupt";
-import { classify, redirectTail, shellSyntaxPreflight, tokenize } from "./lexer";
+import {
+  classify,
+  redirectTail,
+  rejectHiddenSubstitution,
+  shellSyntaxPreflight,
+  tokenize,
+} from "./lexer";
 import { HelpExit, parse, ShellExitError } from "./parser";
 import { shellEnv } from "./shellPath";
 import type { Context } from "./types";
@@ -209,6 +215,12 @@ export async function runLine(line: string, ctx: Context, tty?: ReplTty): Promis
     }
 
     if (isPureShell) {
+      // parse() is never called on this path, so its head guard never runs —
+      // and a head whose `$(…)` masks a crust stage is exactly what the guard
+      // is for: `range(1,$(echo 3))` classifies as shell and would reach sh
+      // as a syntax error. Mask the spans and reclassify; a genuine shell
+      // head (`echo $(seq 3)`) masks back to shell and runs untouched.
+      rejectHiddenSubstitution(tokens[0]!.text);
       // One crust builtin among the stages and sh reports `command not found`
       // for a tool crust runs in-process. Check every stage, not just the head:
       // `echo hi | mock-server spec.json` is the common shape of this mistake.

@@ -11,7 +11,13 @@ import { sql, sqlSource, sqlStage } from "./builtinFns/sql";
 import { builtinInShellRefusal } from "./builtins";
 import { formatItem } from "./format";
 import { registerChild } from "./interrupt";
-import { classify, rejectRedirect, tokenize } from "./lexer";
+import {
+  classify,
+  rejectHiddenSubstitution,
+  rejectRedirect,
+  rejectSubstitution,
+  tokenize,
+} from "./lexer";
 import { Pipeline } from "./pipeline";
 import { shellEnv } from "./shellPath";
 import * as sources from "./sources";
@@ -58,7 +64,14 @@ export function parse(line: string): (ctx?: Context) => Pipeline<unknown> {
     // transform that fires when the iterator drains (success or error).
     let startIdx = 0;
     let timeLabel: string | null = null;
-    const head = resolveKind(tokens[0]!.text, ctx);
+    const headText = tokens[0]!.text;
+    const head = resolveKind(headText, ctx);
+    // `$(…)` is sh's; a non-shell stage would read it as literal text and build
+    // data from it. A head shell stage whose masked text classifies as a crust
+    // stage would HIDE a crust stage the same way a redirect hides one.
+    // (Guard on the token text: non-shell StageKind members carry no `text`.)
+    if (head.kind !== "shell") rejectSubstitution(headText);
+    else rejectHiddenSubstitution(headText);
     if (head.kind === "time") {
       if (tokens.length < 2) {
         throw new Error('time: must be followed by a pipeline (e.g. `time "x" | range(0, 10)`)');
@@ -87,6 +100,9 @@ export function parse(line: string): (ctx?: Context) => Pipeline<unknown> {
     let pendingParallel: number | null = null;
     for (let i = startIdx; i < tokens.length; i++) {
       const kind = resolveKind(tokens[i]!.text, ctx);
+      // Mid-pipeline, a `$(…)` inside a shell stage belongs to sh (it is
+      // substituted once, at spawn) — only a NON-shell kind reads it as data.
+      if (kind.kind !== "shell") rejectSubstitution(tokens[i]!.text);
       if (kind.kind === "time") {
         throw new Error("time: only allowed as the first stage of a pipeline");
       }
@@ -196,6 +212,9 @@ function resolveKind(text: string, ctx?: Context): StageKind {
       // as query parameters. Same refusal the lexer raises, at the point where
       // this stage stops being a shell stage.
       rejectRedirect(text, head);
+      // A registered fn is a crust stage: its `$(…)` would have run under sh
+      // if the demotion had never happened. Same refusal, same point.
+      rejectSubstitution(text);
       // Env-expand fn args so `sql "..." "prefix $RUN_ID"` works in .pipes
       // files. Since script arguments, `$N` in an fn arg is a POSITIONAL: a
       // query's `$1` is the script's first argument ("" when none passed) —

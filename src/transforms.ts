@@ -473,8 +473,12 @@ export function captureEnv<T>(
           if (value === null || value === undefined) {
             throw new Error(`capture ${name}: got ${String(value)}${from} — item ${count}`);
           }
+          // Trailing newlines only: a captured value is what the user types
+          // `echo "$NAME"` for, and shells always emit a final newline.
           process.env[name] =
-            typeof value === "string" ? value : (JSON.stringify(value) ?? String(value));
+            typeof value === "string"
+              ? value.replace(/\r?\n+$/, "")
+              : (JSON.stringify(value) ?? String(value));
           yield item;
         }
         if (count === 0) {

@@ -49,6 +49,14 @@ NOT expand inside lambda/`assert`/`capture` bodies (those are JS — use
 placeholder is `?`, and the trailing quoted args DO env-expand:
 `sql "… WHERE id = ?" "$MY_ID"`.
 
+`$(…)` command substitution lives in shell stages only: sh expands it once
+at the head of a shell stage, and a `$` anywhere in a mid-pipeline stage
+demotes it to sh, so `range(1,3) | grep $(echo 1)` still works. A `$(…)` in
+a *crust* stage (a URL, a lambda, an argument) is **refused before anything
+runs** — it used to build data from the literal text (`getaddrinfo ENOTFOUND
+$(echo`) — so the named route is capture first: `date +%s | capture TS`,
+then `GET :3000/?t=$TS`.
+
 Inside a parenthesized lambda/`assert`/`capture` body, anything goes: the
 tokenizer tracks paren depth and quotes, so literal `|`, `??`, single/double
 quotes, and backticks (template literals) are all safe. In double-quoted
@@ -72,6 +80,10 @@ GET $BASE/api/buildings/$BID -H "authorization: Bearer $TOKEN" | expect 200
   `""` expansion.
 - Don't capture into `TOKEN`, `BASE`, or `PATH` unless you mean to overwrite
   them.
+- Capture is also the named route for command output you want downstream:
+  a `$(…)` in a crust stage is refused, so `date +%s | capture TS` followed
+  by `GET :3000/?t=$TS` is the round trip (sh's trailing newline is trimmed
+  off the captured value).
 
 ## Verified one-liner patterns
 

@@ -151,8 +151,10 @@ Two shapes are deliberately **not** session state:
   out of a child process. The honest route is a pipeline — `git rev-parse HEAD`
   piped into a `capture` stage of that name. Quoting doesn't change that, and
   neither does a pipe inside the substitution (`FOO=$(date | head -1)` is
-  refused too, not quietly dropped); a `$()` anywhere else on a line stays
-  sh's, so `echo "$(date)"` still prints the date.
+  refused too, not quietly dropped); a `$()` in a *shell* stage stays
+  sh's, so `echo "$(date)"` still prints the date — but a `$()` in a
+  *crust* stage is refused before anything runs, and the named route is
+  capture: `date +%s | capture TS`, then `GET :3000/?t=$TS`.
 
 ## These are not shell commands
 

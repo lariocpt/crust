@@ -124,6 +124,122 @@ export function rejectRedirect(text: string, kind: string): void {
 }
 
 /**
+ * A `$(…)` run in a stage — where sh would run a command that crust never
+ * intended to run. The scan is the redirect scan's twin: quote-aware (a
+ * single-quoted `$(nope)` and a template-literal backtick pair inside a
+ * lambda body stay literal, because their delimiters balance) and
+ * depth-tracked, and it reports ANY unquoted `$(`, at any depth — a
+ * substitution inside `range(…)` is no less a substitution. Each span is
+ * BALANCED, from the `$(` to its matching `)` (quotes and nested parens
+ * tracked while walking), so masking a span out leaves well-formed text for
+ * the reclassify — `range(1,$(echo 3))` reads back as `range(1,0)`, not a
+ * broken `range(1,0`. `${x}` (a variable) is not a command and never
+ * matches.
+ */
+export function substitutionSpans(text: string): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let quote: string | null = null;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]!;
+    if (quote) {
+      if (quote === '"' && c === "\\" && i + 1 < text.length) {
+        i++;
+        continue;
+      }
+      if (c === quote) quote = null;
+      continue;
+    }
+    if (c === '"' || c === "'" || c === "`") {
+      quote = c;
+      continue;
+    }
+    if (c === "(" || c === "[") {
+      depth++;
+      continue;
+    }
+    if (c === ")" || c === "]") {
+      depth--;
+      continue;
+    }
+    if (c === "$" && text[i + 1] === "(") {
+      // Walk to the matching `)`: a nested `$(…)` keeps its own pairing, and
+      // quotes inside the substitution are sh's own quoting, not the span's.
+      let j = i + 2; // past the `(`
+      let pdepth = 1;
+      let q: string | null = null;
+      while (j < text.length && pdepth > 0) {
+        const d = text[j]!;
+        if (q) {
+          if (q === '"' && d === "\\" && j + 1 < text.length) {
+            j++;
+            continue;
+          }
+          if (d === q) q = null;
+        } else if (d === '"' || d === "'" || d === "`") {
+          q = d;
+        } else if (d === "(") {
+          pdepth++;
+        } else if (d === ")") {
+          pdepth--;
+        }
+        j++;
+      }
+      out.push(text.slice(i, pdepth === 0 ? j : text.length));
+      i = pdepth === 0 ? j - 1 : text.length - 1;
+    }
+  }
+  return out;
+}
+
+/**
+ * The message a substitution gets when it lands where sh is not the reader.
+ * It names the two ways that DO work — end the line with a shell stage, or
+ * capture first and use the variable downstream (the capture route is the
+ * feature; see captureEnv in transforms.ts).
+ */
+function substitutionRefusal(): Error {
+  // No `crust: ` prefix here — the caller that prints it (runLine's catch)
+  // adds it, the same convention as every other lexer refusal.
+  return new Error(
+    '$(…) runs in a shell stage only — either end the line with a shell stage (`| sh "…"`), or capture it first: `sh "cmd" | capture NAME` and use `$NAME` downstream.',
+  );
+}
+
+/**
+ * Refuse a `$(…)` the stage kind named by `kind` would read as data. A
+ * non-shell stage never runs sh, so its substitution would have been
+ * built into the data as literal text — the getaddrinfo for host `$(echo`
+ * was the old shape of this refusal.
+ */
+export function rejectSubstitution(text: string): void {
+  if (substitutionSpans(text).length > 0) throw substitutionRefusal();
+}
+
+/**
+ * A shell stage whose substitution spans are masked out (`range(1,$(echo 3))`
+ * → `range(1,0)`) classifies as a crust stage instead of shell: the
+ * substitution HIDEs a crust stage from classification, and running the
+ * original text through sh is sh's syntax error, not the user's intent.
+ * Refuse it. Called only where a source-position stage is meant to be
+ * parsed, never mid-pipeline — a mid-pipeline shell stage keeps its
+ * `$(…)` (sh substitutes it, once, at spawn).
+ */
+export function rejectHiddenSubstitution(text: string): void {
+  const spans = substitutionSpans(text);
+  if (spans.length === 0) return;
+  let masked = text;
+  for (const s of spans) masked = masked.replace(s, "0");
+  let kind: StageKind;
+  try {
+    kind = classifyStage(masked);
+  } catch {
+    return; // malformed either way — let the real error speak
+  }
+  if (kind.kind !== "shell") throw substitutionRefusal();
+}
+
+/**
  * Whether a stage that starts with `{` or `[` is a JSON literal (or someone
  * typing one) rather than shell text that merely begins with a bracket.
  *

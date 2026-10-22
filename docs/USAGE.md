@@ -602,6 +602,8 @@ range(0, 999) | parallel 50 | GET :3000/health | expect 200 | stats
 sql "SELECT count(*)::int AS c FROM users" | assert (r => r.c === 1)
 load 60s 25/s | parallel 25 | GET :3000/health | stats --every 5
 {"n":"x"} | POST :3000/things | (r => r.json()) | capture THING_ID (t => t.id)
+date +%s | capture TS
+GET :3000/?t=$TS
 ```
 
 - `parallel N` — sets the fan-out for the NEXT stage (it is a modifier, not a
@@ -2297,7 +2299,18 @@ Honest about what doesn't work yet:
   don't propagate, and the child's cwd never comes back. An unmarked file
   that looks like multi-line shell, or that doesn't parse as crust, is
   refused, never half-run.
-- **No `$(...)` substitution across stages.** Within a single shell stage it works (delegated to `sh`).
+- **`$(…)` is a shell-stage thing — crust stages now say so.** Sh
+  substitutes `$(…)` once, at the head of a shell stage, and that stays:
+  `echo "$(date)"` prints the date, and a `$` anywhere in a mid-pipeline
+  grep demotes it to sh, so `range(1,3) | grep $(echo 1)` still works. A
+  *crust* stage carrying a `$(…)` is **refused before anything runs** —
+  it used to build data from the literal text: `GET $(echo host)/get`
+  died with `getaddrinfo ENOTFOUND $(echo`, a network-shaped answer to a
+  parse-level problem. The refusal names the two ways that work: end the
+  line with a shell stage, or **capture into a variable first**
+  (`date +%s | capture TS`, then `GET :3000/?t=$TS`) — crust stages
+  expand `$VAR` from the session env, so the value has to live *in* a
+  variable, not in the line.
 - **No redirects on crust stages.** `<` / `>` belong to the shell stage, whose
   text goes to `sh` as-is; anywhere else the line is refused — including when the
   redirect is the very thing that hid the stage from the lexer (`range(1,3) > f`).
