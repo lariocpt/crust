@@ -36,35 +36,59 @@ truth for verdicts): `docs/audit/full-audit.md`. Master plan:
   bookkeeping ambiguity — 71's derivation is not reconstructable from
   disk artifacts; the denominator stays LOCKED — the gap is recorded,
   never silently changed).
-- Next unit on disk: **code review (m) W473 vs W515 message dialect**
-  (W473, 1 row — website `docs/recipes/api-smoke-tests.mdx` L261–270:
-  "Violations fail the fixture with **per-field JSON-pointer paths** —
-  every violation named, not just the first" + the deliberately-broken
-  pair transcript + the subset-walker contract (never invent a
-  violation: unknown keywords pass, `additionalProperties: false` is not
-  enforced, a schema it can't judge validates successfully; functions
-  inside a `schema` object are never invoked — it's data, not matchers;
-  gen-fixtures emits the key automatically — W397 carries the emit
-  side). W515 (mock-server page, the `--validate` request-validation
-  row) already carries its (k) code half — "message-dialect settled" —
-  so (m) closes W473 + the cross-ref. A review, NOT a fix gate: fetch
-  W473's claim cell; the code-half facts ride (k)'s on-disk mockServer
-  read (W515's row) — NEVER re-read a src file after its verdict is on
-  disk; new bounded reads only if W473's row names a fact (k) did not
-  record (a re-read re-marks the region). W473's own plan names five
-  probe sub-claims (the broken pair; "validates successfully" = silent
-  pass or a note; the fn-valued-schema-keyword never-invoked probe; the
-  W397 gen-fixtures cross-ref) — those stay (b) per the row's plan.
-  Adjudicate: per-field JSON-pointer + every-violation-named + the
-  walker contract hold against the (k) facts → C code half, row stays
-  `?` probe-owned; a message-dialect mismatch between the W473 fixture
-  format (`output.data/plan: expected "…", got …`) and the W515
-  request-validation body format is recorded as the cross-ref reading
-  or X → G31 + plan line. After (m): (n) W514 line-numbering (fetch the
-  row's plan cell — mock-server page L370–398, the SQL-assert `.pipes`
-  suite; the subtopic is the `PASS mock-state.pipes:2` line-numbering
-  claim); then item-4 (fresh build + full probe list → (b), then
-  (c)–(e)) — item-4's full probe list is in `resume-history.md`.
+- **+ (m) W473 vs W515 message dialect DONE 67/71** (1 row W473 — C on
+  the code half; row stays `?` probe-owned, the five probe sub-claims
+  stay (b)). New reads this unit: testFixture/runner.ts L196–240
+  (FIRST read — the (c) group read testPipes/runner.ts, a different
+  file) + testFixture/report.ts L24–30 (first read) +
+  mockServer/validateRequest.ts L1–14 + L89–90 + L115–145 (RE-MARKS —
+  (k) had read validateRequest.ts for the W515 message shapes
+  L198–320) + genFixtures/generate.ts L952 + L986 (pinpoint cites; (j)
+  had read the genFixtures source). Facts on the row: (1) per-field
+  JSON-pointer + every-violation-named — runner.ts L217–227
+  (`for (const v of validateSchema(…)) failures.push({ path:
+  `output.data${v.pointer}`, expected: `${v.rule}: ${v.message}`,
+  actual: v.received })` — no first-only truncation) + report.ts L30
+  (the byte-shape of the page's FAIL lines; missing property → `got
+  undefined`); (2) the (m) core — the dialect cross-ref SETTLED: ONE
+  walker, TWO formatters, one message source (the walker's messages
+  carry NO keyword prefix — W515 (k) carries them verbatim
+  validateRequest.ts L198/L258/L268/L304–320; the fixture prefix is
+  runner.ts L220's `${v.rule}: ${v.message}`; the request-side 422
+  body is server.ts L461–485, (k) on disk) — no mismatch, recorded as
+  the cross-ref reading, NOT an X; (3) the never-invent contract —
+  validateRequest.ts L1–12 header verbatim ("a schema the walker can't
+  judge validates successfully — the validator never invents a
+  violation…") + the deliberately-unsupported list + additionalProperties
+  unsupported by default (strict enforces a literal false at plain
+  object nodes — U104 on disk) + "validates successfully" = a SILENT
+  pass (non-object schema → `[]` L126; unknown type keyword
+  `default: return true` L89–90; the fixture runner prints only on
+  violations); (4) functions inside a schema object never invoked —
+  runner.ts L196–208 (extracted BEFORE resolveDeep, the comment names
+  `default`-style fn values) + the nuance: a 0-arg FUNCTION as the
+  top-level `schema` value is the lazy-field form and IS resolved
+  (L203–206) — the schema itself, not inside it; the page's claim
+  holds; (5) same walker in both systems — runner.ts L2 imports
+  validateSchema from ../mockServer/validateRequest; (6) gen-fixtures
+  emits the key conditionally — generate.ts L952 + L986 ("nothing is
+  invented" code-true; W397's probes stay (b) on its row). NO X, NO G.
+- Next unit on disk: **code review (n) W514 line-numbering** (1 row
+  W514 — mock-server page L370–398, the SQL-assert `.pipes` suite).
+  Fetch W514's claim cell. The subtopic is the PASS-line `:N`
+  numbering: the page's transcript shows `PASS mock-state.pipes:2 …`
+  and the row's plan asks whether the `:N` numbers count
+  comments/blanks (W465's (c) full read of testPipes/runner.ts — 180 L
+  — is the likely on-disk home for the numbering mechanism; if the
+  mechanism is NOT on disk, a bounded testPipes read re-marks the
+  region; NEVER re-read a src file after its verdict is on disk). The
+  row's other halves (the sqlite DATABASE_URL, `$.name` surviving env
+  expansion, `$TID` capture expansion, the 5-pass summary count, the
+  postgres-swap note) are probe-owned per the row's plan — they stay
+  (b). Adjudicate in the row; write the verdict, checkpoint EXACT
+  POSITION, commit `docs/audit/` (md-only) and push. After (n):
+  item-4 (fresh build + full probe list → (b), then (c)–(e)) —
+  item-4's full probe list is in `resume-history.md`.
 - Completed code-review groups (a)–(l): one line each in `resume-history.md`
   (append-only; no progress annotations there). **next free G = G31.** G
   task files: `docs/audit/gaps/`; plan lines: `CRUST_GAPS_PLAN.md`;
@@ -153,45 +177,38 @@ compaction that failed and the session was restarted):
 
 ## Next move (first unit of a resuming session)
 
-Next unit = **code review (m) W473 vs W515 message dialect** — W473
-(1 row; website `docs/recipes/api-smoke-tests.mdx` L261–270). Group
-(l) is CLOSED (66/71 rows; the (l) line is in `resume-history.md`,
-this file's EXACT POSITION block carries the demoted pointer). A
-review, NOT a fix gate: close `?` rows to C/V/X in place, verdict
-carries `file:line` evidence; an X row becomes a NEW G task file
-(next free G31, same shape as G13–G30) + a plan line — no code fixes
-while reviewing (a fix landing mid-audit would make later findings
-stale). Method: rules above + the chunking protocol in
-`resume-history.md`; fetch W473's claim cell. W473's claim:
-"Violations fail the fixture with **per-field JSON-pointer paths** —
-every violation named, not just the first" + the deliberately-broken
-pair transcript + the subset-walker contract (never invent a
-violation: unknown keywords pass, `additionalProperties: false` is
-not enforced, a schema it can't judge validates successfully;
-functions inside a `schema` object are never invoked — it's data, not
-matchers; gen-fixtures emits the key automatically — W397 carries
-the emit side). W515 (the mock-server `--validate` request-validation
-row) already carries its (k) code half — "message-dialect settled" —
-so (m) closes W473 + the cross-ref: the code-half facts ride (k)'s
-on-disk mockServer read (W515's row) — NEVER re-read a src file after
-its verdict is on disk; new bounded reads only if W473's row names a
-fact (k) did not record (a re-read re-marks the region). W473's own
-plan names five probe sub-claims (the broken pair; "validates
-successfully" = silent pass or a note; the fn-valued-schema-keyword
-never-invoked probe; the W397 gen-fixtures cross-ref) — those stay
-(b) per the row's plan. Adjudicate in the row: per-field JSON-pointer
-+ every-violation-named + the walker contract hold against the (k)
-facts → C code half, row stays `?` probe-owned (the W224/W225 (2)
-precedent); a message-dialect mismatch between the W473 fixture
-format (`output.data/plan: expected "…", got …`) and the W515
-request-validation body format is recorded as the cross-ref reading
-or X → G31 + plan line. Write the verdict into the row, then
-checkpoint EXACT POSITION, commit `docs/audit/` (md-only) and push.
-Then (n) W514 line-numbering (fetch the row's plan cell — mock-server
-page L370–398, the SQL-assert `.pipes` suite; the subtopic is the
-`PASS mock-state.pipes:2` line-numbering claim — does the `:N`
-numbering count comments/blanks? W465's (c) full read of
-testPipes/runner.ts is the likely on-disk home for the mechanism;
-the probe settles the rest); then item-4 (fresh build + full probe
-list → (b), then (c)–(e)) — item-4's full probe list is in
+Next unit = **code review (n) W514 line-numbering** — W514 (1 row;
+mock-server page L370–398, "### SQL-assert the mock from a `.pipes`
+suite"). Group (l) is CLOSED (66/71) and (m) W473 is DONE (67/71 —
+the (m) entry in this file's EXACT POSITION block carries the
+verdict's facts). A review, NOT a fix gate: close `?` rows to C/V/X
+in place, verdict carries `file:line` evidence; an X row becomes a
+NEW G task file (next free G31, same shape as G13–G30) + a plan line
+— no code fixes while reviewing (a fix landing mid-audit would make
+later findings stale). Method: rules above + the chunking protocol
+in `resume-history.md`; fetch W514's claim cell. The subtopic is the
+PASS-line `:N` numbering: the page's transcript shows `PASS
+mock-state.pipes:2 …` / `1 file(s): 5 pass, 0 fail` and the row's
+plan asks whether the `:N` numbers count comments/blanks (the plan
+cell: "the line numbers count comments/blanks (the W462 file:line
+numbering includes non-run lines — the audit flags the discrepancy
+if the page's :2 implies comment-counted numbering — the probe
+settles it)" and "the comment line is excluded from the pass count
+but included in the numbering — the probe's summary line is
+diffed"). Code half: W465's (c) full read of testPipes/runner.ts
+(180 L) is the likely on-disk home for the numbering mechanism —
+fetch W465's row first; if the mechanism is NOT on disk, a bounded
+testPipes read re-marks the region (NEVER re-read a src file after
+its verdict is on disk — the (c) read marked the file, so any re-read
+is a re-mark). The row's other halves (the sqlite `DATABASE_URL`,
+`$.name` surviving env expansion, `$TID` capture expansion, the
+5-pass summary count, the postgres-swap note) are probe-owned per
+the row's plan — they stay (b). Adjudicate in the row (C code half +
+probe-owned `?`, the W224/W225 (2) precedent; or X → G31 + plan line
+if the numbering contradicts the code). Write the verdict into the
+row, then checkpoint EXACT POSITION, commit `docs/audit/` (md-only)
+and push. After (n): the CODE REVIEW PHASE IS COMPLETE ((a)–(l) +
+(m) + (n) = 68/71 rows; W240 + ~2 unidentified gap rows close in the
+probe phase or stay recorded) — then item-4 (fresh build + full
+probe list → (b), then (c)–(e)) — item-4's full probe list is in
 `resume-history.md`.
