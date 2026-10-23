@@ -17,7 +17,43 @@ truth for verdicts): `docs/audit/full-audit.md`. Master plan:
 `docs/audit/CRUST_GAPS_PLAN.md`. Original audit prompt (scope source):
 `docs/audit/full-audit-prompt.md`.
 
-## EXACT POSITION (rolling — update after EVERY unit; verified on disk 2026-10-22)
+## EXACT POSITION (rolling — update after EVERY unit; verified on disk 2026-10-23)
+- **FIX PHASE IN PROGRESS 2026-10-23 (user-directed; supersedes the item-4
+  ordering for now — the probe list resumes after the fixes).**
+  Orchestration: a fast 7900xt-128k (or rtx5080-64k) subagent implements one G
+  in small units (red → green → docs+commit); the orchestrator verifies on disk
+  (re-runs gates, inspects diffs, spot-checks behavior with proper exit-code
+  capture) and records each task in `FIX-PROGRESS.md` — READ THAT FILE FIRST on
+  resume. Worker rules: `FIX-HANDOFF-PROMPT.md`. Subagent model:
+  `7900xt/7900xt.qwen3.8.c131072.kq8_0-vq8_0.s1.fast-128k.798be05243`.
+  DONE: **G06** (crust `940658a`+tick, site `f40f6b6`, KB `22d1634d` local),
+  **G07** (crust `085e0bf`+tick, site `b226311`, KB `d39aa4a` local; KB
+  re-ingest HELD — operator-controlled publication, pending for G06+G07).
+  **G08 CODE DONE + COMMITTED at crust `1a2bdfa`** (units A+B, orchestrator-
+  verified 2026-10-23: suite 1228/0 in three runs, typecheck clean, heredoc
+  refusal + script-side empty-stage wording spot-checked with exit codes,
+  REPL wording suite-pinned). REMAINING: G08 unit C (docs/website/KB/plan-
+  tick/commit) — USAGE keybindings + limits bullet + a multi-line JSON example
+  that passes --check; skills/crust-cli; website quickstart.mdx +
+  agent-skills/cli.mdx; KB round-10 + round-5 internals; plan tick; commit,
+  push both repos. Heredoc truth for unit C's docs (measured 2026-10-23): a
+  TERMINATED heredoc works when the stage text carries real newlines (the
+  runLine-level control, suite-pinned); continuations join with a SINGLE
+  space (splitLines' existing semantics, mirroring the doc linters) so a
+  `<<EOF` heredoc CANNOT be formed across continuation lines — it is refused
+  as unterminated (loud, nonzero, names the marker; sh itself exits 0 on a
+  true unterminated heredoc — a false pass — which is why crust refuses
+  before running). Document that honestly. Carry-forward note for the G12
+  close-out: the same space-join fact. ALSO 2026-10-23: the user unplugged
+  mini-cachy (the 7900 XT host) — the fast subagent model is OFF until it is
+  powered back on; the remaining units can run on this session's model
+  (Geekom 240k) or any capable model — the doc tasks (G13–G30) are small
+  single units. AFTER G08: G09 →
+  G10 → G11 (after G08/G09 — shared repaint path) → G12 (last code task — the
+  Limits-section sweep, do not skip) → G13–G30 (docs-only, one unit each; G13
+  also rewrites AGENTS.md's stale no-npm-resolution constraint) → the W40
+  in-place twin (reword npm-packages.mdx L44 per its row in full-audit.md) →
+  then RESUME item-4 (the probe list, below).
 - **Group (l) COMPLETE 2026-10-22 — 66/71 rows** (all thirteen
   subtopics DONE: (1) logs session (2) pty (3) procs (4) wait (5) tail
   (6) grep (7) stats --every (8) read API (9) histogram (10) W33 (11)
