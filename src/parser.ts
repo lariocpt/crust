@@ -24,7 +24,54 @@ import * as sources from "./sources";
 import * as transforms from "./transforms";
 import type { Context, StageKind } from "./types";
 
-export function parse(line: string): (ctx?: Context) => Pipeline<unknown> {
+// sh reads a heredoc to end-of-file when the terminator line never comes,
+// warns on fd 2 — and still exits 0. That zero is exactly the false pass the
+// no-false-pass rule exists to kill, so crust refuses the stage BEFORE it
+// spawns, naming the marker (G08: a multi-line REPL can now ASSEMBLE the
+// text, so sh receives the whole heredoc and a missing terminator is a
+// crust-level refusal, not sh's silent exit-0).
+//
+// The scan is deliberately conservative — it may miss an unterminated
+// heredoc in a shape it cannot see through, but it must NEVER flag a
+// terminated one, or the documented `sh -c "cat <<EOF … EOF"` pattern dies:
+//   - `<<<` is a herestring, not a heredoc (the lookarounds exclude it);
+//   - while a body is open its lines are LITERAL — a `<<` inside the body
+//     opens nothing, and only the body's own terminator closes it (FIFO,
+//     matching sh's sequential body reads);
+//   - a terminator line is the marker alone, except a run of closing QUOTES
+//     may follow it: a nested `sh -c "cat <<EOF … EOF"` carries the outer
+//     argument's closing quote on the terminator's line, and sh sees the
+//     bare marker inside it.
+export function unterminatedHeredoc(text: string): string | null {
+  type Open = { marker: string; dash: boolean };
+  const lines = text.split("\n");
+  const open: Open[] = [];
+  const re = /(?<!<)<<(?!<)-?\s*('([^']*)'|"([^"]*)"|([A-Za-z_][A-Za-z0-9_]*))/;
+  for (const line of lines) {
+    if (open.length > 0) {
+      const t = open[0]!;
+      const s = t.dash ? line.replace(/^\t+/, "") : line;
+      if (s === t.marker || (s.startsWith(t.marker) && /^["'`]*$/.test(s.slice(t.marker.length)))) {
+        open.shift();
+      }
+      continue;
+    }
+    const m = line.match(re);
+    if (!m) continue;
+    const marker = m[2] ?? m[3] ?? m[4]!;
+    open.push({ marker, dash: m[0]!.startsWith("<<-") });
+  }
+  return open.length > 0 ? open[0]!.marker : null;
+}
+
+export function unterminatedHeredocError(marker: string): string {
+  return (
+    `unterminated here-document: no line with just ${marker} ends the <<${marker} — ` +
+    `sh would read to end-of-file and still exit 0 (a false pass), so crust refuses the stage before it runs`
+  );
+}
+
+export function parse(line: string, repl = false): (ctx?: Context) => Pipeline<unknown> {
   const tokens = tokenize(line);
   // An empty stage is never something crust should be quiet about. It classified
   // as a shell stage with no command, so `sh -c ""` READ the pipeline and
@@ -40,9 +87,15 @@ export function parse(line: string): (ctx?: Context) => Pipeline<unknown> {
     for (let i = 0; i < tokens.length; i++) {
       if (tokens[i]!.text !== "") continue;
       if (i === 0) {
+        // The `\` advice must name the mechanism that exists IN THIS MODE
+        // (G08): at the REPL the editor continues a line ending with `\`
+        // (secondary prompt); in a script / -c / piped stdin, splitLines
+        // joins it.
         throw new Error(
           "empty stage: a pipeline starts with a source — remove the leading `|`, or if this " +
-            "line belongs to the one above it, end that line with a trailing `\\`",
+            (repl
+              ? "line belongs to the one above it, this REPL continues a line ending with `\\`"
+              : "line belongs to the one above it, end that line with a trailing `\\`"),
         );
       }
       if (i === tokens.length - 1) {
@@ -56,6 +109,25 @@ export function parse(line: string): (ctx?: Context) => Pipeline<unknown> {
           "not an or-operator (`&&` is fine — it contains no pipe). Put the whole shell " +
           "command in one stage instead: sh -c 'a || b'",
       );
+    }
+  }
+  // Refuse unterminated heredocs here, while the stage texts are still raw:
+  // a shell stage at ANY position and the HEAD grep (a file grep that runs
+  // as the system binary through `sh -c`). A mid-pipeline grep is in-process
+  // — its `<<…` is a literal pattern, not a shell heredoc. A shell stage
+  // that resolveKind would later demote to a user function (first word is a
+  // registered fn) is still refused if its text is genuinely unterminated:
+  // such an argument is shift-syntax garbage to the fn's new Function too.
+  if (tokens.length > 0) {
+    const headIsTime = classify(tokens[0]!.text).kind === "time";
+    for (let i = 0; i < tokens.length; i++) {
+      const t = tokens[i]!;
+      if (t.text === "") continue;
+      const kind = classify(t.text);
+      const isHead = i === (headIsTime ? 1 : 0);
+      if (kind.kind !== "shell" && !(kind.kind === "grep" && isHead)) continue;
+      const marker = unterminatedHeredoc(t.text);
+      if (marker !== null) throw new Error(unterminatedHeredocError(marker));
     }
   }
   return (ctx) => {

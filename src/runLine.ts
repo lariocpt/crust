@@ -15,7 +15,13 @@ import {
   shellSyntaxPreflight,
   tokenize,
 } from "./lexer";
-import { HelpExit, parse, ShellExitError } from "./parser";
+import {
+  HelpExit,
+  parse,
+  ShellExitError,
+  unterminatedHeredoc,
+  unterminatedHeredocError,
+} from "./parser";
 import { shellEnv } from "./shellPath";
 import type { Context } from "./types";
 
@@ -231,6 +237,12 @@ export async function runLine(line: string, ctx: Context, tty?: ReplTty): Promis
           return 1;
         }
       }
+      // parse() is never called on this path, so its heredoc guard never
+      // runs — ask the same question here over the whole line: one `sh -c`
+      // takes it all, and sh would exit 0 on a missing terminator (the false
+      // pass the refusal exists to kill).
+      const marker = unterminatedHeredoc(expanded);
+      if (marker !== null) throw new Error(unterminatedHeredocError(marker));
       // At the REPL, hand the child a real terminal: cooked mode so the tty
       // itself delivers Ctrl-C (SIGINT to the foreground process group — the
       // child AND crust; we ignore ours) and interactive children (less, vim)
@@ -265,7 +277,7 @@ export async function runLine(line: string, ctx: Context, tty?: ReplTty): Promis
         interrupt.fire();
       });
       try {
-        const gen = parse(expanded)(ctx).lines()[Symbol.asyncIterator]();
+        const gen = parse(expanded, true)(ctx).lines()[Symbol.asyncIterator]();
         const drain = (async () => {
           let res = await gen.next();
           while (!res.done) {

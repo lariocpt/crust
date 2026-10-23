@@ -113,17 +113,28 @@ interface EditorOpts {
   history: string[];
 }
 
+// Secondary prompt for a pending multi-line buffer (G08): the primary prompt
+// recoloured with the continuation ellipsis. It is only DISPLAY — the
+// assembled entry is one history item (zsh behaviour), so the prompt is never
+// persisted and a recall shows the whole entry on the primary prompt.
+const CONT_PROMPT = "\x1b[36m…\x1b[0m ";
+
 export async function readLine(opts: EditorOpts): Promise<string | null> {
   ensureListening();
-  const { prompt, history } = opts;
+  const { history } = opts;
+  let prompt = opts.prompt;
   let buf = "";
   let cursor = 0;
   let histIdx = history.length;
   let savedBuf = "";
+  // Physical lines of the pending multi-line buffer (G08). Empty while the
+  // line is a plain one; the submitted entry is joinContinued of these plus
+  // the current line, so history stores ONE item for the whole entry.
+  let lines: string[] = [];
 
   const stdin = process.stdin;
   const stdout = process.stdout;
-  const promptLen = stripAnsi(prompt).length;
+  let promptLen = stripAnsi(prompt).length;
 
   stdin.setRawMode?.(true);
   stdin.resume();
@@ -212,17 +223,22 @@ export async function readLine(opts: EditorOpts): Promise<string | null> {
       }
 
       if (code === 0x03) {
+        // At the secondary prompt this aborts the WHOLE pending buffer
+        // (G08): nothing is appended to history and nothing is run.
         stdout.write("^C\n");
         buf = "";
         cursor = 0;
         histIdx = history.length;
         savedBuf = "";
+        lines = [];
+        prompt = opts.prompt;
+        promptLen = stripAnsi(prompt).length;
         stdout.write(prompt);
         continue;
       }
 
       if (code === 0x04) {
-        if (buf.length === 0) {
+        if (buf.length === 0 && lines.length === 0) {
           stdout.write("\n");
           return null;
         }
@@ -230,10 +246,33 @@ export async function readLine(opts: EditorOpts): Promise<string | null> {
       }
 
       if (code === 0x0d || code === 0x0a) {
-        stdout.write("\n");
         const remaining = chunk.slice(i + 1);
+        // G08: a line that is genuinely incomplete (a single trailing `\`, or
+        // an unbalanced quote/paren — needsContinuation is conservative, so a
+        // mistyped line still errors immediately) does not run: the physical
+        // line stays pending and the editor drops to the secondary prompt.
+        // No history write — the entry is not complete until it is submitted
+        // whole. The check runs over the ACCUMULATED buffer, the same text
+        // joinContinued folds, so the decision matches what gets submitted.
+        const acc = lines.length === 0 ? buf : lines.join("\n") + "\n" + buf;
+        if (needsContinuation(acc)) {
+          lines.push(buf);
+          buf = "";
+          cursor = 0;
+          histIdx = history.length;
+          savedBuf = "";
+          prompt = CONT_PROMPT;
+          promptLen = stripAnsi(prompt).length;
+          stdout.write("\n" + prompt);
+          // The while loop's next getChunk() re-reads the remainder as its own
+          // chunk — BREAK the char loop so those bytes are not also typed
+          // here (the return path exits outright, so only this path leaks).
+          if (remaining.length > 0) queue.unshift(remaining);
+          break;
+        }
+        stdout.write("\n");
         if (remaining.length > 0) queue.unshift(remaining);
-        return buf;
+        return lines.length === 0 ? buf : joinContinued([...lines, buf]);
       }
 
       if (code === 0x7f || code === 0x08) {
@@ -318,4 +357,105 @@ export async function readLine(opts: EditorOpts): Promise<string | null> {
 function stripAnsi(s: string): string {
   // biome-ignore lint/suspicious/noControlCharactersInRegex: ESC is the point — this strips ANSI sequences
   return s.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "");
+}
+
+// ---------- Multi-line line assembly (G08) ----------
+//
+// The REPL loop must decide, while a line is still being typed, whether the
+// buffer is complete. `needsContinuation` makes that call over the whole
+// accumulated buffer; `joinContinued` folds the physical lines the loop
+// accepted into one logical line with `splitLines`' strip-then-join semantics
+// (src/runLine.ts), so whatever the REPL submits is what the same text
+// produced as a script or piped stdin — with the two pinned deviations below.
+//
+// The rules are conservative — the buffer continues only while it is
+// genuinely incomplete, so a mistyped line still errors immediately:
+//   - the final physical line ends in a SINGLE trailing backslash (a lone
+//     `\` line is never one). splitLines would ALSO continue on any longer
+//     ODD run — a deliberate, pinned deviation: `…\\\` is complete here, so
+//     a mistype errors immediately rather than hanging at a third prompt;
+//   - the quote/paren scan ends in an OPEN state: some quote char (`"`, `'`,
+//     `` ` ``) was opened and never closed by its OWN kind, or an unclosed `(`.
+// A quote span ends only at its OWN kind — a `'` inside a `` `…` `` span is a
+// literal (and vice versa), which is what lets a paste of a multi-line JSON
+// literal keep counting until the span genuinely closes. The one exception is
+// a span left open at the end of the buffer whose LAST significant character
+// is a quote of the WRONG kind (`` ` `` … `'`): that pair is
+// balanced-but-mismatched — a mistype that must fail immediately on submit,
+// not hang waiting for a match. A backslash inside a span escapes the next
+// char, so a trailing `\\` in a span is one literal backslash, not an escape
+// of the quote.
+function quoteState(s: string): { open: string | null; paren: number } {
+  let open: string | null = null; // the currently open span's quote char
+  let paren = 0;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i]!;
+    if (open !== null) {
+      if (c === "\\") i++;
+      else if (c === open) open = null;
+      continue;
+    }
+    if (c === '"' || c === "'" || c === "`") open = c;
+    else if (c === "(") paren++;
+    else if (c === ")") paren--;
+  }
+  // Still open: continue UNLESS the buffer's last significant char is a quote
+  // of a different kind — then the span's own kind was never closed but the
+  // buffer's final quote is a mistyped close (`` ` `` … `'`), and more input
+  // cannot fix it, so the line is complete (and will error on submit).
+  if (open !== null) {
+    let last: string | null = null;
+    for (let i = s.length - 1; i >= 0; i--) {
+      const d = s[i]!;
+      if (d === '"' || d === "'" || d === "`") {
+        last = d;
+        break;
+      }
+      if (d !== " " && d !== "\t" && d !== "\n" && d !== "\r") break;
+    }
+    if (last !== null && last !== open) return { open: null, paren };
+  }
+  return { open, paren };
+}
+
+/** Does this accumulated REPL buffer need one more line? */
+export function needsContinuation(buf: string): boolean {
+  const last = buf.slice(buf.lastIndexOf("\n") + 1);
+  const body = last.trimEnd();
+  let slashes = 0;
+  while (body.length > slashes && body[body.length - 1 - slashes] === "\\") slashes++;
+  if (slashes === 1 && body.length > 1) return true;
+  const { open, paren } = quoteState(buf);
+  return open !== null || paren > 0;
+}
+
+/**
+ * Fold physical lines into one logical line: strip-then-join, mirroring
+ * splitLines — a line that continues loses exactly one trailing backslash,
+ * the next line is trimmed, the pair joins on a single space. Lines that
+ * continue for another reason (an open quote/paren, no backslash) keep their
+ * newlines when joined, because the sh stage needs the real line breaks
+ * (heredoc bodies, etc.).
+ */
+export function joinContinued(lines: string[]): string {
+  const out: string[] = [];
+  let pending: string | null = null;
+  for (const raw of lines) {
+    const line: string = pending === null ? raw : `${pending} ${raw.trim()}`;
+    pending = null;
+    const body = line.trimEnd();
+    let slashes = 0;
+    while (body.length > slashes && body[body.length - 1 - slashes] === "\\") slashes++;
+    if (slashes === 1 && body.length > 1) {
+      // Exactly one backslash, and the joiner's space is the ONLY separator:
+      // splitLines' `body.slice(0, -1)` keeps the char before the backslash
+      // (often a space), which would double it. The pinned contract wants
+      // `…(1,3) | wc -l` — one space.
+      pending = body.slice(0, -1).trimEnd();
+      continue;
+    }
+    out.push(line);
+  }
+  if (pending !== null) out.push(pending);
+  return out.join("\n");
 }
