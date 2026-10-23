@@ -64,8 +64,8 @@ failing shell stage propagates. So a gate must **end on a crust stage**:
 wait :3000/health
 range(1,99) | parallel 10 | GET http://localhost:3000/items | expect 200 | stats
 GET http://localhost:3000/items | assert (x => x.length > 0)
-# a trailing `\` continues the line — the only way to write a pipeline over
-# more than one line, in a script, in piped stdin or in a multi-line -c
+# a trailing `\` continues the line — in a script, in piped stdin, in a
+# multi-line -c, or at the REPL (where an unbalanced quote or ( continues too)
 load 10s 100/s | parallel 20 | GET http://localhost:3000/items \
   | expect 200 | stats
 ```

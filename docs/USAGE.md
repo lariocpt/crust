@@ -96,15 +96,37 @@ range(1,50) | stats \
 
 This works in a script file, in piped stdin, in a multi-line `-c`, and in
 `--check` (which uses the same splitting as the runtime, so a checked block is
-the line crust actually runs). **Not the REPL** — there Enter means run.
+the line crust actually runs). And at the REPL: a line ending in a single `\`
+drops to a `…` continuation prompt and the buffer submits whole on a complete
+line. The REPL goes one further — an **unbalanced quote (`"`, `'`, `` ` ``) or
+an unclosed `(` continues too** — so a paste of a multi-line JSON literal, or
+a heredoc body inside a shell stage (the join keeps the real newlines, which
+a `\` join would destroy), survives the Enter. The assembled entry is one
+line: one history item, `↑` recalls it whole, and the REPL and the script
+agree character for character on what runs.
 
 Two edges, both tested:
 
 - Only an **odd** run of trailing backslashes continues. A line ending in `\\`
-  is an escaped backslash and stays its own line.
-- Continuation is **never inferred from indentation**. A line that starts with
-  `|` without a preceding `\` is two lines, and the second is the empty-stage
+  is an escaped backslash and stays its own line. The REPL is stricter: a
+  *single* trailing `\` continues there — a longer odd run (`\\\`) is already
+  complete, so a mistype errors immediately instead of hanging at a third
+  prompt.
+- Continuation is **never inferred from indentation** (the REPL's
+  unbalanced-quote/bracket rule aside). A line that starts with `|` without a
+  preceding continuation is two lines, and the second is the empty-stage
   refusal — put the `\` on the line above it.
+
+The unbalanced rule is what a pasted multi-line JSON literal relies on — held
+at the `…` prompt until it balances, then submitted as one line (the paste
+below prints `2` and `4`):
+
+```crust
+range(1,2) | (n => ({
+  "n": n,
+  "doubled": n * 2
+})) | (r => r.doubled)
+```
 
 Before this existed, every multi-line example in this file and on the website
 was a bug: a trailing backslash is a shell metacharacter, so the line was
@@ -2088,7 +2110,7 @@ The line editor runs in raw mode (TTY-only). Reading from a pipe also works — 
 | Key | Action |
 |---|---|
 | `←` / `→` | Move cursor |
-| `↑` / `↓` | History navigation |
+| `↑` / `↓` | History navigation — a continued line is one entry, recalled whole |
 | `Home` / `Ctrl-A` | Start of line |
 | `End` / `Ctrl-E` | End of line |
 | `Backspace` | Delete left |
@@ -2097,10 +2119,11 @@ The line editor runs in raw mode (TTY-only). Reading from a pipe also works — 
 | `Ctrl-U` | Delete to start of line |
 | `Ctrl-K` | Delete to end of line |
 | `Ctrl-L` | Clear screen |
-| `Ctrl-C` | At the prompt: clear the line, fresh prompt. **While a line runs: cancel it** — the pipeline/builtin stops (exit 130), children are killed, the prompt returns. In a `logs` session: end the live view (once = graceful flush, twice = hard cancel). |
-| `Ctrl-D` | EOF — exit if line is empty |
+| `\` at end of line | Continue the line: drops to a `…` prompt (no history write) and the buffer submits whole on a complete line. An unbalanced quote or an unclosed `(` continues too — see [Continuing a line](#continuing-a-line). |
+| `Ctrl-C` | At the prompt: clear the line — at a `…` continuation prompt, abort the whole pending buffer (nothing runs, nothing is stored) — fresh prompt either way. **While a line runs: cancel it** — the pipeline/builtin stops (exit 130), children are killed, the prompt returns. In a `logs` session: end the live view (once = graceful flush, twice = hard cancel). |
+| `Ctrl-D` | EOF — exit if the line is empty; ignored while a line is pending at a `…` prompt |
 | `Tab` | Complete `$PATH` command at start-of-stage, file path elsewhere |
-| `Enter` | Submit line |
+| `Enter` | Submit line — or, when it ends in a continuation (`\`, unbalanced quote or `(`), hold it and drop to the `…` prompt |
 
 ---
 
@@ -2281,7 +2304,6 @@ Honest about what doesn't work yet:
   (pipelines, builtins, and inherit-stdio shell children all stop; exit
   130), but there is no `Ctrl-Z` suspend — pressing it suspends crust
   *together with* its child — and no `fg`/`bg`/`&` background jobs.
-- **No multi-line input / heredocs** in the REPL editor.
 - **`FOO=x cmd` is transient, as in sh.** A bare `FOO=x` line now persists as
   session state ([Environment assignments](#environment-assignments)); the
   *prefix* form stays sh's, so the variable lives for that command only — on
