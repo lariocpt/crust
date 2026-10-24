@@ -77,7 +77,7 @@ Cheapest and least risky first; the two doc-only ones open the branch.
 - [x] **G05** — `$0/$1/$@/$*` for scripts → [file](gaps/G05-positional-script-args.md) · crust `634011d`, site `efbca00`, KB `de72a53b`
 - [x] **G06** — `source` runs bash scripts → [file](gaps/G06-source-bash.md) · crust `940658a`, site `f40f6b6`, KB `22d1634d`
 - [x] **G07** — `$(…)` / backticks in cross-stage position → [file](gaps/G07-command-substitution.md) · crust `085e0bf`, site `b226311`, KB `d39aa4a`
-- [ ] **G08** — multi-line input + heredocs at the REPL → [file](gaps/G08-repl-multiline.md)
+- [x] **G08** — multi-line input + heredocs at the REPL → [file](gaps/G08-repl-multiline.md) · crust `1a2bdfa`+`0a33774`, site `054c09b`, KB `ceb0e777`
 - [ ] **G09** — Ctrl-R fuzzy history → [file](gaps/G09-ctrl-r-history.md)
 - [ ] **G10** — job control: `&`, `jobs`, `fg`, `bg`, Ctrl-Z → [file](gaps/G10-job-control.md)
 - [ ] **G11** — editor highlighting (scope or close) → [file](gaps/G11-editor-highlighting.md)
