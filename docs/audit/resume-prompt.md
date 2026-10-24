@@ -17,38 +17,30 @@ truth for verdicts): `docs/audit/full-audit.md`. Master plan:
 `docs/audit/CRUST_GAPS_PLAN.md`. Original audit prompt (scope source):
 `docs/audit/full-audit-prompt.md`.
 
-## EXACT POSITION (rolling — update after EVERY unit; verified on disk 2026-10-23)
-- **FIX PHASE IN PROGRESS 2026-10-23 (user-directed; supersedes the item-4
+## EXACT POSITION (rolling — update after EVERY unit; verified on disk 2026-10-24)
+- **FIX PHASE IN PROGRESS 2026-10-24 (user-directed; supersedes the item-4
   ordering for now — the probe list resumes after the fixes).**
-  Orchestration: originally a fast subagent implemented and the orchestrator
-  verified; since 2026-10-23 the user directs ALL work directly in-session on
-  this session's model (b70; no subagents) — the 7900xt host is back online
-  but its single slot is occupied. `FIX-HANDOFF-PROMPT.md` rules still hold
+  Orchestration (2026-10-24): the user directs **piecemeal subagent offload**
+  again — one unit at a time to a subagent running
+  `arcB70/arcB70.qwen3.8-smart-q4-128k.c131072.kq4_0-vq4_0.s5.prepared.1d37ed04a2`
+  ("b70-128k 5slt-qw3.8 smrt Q4 kv4"); the orchestrator verifies every unit
+  on disk (gates + diff + commits) before dispatching the next.
+  `FIX-HANDOFF-PROMPT.md` rules still hold
   (context discipline, gates, binary freshness). Verify on disk (re-run
   gates, inspect diffs, behavior spot-checks with proper exit-code capture)
   and record each task in `FIX-PROGRESS.md` — READ THAT FILE FIRST on resume.
   DONE: **G06** (crust `940658a`+tick, site `f40f6b6`, KB `22d1634d` local),
   **G07** (crust `085e0bf`+tick, site `b226311`, KB `d39aa4a` local; KB
   re-ingest HELD — operator-controlled publication, pending for G06+G07+G08).
-  **G08 code done + committed at crust `1a2bdfa`** (units A+B, orchestrator-
-  verified 2026-10-23: suite 1228/0 in three runs, typecheck clean, heredoc
-  refusal + script-side empty-stage wording spot-checked with exit codes,
-  REPL wording suite-pinned). **G08 unit C edits DONE + COMMITTED + PUSHED
-  2026-10-23**: crust `0a33774` ("Continuing a line" rewritten — no more
-  "Not the REPL"; keybindings `\` row + Ctrl-C/Ctrl-D/Enter cases; limits
-  bullet gone; JSON-paste example binary-verified: `--check` exit 0, run →
-  `2`/`4`, pty-verified paste holds at the `…` prompt and submits as ONE
-  entry), site `054c09b` (quickstart table + cli.mdx "does not" → measured
-  behaviour), KB `ceb0e777` local (round 10 §9 + round 5 seam addendum).
-  Fast docs/skills gate 38/0. REMAINING before the tick, in order:
-  (1) full crust gates `bun test` + `bun run typecheck` + `bunx biome check
-  .` (docs-only commit — expect 1228/0); (2) website gates `bun run build` +
-  `bun scripts/lint-examples.mjs ~/Projects/personal/crust/bin/crust-bin`
-  (binary fresh Oct 23 17:25 > `1a2bdfa`) + `bun run check-links` (baseline
-  29 pages / 351 examples / 1163 links — count UNCHANGED: table rows + prose
-  only, no new website fences); (3) tick G08 in `CRUST_GAPS_PLAN.md` in a
-  small separate commit (crust `1a2bdfa`+`0a33774`, site `054c09b`, KB
-  `ceb0e777`) + push; (4) flip G08 to done in FIX-PROGRESS, NEXT = G09.
+  **G08 DONE 2026-10-24**: code crust `1a2bdfa`, docs crust `0a33774`, plan
+  tick `18fb058`, site `054c09b`, KB `ceb0e777` local ("Continuing a line"
+  rewritten — no more "Not the REPL"; keybindings `\` row + Ctrl-C/Ctrl-D/
+  Enter cases; limits bullet gone; JSON-paste example binary-verified:
+  `--check` exit 0, run → `2`/`4`, pty-verified paste holds at the `…`
+  prompt and submits as ONE entry). Final gates green on disk 2026-10-24:
+  crust suite **1228/0** (1 skip, 16.65s), typecheck clean, biome 0 errors;
+  website build 29 pages, lint-examples 351/0, check-links 1163/0 dead
+  (baselines held).
   G08 heredoc truth (measured 2026-10-23, now documented): a TERMINATED
   heredoc works when the stage text carries real newlines (the runLine-level
   control, suite-pinned); backslash continuations join with a SINGLE space
@@ -60,10 +52,12 @@ truth for verdicts): `docs/audit/full-audit.md`. Master plan:
   fact. ALSO (second pinned deviation of `joinContinued`): a quote/paren
   continuation (no backslash) KEEPS its real newlines in the join — that is
   what carries a heredoc body to `sh` with line breaks intact.
-  PAUSE 2026-10-23: the user is moving bigcachy (THIS session's host) for
-  maintenance — at the pause everything is committed + pushed (crust clean @
-  `0a33774`, site clean @ `054c09b`). Resume: verify disk (`resume-check.sh`),
-  continue at the REMAINING list above. AFTER G08: G09 →
+  2026-10-24: the bigcachy move is over, the session resumed, and G08's
+  remaining close-out steps were run + verified on disk (full gates, plan
+  tick `18fb058`, this position). NEXT = **G09 via subagent offload** (model
+  above; gap `docs/audit/gaps/G09-ctrl-r-history.md`; expect the G08 unit
+  split: pure helper red→green → editor `0x12` mode → docs/website/KB +
+  tick). AFTER G08: G09 →
   G10 → G11 (after G08/G09 — shared repaint path) → G12 (last code task — the
   Limits-section sweep, do not skip) → G13–G30 (docs-only, one unit each; G13
   also rewrites AGENTS.md's stale no-npm-resolution constraint) → the W40
