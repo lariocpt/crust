@@ -2119,11 +2119,40 @@ The line editor runs in raw mode (TTY-only). Reading from a pipe also works — 
 | `Ctrl-U` | Delete to start of line |
 | `Ctrl-K` | Delete to end of line |
 | `Ctrl-L` | Clear screen |
+| `Ctrl-R` | Incremental reverse history search on a magenta `(crust-search):` line that opens **below** the one you are typing — see [Incremental history search](#incremental-history-search) |
 | `\` at end of line | Continue the line: drops to a `…` prompt (no history write) and the buffer submits whole on a complete line. An unbalanced quote or an unclosed `(` continues too — see [Continuing a line](#continuing-a-line). |
 | `Ctrl-C` | At the prompt: clear the line — at a `…` continuation prompt, abort the whole pending buffer (nothing runs, nothing is stored) — fresh prompt either way. **While a line runs: cancel it** — the pipeline/builtin stops (exit 130), children are killed, the prompt returns. In a `logs` session: end the live view (once = graceful flush, twice = hard cancel). |
 | `Ctrl-D` | EOF — exit if the line is empty; ignored while a line is pending at a `…` prompt |
 | `Tab` | Complete `$PATH` command at start-of-stage, file path elsewhere |
 | `Enter` | Submit line — or, when it ends in a continuation (`\`, unbalanced quote or `(`), hold it and drop to the `…` prompt |
+
+### Incremental history search
+
+`Ctrl-R` searches the history the way zsh does. The line you were typing stays
+where it is and a magenta `(crust-search): ` line opens **below** it, showing
+your query and the newest history entry that contains it. Typing narrows the
+query, `Backspace` (or `Delete`) widens it again, and every edit restarts at the
+newest match; another `Ctrl-R` walks one match further back with the query you
+have. Matching is a case-insensitive substring, most recent first — not fuzzy.
+
+What ends the search:
+
+| Key | Result |
+|---|---|
+| `Enter` | **Accept**: the match moves onto the prompt line, still editable — the **next** `Enter` runs it |
+| `←` `→` `↑` `↓` `Home` `End` | Accept the same way, cursor at the end of the match |
+| `Ctrl-G`, `Esc` | **Cancel**: the pre-search draft comes back byte-exact |
+| `Ctrl-C` | Cancel the search **only** — the clear-the-line rule belongs to the normal prompt, so what you typed before searching survives |
+
+When nothing matches — empty history, no entry contains the query, or a
+`Ctrl-R` walk has run past the oldest match — the line shows
+`(crust-search): q -- no match --` and `Enter` puts **the query itself** on the
+prompt line as editable text. A search never runs nothing silently, and it never
+writes: the history file is untouched, and the recalled line is appended on
+submit under the existing rule that skips consecutive duplicates, so `↑` still
+walks the same entries. At a `…` continuation prompt the same keys work, and
+accepting or cancelling leaves the pending physical line above intact — recall a
+stage into the second line of a continued pipeline.
 
 ---
 
@@ -2338,7 +2367,6 @@ Honest about what doesn't work yet:
   redirect is the very thing that hid the stage from the lexer (`range(1,3) > f`).
   Save with `… | cat > f`, feed in from `lines <path>` / `read <path>`.
 - **No syntax highlighting in the editor.** v0.1.5.
-- **No fuzzy history search (Ctrl-R).** v0.2.
 
 ### Syntax we deliberately did not add
 

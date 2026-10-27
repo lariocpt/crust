@@ -131,6 +131,15 @@ Verified in a real pty, not read off the source:
   `$XDG_DATA_HOME/crust/history` (default `~/.local/share/crust/history`), it
   survives restarts, `history` prints it numbered, and re-running a recalled
   line does not append a duplicate.
+- **`Ctrl-R`** searches that history as you type: a `(crust-search):` line opens
+  below the one you are editing, showing the newest entry containing your query;
+  another `Ctrl-R` steps further back, `Backspace` shortens the query. `Enter`
+  **accepts** — the match lands on the prompt line, editable, and the **next**
+  `Enter` runs it (so a search at a `…` continuation prompt cannot lose the
+  pending line). `Ctrl-G` / `Esc` / `Ctrl-C` cancel and restore the draft
+  byte-exact; `Ctrl-C` mid-search does **not** clear the line. No match paints
+  `-- no match --` and `Enter` inserts the query as text — it never runs
+  nothing, and it never rewrites the history file.
 - **`Ctrl-C`** at the prompt just clears the line. Mid-run it **cancels**:
   children are killed, the line reports 130, and the prompt comes back so the
   session continues. One item already produced by the source can still print
