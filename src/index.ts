@@ -11,8 +11,9 @@ import {
 } from "./builtins";
 import { checkBuiltinLine } from "./checkBuiltin";
 import { type CrustGlobal, loadConfig } from "./config";
-import { onInterrupt, readLine, suspendEditor } from "./editor";
+import { onInterrupt, onSuspend, readLine, suspendEditor } from "./editor";
 import { appendHistory, loadHistory } from "./history";
+import { resumeStoppedJobs } from "./jobs";
 import { shellSyntaxPreflight, tokenize } from "./lexer";
 import { HelpExit, parse } from "./parser";
 import { setPositionals } from "./positionals";
@@ -45,6 +46,20 @@ usage:
 ${renderBuiltinList()}`;
 
 async function shutdown(code: number): Promise<never> {
+  // A STOPPED job that outlives crust stays in `T` forever: SIGSTOP survives
+  // reparenting, and no shell resumes a process it did not stop itself, so an
+  // orphan suspended here is a leaked process until someone reboots. RUNNING jobs
+  // are deliberately left alone — outliving the session is what `&` means, and the
+  // docs say so. Stopped ones get resumed and named, which is the honest version
+  // of zsh's "you have stopped jobs" warning: it says what happened, not just what
+  // the user is about to lose.
+  const stranded = resumeStoppedJobs();
+  if (stranded.length > 0) {
+    process.stderr.write(
+      `crust: resumed ${stranded.length} stopped job(s) so they would not be orphaned suspended:` +
+        ` ${stranded.map((j) => `[${j.index}] ${j.label}`).join(", ")}\n`,
+    );
+  }
   const userCrust = (globalThis as { crust?: CrustGlobal }).crust;
   if (userCrust?.onExit) {
     try {
@@ -301,7 +316,7 @@ async function main(): Promise<void> {
 
     if (!line.trim()) continue;
     await appendHistory(line, ctx.history);
-    await runLine(line, ctx, { onInterrupt, suspend: suspendEditor });
+    await runLine(line, ctx, { onInterrupt, onSuspend, suspend: suspendEditor });
   }
 }
 

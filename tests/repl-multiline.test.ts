@@ -71,6 +71,9 @@ function fakeTty(): ReplTty & {
     press() {
       t.cb?.();
     },
+    onSuspend() {
+      return () => {};
+    },
     onInterrupt(cb: () => void) {
       t.armed++;
       t.cb = cb;

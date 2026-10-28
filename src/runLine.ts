@@ -1,4 +1,4 @@
-import { hasUnquotedShellMeta, stripTrailingComment } from "./args";
+import { hasUnquotedShellMeta, splitArgs, stripTrailingComment } from "./args";
 import {
   applyBareAssignmentLine,
   builtinInShellRefusal,
@@ -8,6 +8,18 @@ import {
 } from "./builtins";
 import { formatItem } from "./format";
 import * as interrupt from "./interrupt";
+import {
+  formatJobLine,
+  formatSpawned,
+  getJob,
+  jobKillOperands,
+  jobWaitSpec,
+  killJob,
+  listJobs,
+  registerJob,
+  trailingBackgroundOp,
+  waitJobForeground,
+} from "./jobs";
 import {
   classify,
   redirectTail,
@@ -23,6 +35,7 @@ import {
   unterminatedHeredocError,
 } from "./parser";
 import { shellEnv } from "./shellPath";
+import * as suspend from "./suspend";
 import type { Context } from "./types";
 
 // Write with honest backpressure: Bun's stdout.write returns false when the
@@ -39,6 +52,8 @@ function writeStdout(s: string): Promise<void> | undefined {
 export interface ReplTty {
   /** Arm a Ctrl-C watcher (raw-mode 0x03, not SIGINT). Returns dispose. */
   onInterrupt(cb: () => void): () => void;
+  /** Arm a Ctrl-Z watcher (raw-mode 0x1a): suspend the line's job(s), SIGSTOP. */
+  onSuspend(cb: () => void): () => void;
   /** Cooked mode + paused editor for inherit-stdio children. Returns restore. */
   suspend(): () => void;
 }
@@ -127,10 +142,90 @@ export async function runLine(line: string, ctx: Context, tty?: ReplTty): Promis
 
   const exFirstSpace = expanded.indexOf(" ");
   const exHead = exFirstSpace === -1 ? expanded : expanded.slice(0, exFirstSpace);
+  const exArgs = exFirstSpace === -1 ? "" : stripTrailingComment(expanded.slice(exFirstSpace + 1));
+
+  // `kill %1` is crust's; `kill -9 1234` is sh's. The operand decides, because a
+  // pid is the outer shell's business and crust has no opinion about one — and
+  // registering `kill` as a builtin wholesale would take a name every shell
+  // already has (AGENTS rule 3). So only the `%job` shape is intercepted here and
+  // every other `kill` line continues down to `sh -c` untouched.
+  if (exHead === "kill") {
+    const targets = jobKillOperands(exArgs.trim() ? splitArgs(exArgs.trim()) : []);
+    if (targets) {
+      let code = 0;
+      for (const target of targets) {
+        const job = getJob(target.spec);
+        if (!job) {
+          process.stderr.write(`crust: no job ${target.spec}\n`);
+          code = 1;
+          continue;
+        }
+        if (!killJob(job, target.signal)) {
+          // The signal hit nothing. Saying `killed` would be the lie this repo
+          // exists not to tell, so the line fails.
+          process.stderr.write(`crust: job ${job.index} is already gone\n`);
+          code = 1;
+          continue;
+        }
+        // What crust KNOWS is that the signal was sent — not that the job is dead.
+        // A `sh -c` still starting up holds SIGTERM pending (measured: on the very
+        // next line, ~3ms later, the child was alive and listed `Running`, and died
+        // within 20ms), and a job that traps the signal can outlive it entirely. So
+        // the line names the send, and `jobs` reports the state it has verified.
+        process.stdout.write(
+          `Sent ${typeof target.signal === "number" ? `signal ${target.signal}` : target.signal} to job ${job.index} (pid ${job.pid})\n`,
+        );
+      }
+      return code;
+    }
+  }
+
+  // `wait %1` is the job wait; `wait :3000/health` is crust's readiness STAGE
+  // (src/builtinFns/wait.ts). Registering `wait` as a builtin wholesale is what a
+  // first pass did, and it silently swallowed every documented readiness line —
+  // so, exactly as with `kill` above, the operand decides whose the line is. Bare
+  // `wait` stays the stage's: waiting for ALL jobs is not implemented, and a name
+  // that quietly meant two things is the thing this repo refuses to ship.
+  if (exHead === "wait") {
+    const spec = jobWaitSpec(exArgs.trim() ? splitArgs(exArgs.trim()) : []);
+    if (spec !== null) {
+      const job = getJob(spec);
+      if (!job) {
+        process.stderr.write(`crust: no job ${spec}\n`);
+        return 1;
+      }
+      // This line bypasses the builtin branch below, so it arms the suspend
+      // watcher here on the same terms: Ctrl-Z stops THE JOB (148), it does not
+      // cancel the session. Without this, `wait %1` was the one foreground wait
+      // with no way out except killing crust.
+      // Both keys, on the same terms as the builtin branch below: this line
+      // bypasses it, so arming only Ctrl-Z left `wait %1` with no Ctrl-C at all —
+      // measured as a 15s hang with the prompt gone.
+      const dispose = tty?.onInterrupt(() => {
+        process.stdout.write("^C\n");
+        process.emit("SIGINT");
+      });
+      const disposeZ = tty?.onSuspend(() => {
+        process.stdout.write("^Z\n");
+        suspend.fire();
+      });
+      if (tty) suspend.beginRun();
+      try {
+        // 148 (suspend) and 130 (Ctrl-C) both come back from waitJobForeground
+        // itself when the press lands.
+        return await waitJobForeground(job, false);
+      } finally {
+        if (tty) suspend.endRun();
+        dispose?.();
+        disposeZ?.();
+      }
+    }
+  }
+
   if (isBuiltin(exHead) && !hasUnquotedShellMeta(expanded)) {
     // sh strips trailing comments from shell stages; builtin lines get the
     // same courtesy here so `dotenv .env.test # matrix run` works everywhere.
-    const args = exFirstSpace === -1 ? "" : stripTrailingComment(expanded.slice(exFirstSpace + 1));
+    const args = exArgs;
     // At the REPL, Ctrl-C reaches builtins as a synthetic in-process SIGINT —
     // that's what mock-server's and procs' "wait for SIGINT" handlers listen
     // for, and raw mode means no real signal ever arrives. Builtins that hold
@@ -141,14 +236,27 @@ export async function runLine(line: string, ctx: Context, tty?: ReplTty): Promis
       process.stdout.write("^C\n");
       process.emit("SIGINT");
     });
+    // Ctrl-Z during a builtin suspends WHAT it is waiting on (`wait %1`, `fg %1`),
+    // not the session: the bus is armed here so a builtin can register itself, and
+    // the ^Z echo lives here so every builtin answers the key the same way. The
+    // line reports 148 — 128+SIGTSTP, the code a shell gives a suspended job.
+    let suspended = false;
+    const disposeZ = tty?.onSuspend(() => {
+      suspended = true;
+      process.stdout.write("^Z\n");
+      suspend.fire();
+    });
+    if (tty) suspend.beginRun();
     try {
       const result = await builtins[exHead]!(args, ctx);
-      return fired ? 130 : (result ?? 0);
+      return suspended ? 148 : fired ? 130 : (result ?? 0);
     } catch (err) {
       process.stderr.write(`crust: ${(err as Error).message}\n`);
       return 1;
     } finally {
+      if (tty) suspend.endRun();
       dispose?.();
+      disposeZ?.();
     }
   }
 
@@ -243,6 +351,34 @@ export async function runLine(line: string, ctx: Context, tty?: ReplTty): Promis
       // pass the refusal exists to kill).
       const marker = unterminatedHeredoc(expanded);
       if (marker !== null) throw new Error(unterminatedHeredocError(marker));
+      // `cmd &` on a pure-shell line is crust's own background job. Before this it
+      // "worked" by accident: sh forked a grandchild, crust forgot about it, and
+      // nothing could list, wait or stop it. The job is DETACHED — its own process
+      // group, so `kill %N` and Ctrl-Z reach a forking sh's whole tree. Its stdin
+      // is /dev/null for the same reason sh does it: a background job must not
+      // steal keystrokes from the raw-mode editor. Output stays on the terminal,
+      // so a job's late output interleaves with the prompt, as it does in a shell.
+      //
+      // And deliberately NOT `unref()`'d, which is the opposite of what the
+      // feasibility notes said to do. Measured in the real binary: a script's line
+      // loop holds no event-loop handle of its own, so an unref'd child let Bun
+      // decide the process was DONE — `sleep 30 &` in a .crust file skipped every
+      // later line and exited 0, silently. That is the false pass this repo exists
+      // to prevent. Keeping the child ref'd costs nothing instead: the REPL is held
+      // open by stdin, and every crust exit goes through `shutdown()` →
+      // `process.exit()`, which does not wait for children — measured 9ms to exit
+      // with a 30s job still running.
+      const background = trailingBackgroundOp(expanded);
+      if (background !== null) {
+        const proc = Bun.spawn(["sh", "-c", background], {
+          stdio: ["ignore", "inherit", "inherit"],
+          env: shellEnv(),
+          detached: true,
+        });
+        const job = registerJob(proc, background, { group: true });
+        process.stdout.write(`${formatSpawned(job)}\n`);
+        return 0;
+      }
       // At the REPL, hand the child a real terminal: cooked mode so the tty
       // itself delivers Ctrl-C (SIGINT to the foreground process group — the
       // child AND crust; we ignore ours) and interactive children (less, vim)
@@ -270,11 +406,30 @@ export async function runLine(line: string, ctx: Context, tty?: ReplTty): Promis
       // queue the generator's return, and DON'T await the drain — the bus
       // guarantees unwind within a poll tick, and the prompt must come back
       // immediately.
+      //
+      // Ctrl-Z is the same race with the opposite effect: the bus SIGSTOPs the
+      // children and turns them into jobs, and the drain is LEFT RUNNING — not
+      // returned, not cancelled. A suspended pipeline is still one pipeline, and
+      // `bg` has to resume it as one; unwinding here would tear the stages down
+      // around a stopped child and leave the survivor writing into a closed pipe.
       interrupt.beginRun();
+      suspend.beginRun();
+      let seenJobs = listJobs().length;
       const dispose = tty.onInterrupt(() => {
         process.stdout.write("^C\n");
         process.emit("SIGINT");
         interrupt.fire();
+      });
+      const disposeZ = tty.onSuspend(() => {
+        process.stdout.write("^Z\n");
+        suspend.fire();
+        // Say which job stopped, in the shape `jobs` uses, so the user has the
+        // `%N` to hand for `bg`/`fg`/`kill` — a bare ^Z would leave them guessing.
+        const all = listJobs();
+        for (const job of all.slice(seenJobs)) {
+          process.stdout.write(`${formatJobLine(job, true)}\n`);
+        }
+        seenJobs = all.length;
       });
       try {
         const gen = parse(expanded, true)(ctx).lines()[Symbol.asyncIterator]();
@@ -289,6 +444,7 @@ export async function runLine(line: string, ctx: Context, tty?: ReplTty): Promis
         const outcome = await Promise.race([
           drain.then(() => "done" as const),
           interrupt.interruptPromise().then(() => "interrupted" as const),
+          suspend.suspendPromise().then(() => "suspended" as const),
         ]);
         if (outcome === "interrupted") {
           // Late unwind errors are the cancellation, not news.
@@ -296,10 +452,20 @@ export async function runLine(line: string, ctx: Context, tty?: ReplTty): Promis
           gen.return?.(undefined)?.catch(() => {});
           return 130;
         }
+        if (outcome === "suspended") {
+          // 128+SIGTSTP, the code a shell reports for a suspended job. The drain
+          // stays parked: it wakes when `bg` resumes the job and its output goes
+          // to the terminal from there. Errors after this point — a `kill %N`
+          // closing the pipe, a stage failing on resume — are not this line's news.
+          drain.catch(() => {});
+          return 148;
+        }
         return 0;
       } finally {
         dispose();
+        disposeZ();
         interrupt.endRun();
+        suspend.endRun();
       }
     } else {
       const pipeline = parse(expanded)(ctx);

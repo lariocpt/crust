@@ -11,6 +11,7 @@ import { sql, sqlSource, sqlStage } from "./builtinFns/sql";
 import { builtinInShellRefusal } from "./builtins";
 import { formatItem } from "./format";
 import { registerChild } from "./interrupt";
+import { registerJob, stopJob } from "./jobs";
 import {
   classify,
   rejectHiddenSubstitution,
@@ -21,6 +22,7 @@ import {
 import { Pipeline } from "./pipeline";
 import { shellEnv } from "./shellPath";
 import * as sources from "./sources";
+import * as suspend from "./suspend";
 import * as transforms from "./transforms";
 import type { Context, StageKind } from "./types";
 
@@ -746,6 +748,13 @@ function shellSource(cmd: string): Pipeline<unknown> {
       // REPL Ctrl-C kills the child through the bus; the finally kill also
       // reaps it when a downstream stage stops iterating early.
       const unregister = registerChild(() => sources.killGroup(proc));
+      // Ctrl-Z STOPS this child instead of killing it, and makes it a job at that
+      // moment: a line that finishes normally registers nothing, so `jobs` lists
+      // what the user actually suspended. Group stop — the child is a setsid
+      // leader (see the spawn above) — so a forking sh suspends as a unit.
+      const unsuspend = suspend.registerChild(() => {
+        stopJob(registerJob(proc, cmd, { group: true }));
+      });
       try {
         const decoder = new TextDecoder();
         let buf = "";
@@ -762,6 +771,7 @@ function shellSource(cmd: string): Pipeline<unknown> {
         if (failure) throw failure;
       } finally {
         unregister();
+        unsuspend();
         sources.killGroup(proc);
       }
     })(),
@@ -786,6 +796,13 @@ function shellTransform(input: Pipeline<unknown>, cmd: string): Pipeline<unknown
         detached: true,
       });
       const unregister = registerChild(() => sources.killGroup(proc));
+      // Ctrl-Z STOPS this child instead of killing it, and makes it a job at that
+      // moment: a line that finishes normally registers nothing, so `jobs` lists
+      // what the user actually suspended. Group stop — the child is a setsid
+      // leader (see the spawn above) — so a forking sh suspends as a unit.
+      const unsuspend = suspend.registerChild(() => {
+        stopJob(registerJob(proc, cmd, { group: true }));
+      });
       try {
         // UPSTREAM failures must fail the line (the -c fail-fast contract);
         // writer failures must not (a child that exits early — head — closes
@@ -838,6 +855,7 @@ function shellTransform(input: Pipeline<unknown>, cmd: string): Pipeline<unknown
         if (failure) throw failure;
       } finally {
         unregister();
+        unsuspend();
         sources.killGroup(proc);
       }
     })(),

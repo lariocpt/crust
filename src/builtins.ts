@@ -9,6 +9,16 @@ import {
   parseFlags,
   splitArgs,
 } from "./args";
+import {
+  contJob,
+  currentJob,
+  formatJobLine,
+  getJob,
+  latestJob,
+  listJobs,
+  settleJobs,
+  waitJobForeground,
+} from "./jobs";
 import { classify, shellSyntaxPreflight, tokenize } from "./lexer";
 import { parse } from "./parser";
 import { withPositionals } from "./positionals";
@@ -381,6 +391,52 @@ const historyBuiltin: Builtin = (_rawArgs, ctx) => {
   return 0;
 };
 
+// ---- job control (G10) -----------------------------------------------------
+// The table is src/jobs.ts and the Ctrl-Z bus is src/suspend.ts; these are the
+// CLI halves. `&` itself is NOT here — it is a line shape, handled where the
+// shell child is spawned (src/runLine.ts), because that is the only place that
+// knows the line is one pure `sh -c`.
+
+function noJob(spec: string): number {
+  process.stderr.write(`crust: no job ${spec}\n`);
+  return 1;
+}
+
+const jobsBuiltin: Builtin = async () => {
+  // A job that died a line ago must not still print `Running`.
+  await settleJobs();
+  const current = latestJob();
+  for (const job of listJobs()) {
+    process.stdout.write(`${formatJobLine(job, job === current)}\n`);
+  }
+  return 0;
+};
+
+const fgBuiltin: Builtin = async (rawArgs) => {
+  const spec = rawArgs.trim();
+  const job = getJob(spec);
+  if (!job) return noJob(spec || "%");
+  return await waitJobForeground(job, true);
+};
+
+const bgBuiltin: Builtin = (rawArgs) => {
+  const spec = rawArgs.trim();
+  const job = getJob(spec);
+  if (!job) return noJob(spec || "%");
+  if (job.status !== "stopped") {
+    process.stderr.write(`crust: job ${job.index} is not stopped\n`);
+    return 1;
+  }
+  if (!contJob(job)) {
+    process.stderr.write(`crust: job ${job.index} is already gone\n`);
+    return 1;
+  }
+  // Print what it became, not just "ok": the line is the same one `jobs` shows,
+  // so the user can see the job left `Stopped` rather than take that on faith.
+  process.stdout.write(`${formatJobLine(job, job === currentJob())}\n`);
+  return 0;
+};
+
 const helpBuiltin: Builtin = () => {
   process.stdout.write(renderBuiltinList());
   return 0;
@@ -602,6 +658,9 @@ export const builtins: Record<string, Builtin> = {
   source: sourceBuiltin,
   exit: exitBuiltin,
   history: historyBuiltin,
+  jobs: jobsBuiltin,
+  fg: fgBuiltin,
+  bg: bgBuiltin,
   help: helpBuiltin,
   dotenv: dotenvBuiltin,
   "test-fixture": testFixtureBuiltin,
@@ -679,6 +738,9 @@ const builtinSummaries: Record<string, string> = {
   source: "run a .crust script in this session",
   exit: "leave the REPL",
   history: "print numbered command history",
+  jobs: "list jobs — see also `cmd &`, fg/bg/wait/kill %N",
+  fg: "wait for a job in the foreground (fg %1) — its exit code is the line's",
+  bg: "resume a stopped job in the background (bg %1)",
   help: "show this builtin list",
   dotenv: "load .env into the session (status/clear/--append)",
   "test-fixture": "run .crust.ts fixture files against a server",

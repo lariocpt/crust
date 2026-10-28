@@ -38,6 +38,7 @@ import {
   listJobs,
   registerJob,
   resetJobs,
+  settleJobs,
   statusLabel,
   stopJob,
   waitJob,
@@ -54,6 +55,16 @@ function procState(pid: number): string {
     return rest[0] ?? "gone";
   } catch {
     return "gone";
+  }
+}
+
+/** `/proc/<pid>/stat` state letter, "" when gone (exported shape used by settleJobs). */
+function procStateOf(pid: number): string {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[0] ?? "";
+  } catch {
+    return "";
   }
 }
 
@@ -164,8 +175,8 @@ describe("job table — registration and listing", () => {
   test("a running job lists as Running and the newest job carries the + mark", () => {
     const a = spawnJob("sleep 30");
     const b = spawnJob("sleep 31");
-    expect(formatJobLine(a, false)).toBe("[1]   Running   sleep 30");
-    expect(formatJobLine(b, true)).toBe("[2]+  Running   sleep 31");
+    expect(formatJobLine(a, false)).toBe("[1]   Running    sleep 30");
+    expect(formatJobLine(b, true)).toBe("[2]+  Running    sleep 31");
   });
 
   test("the + job is the newest that is still alive, and stops once all are gone", async () => {
@@ -190,7 +201,7 @@ describe("job table — SIGSTOP / SIGCONT", () => {
     expect(stopJob(j)).toBe(true);
     expect(await waitState(j.pid, ["T"])).toBe("T");
     expect(j.status).toBe("stopped");
-    expect(formatJobLine(j, true)).toBe("[1]+  Stopped   sleep 30");
+    expect(formatJobLine(j, true)).toBe("[1]+  Stopped    sleep 30");
   });
 
   test("contJob releases it (T -> S) and marks it Running again", async () => {
@@ -244,6 +255,39 @@ describe("job table — SIGSTOP / SIGCONT", () => {
 
 // ---------- completion and exit codes ----------
 
+describe("settleJobs — a table that cannot lie about a dead pid", () => {
+  test("a killed job's code lands during the settle, so `jobs` says Terminated", async () => {
+    const j = spawnJob("sleep 30");
+    expect(killJob(j, "SIGTERM")).toBe(true);
+    const t0 = Date.now();
+    await settleJobs();
+    expect(j.status, "the process is gone and the table knows").toBe("done");
+    expect(j.exitCode, "reaped while we waited, so the real code is there").toBe(143);
+    expect(statusLabel(j)).toBe("Terminated");
+    expect(Date.now() - t0, "a reap takes milliseconds, not the whole budget").toBeLessThan(100);
+  });
+
+  test("when the code never arrives, the job is Failed — never still Running", async () => {
+    // The bounded fallback: a child whose `exited` promise never settles (a spawn
+    // that died in a way Bun never reported). Its pid is gone, so continuing to
+    // print `Running` would describe a process we can see is not there.
+    const dead = Bun.spawn(["true"], { stdio: ["ignore", "ignore", "ignore"] });
+    await dead.exited;
+    await Bun.sleep(0);
+    const job = registerJob(
+      { pid: dead.pid, exited: new Promise<number>(() => {}), kill: () => {} },
+      "sleep 30",
+    );
+    expect(procStateOf(job.pid), "the pid really is gone").toBe("");
+    const t0 = Date.now();
+    await settleJobs(40);
+    expect(job.status).toBe("done");
+    expect(job.exitCode, "no code was invented").toBeNull();
+    expect(statusLabel(job)).toBe("Failed");
+    expect(Date.now() - t0, "it gives up at the budget, not later").toBeLessThan(300);
+  });
+});
+
 describe("job table — finishing", () => {
   test("a clean exit is Done with code 0", async () => {
     const j = spawnJob("true", ["true"]);
@@ -253,7 +297,7 @@ describe("job table — finishing", () => {
     expect(j.exited).toBe(true);
     expect(j.exitCode).toBe(0);
     expect(statusLabel(j)).toBe("Done");
-    expect(formatJobLine(j, true)).toBe("[1]+  Done      true");
+    expect(formatJobLine(j, true)).toBe("[1]+  Done       true");
   });
 
   test("a nonzero exit is `Exit N` — never a silent Done (honest failure)", async () => {
@@ -262,7 +306,7 @@ describe("job table — finishing", () => {
     await Bun.sleep(0);
     expect(j.exitCode).toBe(3);
     expect(statusLabel(j)).toBe("Exit 3");
-    expect(formatJobLine(j, true)).toBe("[1]+  Exit 3    sh -c 'exit 3'");
+    expect(formatJobLine(j, true)).toBe("[1]+  Exit 3     sh -c 'exit 3'");
   });
 
   test("a signal death is Terminated, with the shell's 128+signal code", async () => {
@@ -304,7 +348,7 @@ describe("job table — finishing", () => {
     expect(job.status).toBe("done");
     expect(job.exitCode).toBeNull();
     expect(statusLabel(job)).toBe("Failed");
-    expect(formatJobLine(job, true)).toBe("[1]+  Failed    sleep 30");
+    expect(formatJobLine(job, true)).toBe("[1]+  Failed     sleep 30");
     expect(await waitJob(job).catch((e: Error) => e.message)).toBe(
       "child died before it could be waited on",
     );

@@ -11,6 +11,7 @@ let pendingResolve: ((s: string | null) => void) | null = null;
 let stdinClosed = false;
 let listening = false;
 let interruptWatcher: (() => void) | null = null;
+let suspendWatcher: (() => void) | null = null;
 let dataWatcher: ((chunk: string) => void) | null = null;
 
 // Exported for tests — the raw-mode data path with no tty attached.
@@ -36,6 +37,15 @@ export function handleStdinData(chunk: Buffer | string): void {
   if (interruptWatcher && str.includes("\x03")) {
     queue.length = 0;
     interruptWatcher();
+    return;
+  }
+  // Ctrl-Z while a line runs: suspend it (SIGSTOP), not cancel it. Checked after
+  // \x03 on purpose — one chunk can carry both keys and cancelling outranks
+  // suspending. Anything else in the chunk is dropped with the typeahead for the
+  // same reason Ctrl-C drops it: the user is pressing keys, not typing.
+  if (suspendWatcher && str.includes("\x1a")) {
+    queue.length = 0;
+    suspendWatcher();
     return;
   }
   queue.push(str);
@@ -65,6 +75,21 @@ export function onInterrupt(cb: () => void): () => void {
   interruptWatcher = cb;
   return () => {
     if (interruptWatcher === cb) interruptWatcher = prev;
+  };
+}
+
+/**
+ * Watch for Ctrl-Z while a line runs (raw mode, so it is byte 0x1a, never a
+ * SIGTSTP). Single slot with the same discipline as `onInterrupt`: the REPL is
+ * sequential, the latest watcher wins, and dispose only clears the slot if it
+ * still holds this callback.
+ */
+export function onSuspend(cb: () => void): () => void {
+  ensureListening();
+  const prev = suspendWatcher;
+  suspendWatcher = cb;
+  return () => {
+    if (suspendWatcher === cb) suspendWatcher = prev;
   };
 }
 
