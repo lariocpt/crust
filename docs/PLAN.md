@@ -66,7 +66,7 @@ Below this line is in v0.1. Anything else is v0.2+, period.
 **Not in v0.1 (parked for v0.2):**
 
 - `bundle()`, `optimize()`, `tar()`, `run-smoke()`, `dest dir/` as a packaging sink
-- Job control (`fg`/`bg`/Ctrl-Z)
+- ~~Job control (`fg`/`bg`/Ctrl-Z)~~ — **shipped** (2026-10-29): `&`, `jobs [-l]`, `fg`, `bg`, `wait %N`, `kill %N`, Ctrl-Z suspend via SIGSTOP. See `docs/USAGE.md` → "Job control".
 - ~~`|>` operator and `[0..9]` range-literal~~ — **decided, won't fix** (2026-10-16): crust's `|` already *is* the pipe, and `[a..b]` collides with the JSON-array literal and with the shell's `[ … ]` test. `range(a, b)` / `seq` cover it; in TS, `.pipe()`. See `docs/USAGE.md` → "Syntax we deliberately did not add".
 - `$(...)` command substitution / backticks mid-pipeline
 - Multi-line input / heredocs
@@ -368,7 +368,14 @@ curl -fsSL https://raw.githubusercontent.com/lariocpt/crust/main/install.sh | ba
 
 ## Out of scope for v0.1 (explicitly)
 
-- Job control (`fg`/`bg`/Ctrl-Z, process groups, `tcsetpgrp`) — needs Bun-side support it doesn't yet expose
+- ~~Job control (`fg`/`bg`/Ctrl-Z, process groups, `tcsetpgrp`) — needs Bun-side
+  support it doesn't yet expose~~ — **shipped 2026-10-29**, and the stated
+  blocker was wrong in both halves: `detached: true` really does setsid (a job's
+  process group reaches a forking `sh`'s grandchildren), and no new Bun API was
+  needed — SIGSTOP/SIGCONT is the *only* working lever, because Bun ignores
+  SIGTSTP and children inherit that ignore across `exec`. What is still missing
+  is terminal handoff (`tcsetpgrp`), i.e. Ctrl-Z during a foreground
+  inherit-stdio child does nothing. `docs/audit/gaps/G10-job-control.md`.
 - Multi-line input / heredocs
 - Syntax highlighting *as you type*
 - Fuzzy history search (Ctrl-R)

@@ -63,7 +63,7 @@ Verdicts are measured, not read off the code. Full evidence is in each file.
 | 7 | [G07](gaps/G07-command-substitution.md) | No `$(...)` across stages | **True** — inside one shell stage it works (`$(echo a b \| tr " " "-")` → `a-b`); in crust stages it breaks: `GET $(echo host)/get` → `getaddrinfo ENOTFOUND $(echo` |
 | 8 | [G08](gaps/G08-repl-multiline.md) | No multi-line input / heredocs in the REPL | **True**, plus a lying message: the `empty stage` refusal tells you to end the previous line with `\`, which the REPL does not honour |
 | 9 | [G09](gaps/G09-ctrl-r-history.md) | No fuzzy history search (Ctrl-R) | **True** — measured in a pty: Ctrl-R is swallowed, next line runs unmodified |
-| 10 | [G10](gaps/G10-job-control.md) | No Ctrl-Z suspend, no `fg`/`bg`/`&` | **True.** Feasibility corrected: `Subprocess.signal` does **not** exist in Bun 1.4.3 and `SIGTSTP` never stops a Bun-spawned child, but `process.kill(pid,"SIGSTOP"/"SIGCONT")` **does** (`/proc/<pid>/stat` → `T` → `S`) |
+| 10 | [G10](gaps/G10-job-control.md) | No Ctrl-Z suspend, no `fg`/`bg`/`&` | **True — shipped 2026-10-29.** Feasibility corrected twice: `Subprocess.signal` does **not** exist in Bun 1.4.3; `SIGTSTP` is not deliverable at all (the runtime ignores it and children inherit that ignore across `exec`), while `process.kill(pid,"SIGSTOP"/"SIGCONT")` **does** work (`/proc/<pid>/stat` → `T` → `S`); and `detached: true` really does setsid, contrary to the original note |
 | 11 | [G11](gaps/G11-editor-highlighting.md) | No syntax highlighting | **True** — `src/editor.ts` paints one undifferentiated repaint of `prompt + buf` |
 
 ## Execution order
@@ -79,7 +79,7 @@ Cheapest and least risky first; the two doc-only ones open the branch.
 - [x] **G07** — `$(…)` / backticks in cross-stage position → [file](gaps/G07-command-substitution.md) · crust `085e0bf`, site `b226311`, KB `d39aa4a`
 - [x] **G08** — multi-line input + heredocs at the REPL → [file](gaps/G08-repl-multiline.md) · crust `1a2bdfa`+`0a33774`, site `054c09b`, KB `ceb0e777`
 - [x] **G09** — Ctrl-R fuzzy history → [file](gaps/G09-ctrl-r-history.md) · crust `f2d5da5`+`bf4d518`+`0717f1c`, site `72e457b`, KB `db8c83a7` (local — ingest held, operator-controlled)
-- [ ] **G10** — job control: `&`, `jobs`, `fg`, `bg`, Ctrl-Z → [file](gaps/G10-job-control.md)
+- [x] **G10** — job control: `&`, `jobs [-l]`, `fg`, `bg`, `wait %N`, `kill %N`, Ctrl-Z → [file](gaps/G10-job-control.md) · crust `5bb95c9`+`2d09056`+`760ec92`+`47bda42`, site `fc0be8c`, KB `7177a9fc` (local — ingest held, operator-controlled)
 - [ ] **G11** — editor highlighting (scope or close) → [file](gaps/G11-editor-highlighting.md)
 - [ ] **G12** — close-out sweep: rewrite `Limits in v0.2`, `docs/PLAN.md`, `docs/spec/v0.1-contract.md`, README, website parity, KB ingest → [file](gaps/G12-closeout.md)
 - [ ] **G13** — npm-packages page: `init.ts` npm imports vs the compiled-binary constraint → [file](gaps/G13-npm-resolution-clash.md)
