@@ -271,6 +271,33 @@ describe("job table — SIGSTOP / SIGCONT", () => {
 // ---------- completion and exit codes ----------
 
 describe("settleJobs — a table that cannot lie about a dead pid", () => {
+  test("a gone job whose code arrives DURING the settle is Terminated, not Running", async () => {
+    // The contract, built instead of raced. `settleJobs` exists for one window:
+    // the pid is already out of /proc and Bun's `exited` has not resolved yet.
+    // Against a real child that window is sub-millisecond and unreproducible on
+    // demand (an earlier version of this test asked it once per run and failed
+    // ~2 in 4 — a kill can also find the pid STILL alive, which settleJobs
+    // deliberately does not wait for). So: a real pid that is genuinely gone,
+    // and an exit status that arrives 30 ms late.
+    const dead = Bun.spawn(["true"], { stdio: ["ignore", "ignore", "ignore"] });
+    await dead.exited;
+    const job = registerJob(
+      { pid: dead.pid, exited: Bun.sleep(30).then(() => 143), kill: () => {} },
+      "sleep 30",
+    );
+    expect(procStateOf(job.pid), "the pid really is gone").toBe("");
+    expect(job.status, "…and the table still says Running").toBe("running");
+    const t0 = Date.now();
+    await settleJobs(100);
+    expect(job.status, "the settle closed the window").toBe("done");
+    expect(job.exitCode, "with the real code, not an invented one").toBe(143);
+    expect(statusLabel(job)).toBe("Terminated");
+    expect(
+      Date.now() - t0,
+      "it WAITED for the code — a settle that returns at once is a no-op",
+    ).toBeGreaterThanOrEqual(20);
+  });
+
   test("a killed job's code lands during the settle, so `jobs` says Terminated", async () => {
     const j = spawnJob("sleep 30");
     // Wait for bash to `exec` into sleep before killing it. A `sh -c` that is
@@ -286,12 +313,23 @@ describe("settleJobs — a table that cannot lie about a dead pid", () => {
       await Bun.sleep(5);
     }
     expect(killJob(j, "SIGTERM")).toBe(true);
+    // Ask the question the way the `jobs` builtin asks it — settle, THEN read —
+    // and repeat until the table is truthful. The order is the whole point, and
+    // so is the repetition: one snapshot can land while the pid is still alive,
+    // which is not a state settleJobs waits on by design.
     const t0 = Date.now();
-    await settleJobs();
+    for (let i = 0; i < 25; i++) {
+      await settleJobs();
+      if (j.status === "done") break;
+      await Bun.sleep(2);
+    }
     expect(j.status, "the process is gone and the table knows").toBe("done");
     expect(j.exitCode, "reaped while we waited, so the real code is there").toBe(143);
     expect(statusLabel(j)).toBe("Terminated");
-    expect(Date.now() - t0, "a reap takes milliseconds, not the whole budget").toBeLessThan(100);
+    // Generous on purpose: this asserts convergence, not speed (the budget
+    // behaviour has its own pin above, and the no-invented-code rule has the
+    // `Failed` test). A tight bound here was the original flake's other half.
+    expect(Date.now() - t0, "converged promptly").toBeLessThan(800);
   });
 
   test("when the code never arrives, the job is Failed — never still Running", async () => {
