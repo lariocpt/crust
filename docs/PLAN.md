@@ -70,7 +70,7 @@ Below this line is in v0.1. Anything else is v0.2+, period.
 - ~~`|>` operator and `[0..9]` range-literal~~ — **decided, won't fix** (2026-10-16): crust's `|` already *is* the pipe, and `[a..b]` collides with the JSON-array literal and with the shell's `[ … ]` test. `range(a, b)` / `seq` cover it; in TS, `.pipe()`. See `docs/USAGE.md` → "Syntax we deliberately did not add".
 - `$(...)` command substitution / backticks mid-pipeline
 - Multi-line input / heredocs
-- Syntax highlighting / fuzzy history search
+- ~~Syntax highlighting / fuzzy history search~~ — history search **shipped** (2026-10-27, Ctrl-R); highlighting **closed as a deliberate absence** (2026-10-29, measured — see `docs/USAGE.md` → "Limits in v0.2")
 - The Crust distro ISO
 - RPM packaging
 
@@ -377,8 +377,14 @@ curl -fsSL https://raw.githubusercontent.com/lariocpt/crust/main/install.sh | ba
   is terminal handoff (`tcsetpgrp`), i.e. Ctrl-Z during a foreground
   inherit-stdio child does nothing. `docs/audit/gaps/G10-job-control.md`.
 - Multi-line input / heredocs
-- Syntax highlighting *as you type*
-- Fuzzy history search (Ctrl-R)
+- ~~Syntax highlighting *as you type*~~ — **closed 2026-10-29, deliberately not built.**
+  Costed, not guessed: a token pass is free (0.1 ms at 2000 chars) and colour does
+  not move the cursor, but an incomplete token classifies as a shell stage (so the
+  colour flips 4–5 times per line while typing, and `parse()` throws on 3–11 % of
+  prefixes), which needs a tolerant second grammar — on the same column arithmetic
+  that is character-based where the terminal counts cells (G32, G31). If the cell
+  arithmetic ever lands, this becomes cheap; until then a real editor plus
+  `crust --check` is the answer.- Fuzzy history search (Ctrl-R)
 - Async completion / completion plugins
 - ~~`|>` pipe operator in TS~~ — **decided, won't fix**: crust's `|` is already the pipe; TS uses `.pipe()`
 - ~~`[0..9]` range-literal syntax~~ — **decided, won't fix**: collides with the JSON-array literal and the shell's `[ … ]` test; `range(a, b)` / `seq` cover it

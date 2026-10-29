@@ -78,3 +78,43 @@ one.
 ## Commit
 
 `feat(editor): colour stage separators, quoted runs and builtin names`
+
+## CLOSED 2026-10-29 — deliberate absence, costed first (operator decision)
+
+The recommendation was to decide before building. The costing probe
+(`/tmp/opencode/g11-probe.ts`, `g11-caret.sh`, `g11-locale.sh`) then falsified two
+of this file's own premises and confirmed the reason:
+
+- **Not CPU.** `tokenize` + `classify` over a 2000-character line: **0.1 ms**.
+  At 10 keystrokes/s that is 0.05 % of a core. Any "too slow for a REPL" argument
+  is dead.
+- **Not the SGR bytes.** Colour sequences do not advance the cursor, so painting
+  `buf` with colours does not move it either — `place()` is only wrong if a site
+  starts measuring the *painted* string instead of the buffer. The editor already
+  strips ANSI for `promptLen`, so this is an audit-the-sites task, not an
+  impossibility.
+- **The real cost is the half-typed line.** `classify()` is total but
+  parse-oriented: on every realistic line the first stage reads as `shell` until
+  the head token closes, so a classify-based highlighter changes colour **4–5
+  times per line** while typing (`GET :3000/… -H "…$TOKEN" | expectStatus 200`:
+  5 flips; `range(1,3) | map (x => x * 2) | stats`: 5; `procs({…}) | grep ERROR`:
+  4), and `parse(prefix, true)` throws on 3 %, 6 %, 8 % and 11 % of prefixes
+  across five sample lines. Colour that disagrees with what is on screen is worse
+  than no colour, so it needs a tolerant tokenizer with an explicit
+  "incomplete" state — a second grammar, maintained forever, for a REPL whose
+  user is typing one line at a time.
+- **And it lands on the arithmetic that is already wrong.** Measuring the caret
+  turned up **G32** (`gaps/G32-wide-glyph-caret-drift.md`): `place()` emits
+  `CSI n D` from a **character** count where a terminal moves **columns**, so the
+  caret lands `(cells − chars)` columns too far right — `echo 日本` by **+2**,
+  `echo a✅b` by **+1**, `echo 日本語日本x` by **+5** (8/8 buffers match that
+  formula, ASCII exact, locale-independent, and the buffer itself is always
+  correct). The paint is right every time — only the editor's own back-tab is
+  wrong. Highlighting multiplies the number of paint
+  sites that must agree in cells, on the same path G31's wrapped-repaint bug and
+  Ctrl-R's three-probe search paint already occupy.
+
+**Decision:** close the claim as a deliberate absence, with the measurement in the
+user-facing sentence (`docs/USAGE.md` → "Limits in v0.2", `docs/PLAN.md`), and
+keep the note that *if* the cell arithmetic lands (G32, next to G31), highlighting
+becomes cheap — that ordering is now written down instead of assumed.
