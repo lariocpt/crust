@@ -179,6 +179,21 @@ describe("job table — registration and listing", () => {
     expect(formatJobLine(b, true)).toBe("[2]+  Running    sleep 31");
   });
 
+  test("the long form adds the pid, and the exit code once the job is gone", async () => {
+    // `jobs -l` exists in every shell and its whole point is the pid — a `-l`
+    // that printed the short line anyway would look exactly like the answer the
+    // user asked for, which is the class of lie this repo exists not to tell.
+    const j = spawnJob("sleep 30");
+    expect(formatJobLine(j, true, true)).toBe(`[${j.index}]+  Running    sleep 30  (pid ${j.pid})`);
+    expect(formatJobLine(j, true), "the short form stays short").toBe("[1]+  Running    sleep 30");
+    const done = spawnJob("sh -c 'exit 3'", ["sh", "-c", "exit 3"]);
+    await done.proc.exited;
+    await Bun.sleep(0);
+    expect(formatJobLine(done, true, true)).toBe(
+      `[${done.index}]+  Exit 3     sh -c 'exit 3'  (pid ${done.pid}, code 3)`,
+    );
+  });
+
   test("the + job is the newest that is still alive, and stops once all are gone", async () => {
     const a = spawnJob("sleep 30");
     const b = spawnJob("sleep 31");
@@ -258,6 +273,18 @@ describe("job table — SIGSTOP / SIGCONT", () => {
 describe("settleJobs — a table that cannot lie about a dead pid", () => {
   test("a killed job's code lands during the settle, so `jobs` says Terminated", async () => {
     const j = spawnJob("sleep 30");
+    // Wait for bash to `exec` into sleep before killing it. A `sh -c` that is
+    // still starting up holds SIGTERM PENDING, so killing it on the spot is a
+    // race crust survives by reporting only the send — and a test that raced it
+    // here failed whenever the spawn lost.
+    for (let i = 0; i < 100; i++) {
+      try {
+        if (readFileSync(`/proc/${j.pid}/cmdline`, "utf8").startsWith("sleep")) break;
+      } catch {
+        // gone already — the kill below will say what happened
+      }
+      await Bun.sleep(5);
+    }
     expect(killJob(j, "SIGTERM")).toBe(true);
     const t0 = Date.now();
     await settleJobs();

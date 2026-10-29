@@ -313,6 +313,31 @@ describe("`&` — the background job", () => {
     expect(captured.stdout).toBe("[1]+  Running    sleep 24.712\n");
   });
 
+  test("`jobs -l` adds the pid, a named job lists alone, an unknown option is refused", async () => {
+    await run("sleep 24.7121 &");
+    const a = mustJob();
+    track(a);
+    await run("sleep 24.7122 &");
+    const b = mustJob("%2");
+    track(b);
+    expect(await run("jobs %1")).toBe(0);
+    expect(captured.stdout, "one operand means one job, and `+` stays on the newest").toBe(
+      "[1]   Running    sleep 24.7121\n",
+    );
+    expect(await run("jobs -l")).toBe(0);
+    expect(captured.stdout).toBe(
+      `[1]   Running    sleep 24.7121  (pid ${a.pid})\n` +
+        `[2]+  Running    sleep 24.7122  (pid ${b.pid})\n`,
+    );
+    // An option crust does not have is refused rather than ignored: the user
+    // cannot tell an ignored `-x` from a carried one.
+    expect(await run("jobs -x")).toBe(1);
+    expect(captured.stdout).toBe("");
+    expect(captured.stderr).toInclude("crust: jobs: -x is not an option");
+    expect(await run("jobs %9")).toBe(1);
+    expect(captured.stderr).toInclude("crust: no job %9");
+  });
+
   test("`kill %1` stops the job and `jobs` reports Terminated", async () => {
     await run("sleep 24.713 &");
     const job = mustJob();

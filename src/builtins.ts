@@ -14,6 +14,7 @@ import {
   currentJob,
   formatJobLine,
   getJob,
+  type Job,
   latestJob,
   listJobs,
   settleJobs,
@@ -402,14 +403,40 @@ function noJob(spec: string): number {
   return 1;
 }
 
-const jobsBuiltin: Builtin = async () => {
+const jobsBuiltin: Builtin = async (rawArgs) => {
+  // `jobs [-l] [%N…]`. An unrecognised word is REFUSED: `jobs` in every shell has
+  // flags whose whole effect is what the listing shows, so ignoring `-x` would
+  // hand back a listing that looks like the one the user asked for.
+  const words = rawArgs.trim() ? splitArgs(rawArgs.trim()) : [];
+  let long = false;
+  const specs: string[] = [];
+  for (const word of words) {
+    if (word === "-l" || word === "--long") long = true;
+    // The same operand shapes `fg`/`bg`/`wait` take — `%1`, `%`, `%+`, or a bare
+    // job number — and NOT a pattern (`%?vim`) or a pid, which is sh's business.
+    else if (/^%(\+|\d*)$/.test(word) || /^\d+$/.test(word)) specs.push(word);
+    else {
+      process.stderr.write(`crust: jobs: ${word} is not an option (jobs [-l] [%N])\n`);
+      return 1;
+    }
+  }
   // A job that died a line ago must not still print `Running`.
   await settleJobs();
   const current = latestJob();
-  for (const job of listJobs()) {
-    process.stdout.write(`${formatJobLine(job, job === current)}\n`);
+  let code = 0;
+  const missing = specs.filter((spec) => getJob(spec) === null);
+  for (const spec of missing) {
+    process.stderr.write(`crust: no job ${spec}\n`);
+    code = 1;
   }
-  return 0;
+  const chosen: Job[] =
+    specs.length === 0
+      ? listJobs()
+      : specs.map((spec) => getJob(spec)).filter((j): j is Job => j !== null);
+  for (const job of chosen) {
+    process.stdout.write(`${formatJobLine(job, job === current, long)}\n`);
+  }
+  return code;
 };
 
 const fgBuiltin: Builtin = async (rawArgs) => {

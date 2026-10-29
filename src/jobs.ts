@@ -285,10 +285,22 @@ export function statusLabel(job: Job): string {
   return `Exit ${code}`;
 }
 
-/** One `jobs` line: `[1]+  Running   sleep 30`. `current` adds the `+`. */
-export function formatJobLine(job: Job, current = false): string {
+/**
+ * One `jobs` line: `[1]+  Running   sleep 30`. `current` adds the `+`, `long`
+ * adds the pid (`jobs -l`) and the code once there is one to show.
+ */
+export function formatJobLine(job: Job, current = false, long = false): string {
   const mark = current ? "+" : " ";
-  return `[${job.index}]${mark}  ${statusLabel(job).padEnd(10)} ${job.label}`;
+  const suffix = long ? longSuffix(job) : "";
+  return `[${job.index}]${mark}  ${statusLabel(job).padEnd(10)} ${job.label}${suffix}`;
+}
+
+/** The `-l` tail. No code is invented for a job that never reported one. */
+function longSuffix(job: Job): string {
+  if (job.status === "done" && job.exitCode !== null) {
+    return `  (pid ${job.pid}, code ${job.exitCode})`;
+  }
+  return `  (pid ${job.pid})`;
 }
 
 /**
