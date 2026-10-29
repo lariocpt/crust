@@ -368,7 +368,12 @@ export async function runLine(line: string, ctx: Context, tty?: ReplTty): Promis
       // open by stdin, and every crust exit goes through `shutdown()` →
       // `process.exit()`, which does not wait for children — measured 9ms to exit
       // with a 30s job still running.
-      const background = trailingBackgroundOp(expanded);
+      // The comment is stripped FIRST: `sleep 30 & # note` is a background job in
+      // sh, and testing the raw line made the `#` the last thing on it, so the `&`
+      // was not trailing — the line fell through to `sh -c`, sh backgrounded its
+      // own grandchild, and crust registered nothing (the exact pre-G10 accident,
+      // arriving by way of a comment).
+      const background = trailingBackgroundOp(stripTrailingComment(expanded));
       if (background !== null) {
         const proc = Bun.spawn(["sh", "-c", background], {
           stdio: ["ignore", "inherit", "inherit"],

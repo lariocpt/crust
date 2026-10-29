@@ -10,9 +10,9 @@ description: crust has two separate namespaces — tool builtins (`mock-server`,
 | **Tool builtin** | `mock-server`, `test-fixture`, `test-pipes`, `gen-fixtures`, `verify-web-links`, `logs`, `dotenv`, `skills` | dispatched **before** pipeline parsing, in-process, own line | subcommand style: `logs tail -F app.log` |
 | **Registered function** | `base64`, `salt`, `jwt`, `bundle`, `sql`, `wait` + anything you add with `crust.fn` | an ordinary pipeline stage, or a source when nothing is upstream | **space-separated**: `salt 16`, not `salt(16)` |
 
-`cd`, `export`, `alias`, `source`, `exit`, `history` and `help` are builtins
-too — the ones sh has its own version of, which is why a redirect on *those* is
-left to sh. `procs`, `range`, `load`, `read`, `tail` and friends are **sources**,
+`cd`, `export`, `alias`, `source`, `exit`, `history`, `help` and the job verbs
+`jobs`, `fg`, `bg` are builtins too — the ones sh has its own version of, which
+is why a redirect on *those* is left to sh. `procs`, `range`, `load`, `read`, `tail` and friends are **sources**,
 not builtins.
 
 `source` is the only session builtin with its own argument grammar:
@@ -35,6 +35,26 @@ export   # → … DEMO=one … — the env delta came back, the cwd did not
 # line-by-line only: the args are the file's $1… ($0 its path)
 source ./more.crust one two
 ```
+
+## Job control is a third shape
+
+`jobs`, `fg`, `bg` are ordinary builtins. `wait %1` and `kill %1` are **not** —
+registering either name wholesale would take a word sh (or crust) already owns,
+so only the `%job` operand form is intercepted and every other line keeps its
+owner:
+
+```crust
+wait :3000/health --timeout 5s   # the registered `wait` function — readiness
+kill -9 4242                     # sh's: a PID is not a job spec
+wait %1                          # the job wait
+kill %1                          # the job signal — reports the SEND, not the death
+```
+
+A trailing `&` on a shell line is crust's too (its own process group, stdin
+`/dev/null`, outlives the session), and `jobs`/`fg`/`bg`/`wait %N` are how it
+comes back. `Ctrl-Z` suspends a crust pipeline, builtin or `fg`/`wait` with
+SIGSTOP; it cannot stop a foreground inherit-stdio child, because the runtime
+ignores SIGTSTP and children inherit that ignore.
 
 The single most common mistake is writing the JS form:
 

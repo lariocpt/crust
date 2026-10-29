@@ -313,6 +313,19 @@ describe("`&` — the background job", () => {
     expect(captured.stdout).toBe("[1]+  Running    sleep 24.712\n");
   });
 
+  test("a trailing comment does not defeat the `&`", async () => {
+    // `sleep 2.7123 & # note` must be a background job. The comment is stripped
+    // for builtin dispatch and for sh's own parsing, but not for the background
+    // test, so the trailing `&` was no longer the last character and the line
+    // ran in the FOREGROUND — a blocking sleep with nothing to explain it.
+    const t0 = Date.now();
+    expect(await run("sleep 2.7123 & # in background")).toBe(0);
+    expect(Date.now() - t0, "returned at once, it is a job").toBeLessThan(700);
+    const job = mustJob();
+    track(job);
+    expect(job.label, "…and the comment is not part of the command").toBe("sleep 2.7123");
+  }, 10_000);
+
   test("`jobs -l` adds the pid, a named job lists alone, an unknown option is refused", async () => {
     await run("sleep 24.7121 &");
     const a = mustJob();

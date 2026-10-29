@@ -145,7 +145,38 @@ Verified in a real pty, not read off the source:
   session continues. One item already produced by the source can still print
   after the prompt redraws — cosmetic; the source is stopped.
 - **`Ctrl-D`** (or `exit`) leaves; the exit code is 0 unless `exit <code>`.
+- **`Ctrl-Z`** suspends what the line is waiting on — a crust pipeline, a
+  builtin, a `fg`/`wait` — as a job: SIGSTOP, `[2]+  Stopped    sleep 12`, prompt
+  back, `bg` resumes a suspended pipeline as one unit. During a **foreground
+  inherit-stdio child** it does nothing at all (see Job control below).
 
+## Job control
+
+`cmd &` is crust's own background job: its own process group (so a signal
+reaches a forking `sh`'s whole tree), stdin `/dev/null`, output still on the
+terminal, and it **outlives crust**. `%1` / `%` / `%+` name jobs; a bare number
+names a job to `fg`/`bg`/`jobs` and a **PID** to `kill`.
+
+| Line | What it does |
+| --- | --- |
+| `jobs`, `jobs -l` | the table; `-l` adds `(pid …)` and the code once there is one; an unknown option is refused, not ignored |
+| `fg [spec]` | resume (if stopped) and **wait**; the job's own code becomes the line's |
+| `bg [spec]` | resume a stopped job; an error if it was not stopped |
+| `wait %1` | the job wait — **bare `wait` is the readiness stage**, `wait :3000/health` |
+| `kill %1`, `kill -9 %1` | prints `Sent SIGTERM to job 1 (pid …)` — the send, not the death. `kill -9 4242` is sh's |
+
+Statuses are `Running`, `Stopped`, `Done`, `Exit N`, `Terminated` (128+signal),
+`Failed` (gone with no code — never a silent pass). Finished jobs stay listed for
+the session, which is how `wait %1` still reports the code of a job that ended
+minutes ago. `Ctrl-C` during `fg`/`wait` kills the job and returns 130.
+
+SIGSTOP, never SIGTSTP: Bun's runtime ignores SIGTSTP and a child it spawns
+inherits that ignore across `exec`, so **Ctrl-Z cannot stop a foreground
+inherit-stdio child** (`vim`, a bare `sleep 20`) — the `^Z` echoes and the child
+keeps running; Ctrl-C is the escape (child dies, line 130). Running jobs are left
+alone at exit because outliving the session is what `&` means; **stopped** ones are
+resumed with a notice, since SIGSTOP survives reparenting and no shell resumes a
+process it did not stop.
 Driving it non-interactively: crust checks for a TTY, so pipe bytes through
 `script` and pace them — `{ printf 'range(1,3)\n'; sleep 1; printf '\004'; } |
 script -qec 'crust' /dev/null`.

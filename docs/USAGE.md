@@ -22,6 +22,7 @@ Mock it, test it, load it, tail it: the whole test stack baked into one binary. 
 - [verify-web-links](#verify-web-links)
 - [logs — interactive log searching](#logs--interactive-log-searching)
 - [Editor keybindings](#editor-keybindings)
+- [Job control](#job-control)
 - [Configuration (`init.ts`)](#configuration-initts)
 - [Examples](#examples)
 - [Limits in v0.2](#limits-in-v02)
@@ -845,6 +846,9 @@ alias             # list aliases
 unalias g
 source <file> [args…]   # .ts/.js imported; bash scripts run in a child shell (exported env comes back); anything else line-by-line — [args…] are its $1… only in that form
 history           # list this session's lines
+jobs [-l] [%N]    # list background jobs — see Job control
+fg [%N]           # bring a job to the foreground and wait for it
+bg [%N]           # resume a stopped job in the background
 exit [code]
 help
 
@@ -2121,7 +2125,8 @@ The line editor runs in raw mode (TTY-only). Reading from a pipe also works — 
 | `Ctrl-L` | Clear screen |
 | `Ctrl-R` | Incremental reverse history search on a magenta `(crust-search):` line that opens **below** the one you are typing — see [Incremental history search](#incremental-history-search) |
 | `\` at end of line | Continue the line: drops to a `…` prompt (no history write) and the buffer submits whole on a complete line. An unbalanced quote or an unclosed `(` continues too — see [Continuing a line](#continuing-a-line). |
-| `Ctrl-C` | At the prompt: clear the line — at a `…` continuation prompt, abort the whole pending buffer (nothing runs, nothing is stored) — fresh prompt either way. **While a line runs: cancel it** — the pipeline/builtin stops (exit 130), children are killed, the prompt returns. In a `logs` session: end the live view (once = graceful flush, twice = hard cancel). |
+| `Ctrl-C` | At the prompt: clear the line — at a `…` continuation prompt, abort the whole pending buffer (nothing runs, nothing is stored) — fresh prompt either way. **While a line runs: cancel it** — the pipeline/builtin stops (exit 130), children are killed, the prompt returns. During `fg`/`wait %N` it kills the job being waited on. In a `logs` session: end the live view (once = graceful flush, twice = hard cancel). |
+| `Ctrl-Z` | **Suspend what the line is waiting on** — a crust pipeline, a builtin, a `fg`/`wait` — as a job (SIGSTOP), print its `jobs` line and hand the prompt back; `bg` resumes it. During a foreground inherit-stdio shell child it does nothing at all: see [Job control](#ctrl-z--what-it-stops) |
 | `Ctrl-D` | EOF — exit if the line is empty; ignored while a line is pending at a `…` prompt |
 | `Tab` | Complete `$PATH` command at start-of-stage, file path elsewhere |
 | `Enter` | Submit line — or, when it ends in a continuation (`\`, unbalanced quote or `(`), hold it and drop to the `…` prompt |
@@ -2153,6 +2158,117 @@ submit under the existing rule that skips consecutive duplicates, so `↑` still
 walks the same entries. At a `…` continuation prompt the same keys work, and
 accepting or cancelling leaves the pending physical line above intact — recall a
 stage into the second line of a continued pipeline.
+
+---
+
+## Job control
+
+One `&`, four verbs, one key. `Ctrl-C` has always cancelled the running line;
+job control is the other half — stop it, start it again, wait for it.
+
+```bash
+sleep 30 &            # [1] 4242 sleep 30 — the prompt comes straight back
+jobs                  # [1]+  Running    sleep 30
+jobs -l               # [1]+  Running    sleep 30  (pid 4242)
+kill %1               # Sent SIGTERM to job 1 (pid 4242)
+wait %1               # blocks; the job's own exit code becomes the line's
+```
+
+**Backgrounding.** A trailing, unquoted `&` makes the job crust's own. Before
+this, `sleep 30 &` worked only by accident: `sh` forked a grandchild, crust
+forgot about it, and nothing could list it, stop it or wait for it. The job gets
+its own **process group**, so a signal reaches a forking `sh`'s whole tree —
+grandchildren included. Its stdin is `/dev/null`, because a background job must
+not steal keystrokes from the raw-mode editor; its output stays on the terminal,
+so a job's late lines interleave with the prompt as they do in any shell. A
+trailing comment is not in the way: `sleep 30 & # note` is still a job.
+
+**Job specs.** `%1` numbers count up from 1 for the session; `%` and `%+` are the
+newest job; a bare number works too (`fg 2`). `jobs` marks the current one with
+`+`. Finished jobs **stay listed** for the session — that is what lets `wait %1`
+still report the code of a job that ended minutes ago.
+
+| Status | Means |
+|---|---|
+| `Running` | alive |
+| `Stopped` | suspended with Ctrl-Z |
+| `Done` | exited 0 |
+| `Exit N` | exited N — never shown as a pass |
+| `Terminated` | died from a signal — `143` = 128+SIGTERM, `130` = 128+SIGINT |
+| `Failed` | the process is gone and no exit code ever arrived |
+
+**`jobs [-l] [%N]`** lists the table, `-l` adding the pid (and the code once
+there is one). An unknown option is refused — `crust: jobs: -x is not an option`
+— rather than quietly ignored, because here the flags *are* the listing.
+
+**`fg [spec]`** resumes a stopped job and waits for it; the job's own exit code
+becomes the line's, so `fg` on a job that exited 3 exits 3. **`bg [spec]`**
+resumes it in the background and prints the line it became; `bg` on a job that
+is not stopped is an error, not a no-op. While either is waiting, **Ctrl-C kills
+the job** and returns 130 like any other foreground Ctrl-C, and **Ctrl-Z
+suspends it again** and returns 148.
+
+**`kill %N`** sends a signal — `kill %1`, `kill -9 %1`, `kill -TERM %1`, `kill %`.
+Only the `%`-operand shape is crust's: `kill -9 4242` is still `sh`'s, because
+crust has no opinion about a PID. The line reports the **send**, not the death.
+An `sh -c` that has not `exec`'d yet holds SIGTERM pending — measured: the job
+was alive on the very next line, ~3 ms later, and gone within 20 ms — and a job
+that traps the signal can outlive it entirely. `jobs` is what reports verified
+state, so `kill` claims only what it knows. A signal that hit nothing (a job
+already reaped) is an error and exit 1.
+
+**`wait %N`** is the job wait, and bare `wait` is a different word that stays
+what it was — the readiness **stage**:
+
+```bash
+wait :3000/health --timeout 5s     # still the readiness probe, not job control
+```
+
+Waiting for *all* jobs at once is not implemented, and one name quietly meaning
+two things is not going to ship either, so the operand decides whose line it is.
+
+### Ctrl-Z — what it stops
+
+Ctrl-Z during a crust pipeline, a builtin, or a `fg`/`wait` suspends the job:
+crust SIGSTOPs the child's process group, prints the job's `jobs` line, and
+returns the prompt — and `bg` picks a suspended **pipeline** back up as one unit.
+
+```bash
+range(1,3) | sleep 12              # Ctrl-Z, and the prompt returns:
+# ^Z
+# [2]+  Stopped    sleep 12
+```
+
+It uses **SIGSTOP, never SIGTSTP**, because SIGTSTP is not available to give:
+Bun's runtime ignores it, and a child it spawns inherits that ignore across
+`exec` — the same `sleep` shrugs off `SIGTSTP` and stops without complaint on
+`SIGSTOP`. Measured on Bun 1.4.3 / Linux, in both the compiled binary and
+`bun run`, with `susp = ^Z` and `isig` set and crust holding the terminal as
+`pgid == sid == tpgid` — a plain zsh in the same pty suspends the job, crust
+cannot.
+
+Which has one visible consequence: during a **foreground inherit-stdio shell
+child** — a bare `sleep 20`, or `vim`, where crust hands the real terminal over
+and the editor is cooked — **Ctrl-Z does nothing at all**. The `^Z` is echoed and
+the child keeps running. **Ctrl-C is the escape**: the child dies and the line
+reports 130. Real terminal handoff (`setpgid` + `tcsetpgrp`) needs FFI and is not
+in v0.2.
+
+### Scripts, exit, and what outlives the session
+
+`&` works in a `.crust` file too, and the child is deliberately kept on the
+event loop. The feasibility notes said to `unref()` it; doing that let Bun decide
+the process was finished at the next pending await, so `sleep 30 &` near the top
+of a script **skipped every later line and exited 0**, silently. Crust exits
+through `process.exit()` instead, so a running job never delays shutdown —
+measured ~10 ms to exit with a 30-second job still running.
+
+**Background jobs outlive crust**: that is what `&` means, and a `kill %N` is the
+way to stop one you no longer want. *Stopped* jobs are the exception, and crust
+fixes those on the way out rather than leaving them — SIGSTOP survives
+reparenting and no shell resumes a process it did not stop, so an orphan left in
+`T` is leaked until someone reboots. The exit says so:
+`crust: resumed 1 stopped job(s) so they would not be orphaned suspended: [1] sleep 25`.
 
 ---
 
@@ -2329,10 +2445,13 @@ echo src/index.ts | bundle
 
 Honest about what doesn't work yet:
 
-- **Partial job control.** `Ctrl-C` cancels the running line at the REPL
-  (pipelines, builtins, and inherit-stdio shell children all stop; exit
-  130), but there is no `Ctrl-Z` suspend — pressing it suspends crust
-  *together with* its child — and no `fg`/`bg`/`&` background jobs.
+- **Job control without a terminal handoff.** `&`, `jobs`, `fg`, `bg`,
+  `wait %N`, `kill %N` and Ctrl-Z work ([Job control](#job-control)), but a
+  suspended job keeps no tty of its own, and Ctrl-Z during a **foreground
+  inherit-stdio child** does nothing at all — Bun ignores `SIGTSTP` and its
+  children inherit that ignore, so neither crust nor the child can be stopped
+  that way. Ctrl-C is the escape there (the child dies, the line reports 130).
+  No `disown`, no `nohup`, no job patterns (`%?vim`).
 - **`FOO=x cmd` is transient, as in sh.** A bare `FOO=x` line now persists as
   session state ([Environment assignments](#environment-assignments)); the
   *prefix* form stays sh's, so the variable lives for that command only — on

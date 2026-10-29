@@ -150,8 +150,10 @@ piped, for a global install, or when crust skills already sit in either path;
 ## What crust is not
 
 Not a login shell and not a bash replacement — plain shell lines are
-delegated to `sh -c` untouched; `Ctrl-C` cancels the running line but there
-is no `Ctrl-Z`/`fg`/`bg`/`&` job control; a plain `FOO=x` line is session
+delegated to `sh -c` untouched; `Ctrl-C` cancels the running line and `&`,
+`jobs`, `fg`, `bg`, `wait %N` and `kill %N` are job control — though Ctrl-Z
+suspends crust's own pipelines and builtins, not a foreground child's terminal;
+a plain `FOO=x` line is session
 state that persists, the same code `export` runs (only the `FOO=x cmd`
 prefix is transient). The full list lives in
 [Limits](docs/USAGE.md#limits-in-v02).
