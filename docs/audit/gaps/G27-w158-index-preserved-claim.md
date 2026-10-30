@@ -27,11 +27,14 @@ The throw path, end to end, carries no index:
 3. **The one index-bearing pipeline error is an `expect` mismatch, not a
    throw.** `ExpectError` (`src/transforms.ts` L187–196) formats
    `expect: item at index ${index} failed matcher ${String(matcher)}` (L193),
-   thrown at L217 with the expect stage's own counter `i` (initialized at
+   thrown at L217 with that export's own counter `i` (initialized at
    L215, incremented L219) — a per-stage stream position over the items that
    SURVIVED upstream stages, not a preserved source index, and it fires only
-   on an `expect` matcher mismatch. So even the one index in the system is
-   not the "preserved" one the page describes.
+   on an `expect` matcher mismatch. Clarified 2026-10-30: that export is
+   the TS global `expectStage` (config.ts L83); the shell `expect` stage is
+   the different `expectStatus` function (parser.ts L453–454), which
+   reports N/M at drain and carries no index. So even the one index in the
+   system is not the "preserved" one the page describes.
 
 The rest of the page line IS code-true (recorded on the W158 row this
 unit): a throw fails the line at the offending item (raw propagation into
@@ -71,9 +74,17 @@ actual contract:
   rejects the line with the thrown error's message verbatim (`crust:
   <message>`, exit 1); to identify the item, include it in what you throw
   (e.g. `throw new Error(\`items[${i}]: bad\`)`).
-- Optionally name the ONE index the runtime does carry: an `expect` matcher
-  mismatch reports `expect: item at index <n> failed matcher <m>` — where
-  `<n>` counts the items reaching the `expect` stage, not source positions.
+- Optional note, corrected in place 2026-10-30: the ONE index-bearing
+  pipeline error is `expect: item at index <n> failed matcher <m>`
+  (ExpectError, transforms.ts L187–196; counter `i` in the `expect` export,
+  transforms.ts L210–222) — but that export is the TS global `expectStage`
+  (config.ts L83), NOT the shell `expect` stage. The shell stage (parser.ts
+  L453–454) is `expectStatus` (transforms.ts L424–452), which reports
+  `expect <code>: N/M responses did not match` at drain — no index.
+  Measured 2026-10-30: `range(0, 1) | (n => ({status: 500})) | expect 200`
+  → items pass through, then `crust: expect 200: 2/2 responses did not
+  match`, exit 1 (2 items generated). A page bullet should not name the
+  index format without that attribution, or it repeats the same drift.
 
 Verification: run a throwing handler through `bun src/index.ts -c`
 (throw-on-item-2-of-5, capture the verbatim stderr line + exit code — the
