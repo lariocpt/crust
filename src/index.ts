@@ -37,6 +37,10 @@ usage:
   crust <file.crust>       run a script file and exit
   crust -c <line>          run one line and exit
   crust --check <line>     parse without running (lint documented examples)
+  crust mcp                serve the Model Context Protocol over stdio —
+                           every crust capability as a direct MCP tool; the
+                           host owns stdin/stdout, so this is a shell
+                           command, never a line at the REPL.
   cmd | crust              run lines piped on stdin and exit
   crust --env-file <path>  load a .env before running (any run mode; missing
                            file exits 2 — loudly, never a silent no-op)
@@ -233,6 +237,26 @@ async function main(): Promise<void> {
       }
       process.stdout.write(`ok: ${checked} line(s) parse\n`);
       process.exit(0);
+    }
+    // `crust mcp` — the Model Context Protocol server. A MODE, not a tool
+    // builtin: it takes over stdin/stdout for the JSON-RPC connection, which
+    // only makes sense as a whole process the MCP host spawns — a REPL line
+    // `mcp` would fight the editor for the terminal (runLine refuses it).
+    if (flag === "mcp") {
+      const rest = argv.slice(1);
+      if (rest[0] === "-h" || rest[0] === "--help") {
+        const { MCP_USAGE } = await import("./mcp/server");
+        process.stdout.write(MCP_USAGE);
+        process.exit(0);
+      }
+      if (rest.length > 0) {
+        process.stderr.write(
+          `crust: mcp takes no arguments (it speaks JSON-RPC on stdin) — got ${rest.join(" ")}\n`,
+        );
+        process.exit(2);
+      }
+      const { runMcp } = await import("./mcp/server");
+      await shutdown(await runMcp({ envFile }));
     }
     if (flag.startsWith("-")) {
       process.stderr.write(`crust: unsupported argument: ${flag}\n`);

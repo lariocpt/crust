@@ -8,6 +8,24 @@ pre-1.0, so minor versions may carry breaking changes.
 
 ### Added
 
+- **`crust mcp` — the Model Context Protocol server.** An MCP-capable agent
+  (OpenCode, Claude Code, Codex, Cursor) now drives crust directly over
+  JSON-RPC stdio, with every capability as a first-class tool. One-shot
+  tools (`crust_run_line`, `crust_check_line`, `crust_test_fixture`,
+  `crust_test_pipes`, `crust_gen_fixtures`, `crust_verify_web_links`,
+  `crust_load_run`) run a fresh crust child per call — real exit codes,
+  killable process groups, per-call `cwd`/`env`. Lifecycle tools hold a
+  **mock server, a supervised `procs` runner, or a buffered `logs` session**
+  open across calls and tear everything down on exit (stdin EOF or signal,
+  SIGTERM→SIGKILL escalation per process group). The protocol surface is
+  hand-rolled to keep the binary zero-dependency, and the repo's first
+  design rule ports intact: a nonzero exit, a killed timeout or a failed
+  assert is always an `isError` result with verbatim output, output caps are
+  always announced, and zero matches is an answer, never silence. `procs()`
+  gained `opts.signal` — the per-instance kill a multi-session supervisor
+  needs (a global SIGINT would tear down every session at once). A REPL line
+  `mcp` refuses with the real reason instead of sh's `command not found`.
+  The `crust-mcp` skill ships with `crust skills install`.
 - **Scripts take positional arguments.** `crust script.crust prod staging`
   used to exit **2** (`script arguments are not supported`) — parameterizing a
   script meant the environment. Now the extra arguments are the script's

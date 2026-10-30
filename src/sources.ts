@@ -635,6 +635,15 @@ export interface ProcsOpts {
   killGraceMs?: number;
   /** ready uptime that clears the restart strike counter (default 10s) — injectable for tests */
   healthyUptimeMs?: number;
+  /**
+   * Per-instance kill for programmatic supervisors (`crust mcp` procs
+   * sessions). Aborting it triggers the SAME escalation the SIGINT/SIGTERM
+   * handlers do — kill() owns SIGTERM → grace → SIGKILL — so a supervisor
+   * that owns several pipelines can tear ONE down without emitting a global
+   * signal that would kill the others. `tail` already takes a signal; this
+   * is the procs counterpart.
+   */
+  signal?: AbortSignal;
 }
 
 export function procs(
@@ -735,6 +744,16 @@ export function procs(
       };
       process.on("SIGINT", kill);
       process.on("SIGTERM", kill);
+      // Per-instance kill for programmatic supervisors: aborting opts.signal
+      // runs the exact same escalation as a SIGINT here (kill() owns it), so
+      // a multi-pipeline owner (crust mcp) can stop ONE session without a
+      // global signal. An already-aborted signal kills on first subscribe.
+      const signal = opts.signal;
+      const onAbort = (): void => void kill();
+      if (signal) {
+        if (signal.aborted) onAbort();
+        else signal.addEventListener("abort", onAbort, { once: true });
+      }
 
       async function* streamOf(
         name: string,
@@ -990,6 +1009,7 @@ export function procs(
       } finally {
         process.off("SIGINT", kill);
         process.off("SIGTERM", kill);
+        signal?.removeEventListener("abort", onAbort);
         // kill() carries the full SIGTERM -> grace -> SIGKILL escalation (or,
         // after a Ctrl-C, is already carrying it) — await it so teardown only
         // returns once every group is gone.

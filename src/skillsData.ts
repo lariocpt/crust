@@ -8,6 +8,7 @@ import crustBuiltins from "../skills/crust-builtins/SKILL.md" with { type: "text
 import crustCli from "../skills/crust-cli/SKILL.md" with { type: "text" };
 import crustLoadTesting from "../skills/crust-load-testing/SKILL.md" with { type: "text" };
 import crustLogs from "../skills/crust-logs/SKILL.md" with { type: "text" };
+import crustMcp from "../skills/crust-mcp/SKILL.md" with { type: "text" };
 import crustMockServer from "../skills/crust-mock-server/SKILL.md" with { type: "text" };
 import crustPipelines from "../skills/crust-pipelines/SKILL.md" with { type: "text" };
 import crustProcs from "../skills/crust-procs/SKILL.md" with { type: "text" };
@@ -23,6 +24,7 @@ export const EMBEDDED_SKILLS: EmbeddedSkill[] = [
   { name: "crust-cli", content: crustCli },
   { name: "crust-load-testing", content: crustLoadTesting },
   { name: "crust-logs", content: crustLogs },
+  { name: "crust-mcp", content: crustMcp },
   { name: "crust-mock-server", content: crustMockServer },
   { name: "crust-pipelines", content: crustPipelines },
   { name: "crust-procs", content: crustProcs },
@@ -106,7 +108,7 @@ async function statusAt(path: string, content: string): Promise<SkillStatus> {
  * Both scopes in one pass.
  *
  * The picker can switch target with `g` while it is open, and a redraw has to
- * be synchronous — so the answer for both scopes is read up front (nine small
+ * be synchronous — so the answer for both scopes is read up front (ten small
  * files, twice) rather than re-queried on every keypress.
  */
 export async function skillStatuses(skill: EmbeddedSkill): Promise<SkillStatuses> {

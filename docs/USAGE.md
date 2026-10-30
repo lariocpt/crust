@@ -21,6 +21,7 @@ Mock it, test it, load it, tail it: the whole test stack baked into one binary. 
 - [mock-server](#mock-server)
 - [verify-web-links](#verify-web-links)
 - [logs — interactive log searching](#logs--interactive-log-searching)
+- [MCP server (`crust mcp`)](#mcp-server-crust-mcp)
 - [Editor keybindings](#editor-keybindings)
 - [Job control](#job-control)
 - [Configuration (`init.ts`)](#configuration-initts)
@@ -2104,6 +2105,65 @@ base64 --help
 ```
 
 Note: function-as-source now **flattens Array return values** — `fn` returning `[a, b, c]` emits three items, not one array. This makes `sql "..."` and similar row-yielding sources compose naturally with downstream lambdas.
+
+---
+
+## MCP server (`crust mcp`)
+
+`crust mcp` speaks the **Model Context Protocol** over stdio — JSON-RPC 2.0,
+one message per line — so an MCP-capable agent (OpenCode, Claude Code, Codex,
+Cursor, …) drives crust directly instead of fumbling a shell. Every capability
+is a first-class tool in `tools/list`, so the agent sees them directly.
+
+It is a whole-process **mode**, not a REPL builtin: the MCP host owns stdin
+and stdout. Running `crust mcp --help` prints the contract; a `mcp` line at
+the REPL refuses with that explanation rather than sh's misleading 127.
+
+Register it with the host (OpenCode / Claude Code style config):
+
+```bash
+# { "mcpServers": { "crust": { "command": "crust", "args": ["mcp"] } } }
+```
+
+Verify by hand — the transport is just lines on stdin, so `printf | crust mcp`
+is a real smoke test (initialize, then `tools/list`):
+
+```bash
+printf '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}\n{"jsonrpc":"2.0","method":"notifications/initialized"}\n{"jsonrpc":"2.0","id":2,"method":"tools/list"}\n' | crust mcp
+```
+
+### Two execution planes
+
+| Plane | Tools | State |
+| --- | --- | --- |
+| **One-shot** | `crust_run_line`, `crust_check_line`, `crust_test_fixture`, `crust_test_pipes`, `crust_gen_fixtures`, `crust_verify_web_links`, `crust_load_run` | a fresh crust child per call; `cwd`/`env` apply per call and never persist |
+| **Lifecycle** | `crust_mock_server_start/stop/list/violations`, `crust_procs_start/stop`, `crust_logs_open/query/close` | held in the server across calls; every held job dies when the server exits |
+
+`crust_run_line` runs ordinary crust grammar — the same `|`-stages, lambdas
+and builtins as `crust -c`. `crust_check_line` is `--check` over MCP: it
+parses without running, so generated crust can be validated before it costs
+a run. The lifecycle tools mirror the `mock-server`, `procs` and `logs`
+builtins — a mock server or dev runner started by one call is still serving
+on the next, and the query tools iterate on the buffered past with pipeline
+fragments exactly like `logs>`.
+
+### Contracts, stated honestly
+
+- **Never a false pass.** A nonzero child exit, a killed timeout, a failed
+  `assert` or a mock validation error is an `isError` result carrying the
+  verbatim exit code and output. Zero matches is an explicit "zero items",
+  never silence. A load run that measured nothing is refused (`empty`).
+- **Output is capped per stream** (256 KB, tail-kept) and truncation is
+  always announced, never silent.
+- **Lifetime.** stdin EOF, SIGINT or SIGTERM tear down every held job —
+  mock ports closed, `procs` process groups SIGTERM→SIGKILL'd — before the
+  process exits. A stop past 10s of unwinding reports "teardown still in
+  flight" rather than claiming children are gone.
+- **One tool call runs at a time** (the interrupt bus is process-global), so
+  concurrent queries can't fire each other's shell children.
+
+The `crust-mcp` agent skill (installed with `crust skills install`) maps each
+task to the right `crust_*` tool.
 
 ---
 
