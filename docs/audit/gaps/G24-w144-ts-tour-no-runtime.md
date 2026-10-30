@@ -32,9 +32,19 @@ only in the loadConfig-injected map:
   `import slugify from "slugify"` — standard node_modules resolution from
   the file's location (G13 R1). The failure is specifically the
   bare-globals premise, not the third-party import.
-- Sub-claim (1)/(3): `// → "Hello-World"` is the wrong annotation for the
-  same call whose bash twin (W143) correctly reads `# → hello-world` —
-  slugify's default is lowercased.
+- Sub-claim (1)/(3), corrected in place 2026-10-30: the annotation question
+  was inverted in the original audit. slugify 1.6.9 — the registry-current
+  and audit-era version (published 2026-04-01) — does NOT lowercase by
+  default: README L27 `lower: false, // convert to lower case, defaults to
+  false`; source `if (options.lower)` (index.js L57). Measured 2026-10-30
+  against slugify@1.6.9 pinned in node_modules: default
+  `slugify("Hello World")` → `"Hello-World"`, `slugify("My Cool Title")` →
+  `"My-Cool-Title"`, and only `slugify("Hello World", {lower: true})` →
+  `"hello-world"`. So the TS annotation `// → "Hello-World"` was CORRECT as
+  written, and the bash-twin comments (`# → hello-world`, W143; `# →
+  my-cool-title` in Common patterns) were the wrong ones — corrected in
+  place in the G24 site commit (see ## Commit). The W144 "X" verdict stands
+  on the bare-globals premise above, not on this sub-claim.
 
 Context: 288b2d3 (2026-10-06) already fixed this exact drift class on five
 other pages ("quickstart's `bun script.ts gets crust globals` claim inverted
@@ -50,7 +60,11 @@ headline tour, so the trust cost is high relative to the fix size.
 
 ## Out of scope for this gap (cross-refs, NOT closed here)
 
-The W143 bash tour and its probe stay as-is (correct as written). The U129
+The W143 bash tour's commands and its probe stay as-is (correct as written);
+its output annotations (`# → hello-world`, `# → my-cool-title`) were wrong
+under slugify 1.6.9 and were corrected in place in the G24 site commit
+(2026-10-30) — the W143 row's "correct as written" basis for those comments
+is thereby void. The U129
 checkout-import mode (`../src/…` paths) is the honest alternative the tour
 could adopt and is settled C on its own row. The (b) probes (W144's
 `bun -e 'console.log(typeof range)'`-style confirmation) ride the queue and
@@ -67,8 +81,11 @@ into the runtime where the injected globals already live — U61's source
 row, settled in (a)), so the bare `Pipeline`/`glob` names resolve; or
 (b) keep `bun script.ts` but import explicitly from the checkout
 (`import { Pipeline } from "../src/pipeline"`-style, per U129's honest
-form) and drop the "no crust runtime needed" comment. In either case (c)
-correct the annotation to `// → "hello-world"`. Check the db-drivers.mdx
+form) and drop the "no crust runtime needed" comment. (c), corrected in
+place 2026-10-30: the TS annotation `// → "Hello-World"` is already CORRECT
+as written (slugify 1.6.9 does not lowercase by default — see the measured
+sub-claim above); the wrong annotations were the bash-twin comments,
+corrected in place. Check the db-drivers.mdx
 and quickstart.mdx tours for the same bare-globals idiom (288b2d3 covered
 them; verify nothing regressed) and align `docs/USAGE.md` if it echoes the
 "no crust runtime needed" line.
