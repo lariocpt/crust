@@ -381,10 +381,13 @@ curl -fsSL https://raw.githubusercontent.com/lariocpt/crust/main/install.sh | ba
   Costed, not guessed: a token pass is free (0.1 ms at 2000 chars) and colour does
   not move the cursor, but an incomplete token classifies as a shell stage (so the
   colour flips 4–5 times per line while typing, and `parse()` throws on 3–11 % of
-  prefixes), which needs a tolerant second grammar — on the same column arithmetic
-  that is character-based where the terminal counts cells (G32, G31). If the cell
-  arithmetic ever lands, this becomes cheap; until then a real editor plus
-  `crust --check` is the answer.- Fuzzy history search (Ctrl-R)
+  prefixes), which needs a tolerant second grammar. The column arithmetic that this
+  used to lean on as a second blocker **landed 2026-10-30** — `cells()` in
+  `src/width.ts` (G32) measures every column the editor moves — so the remaining
+  cost is the tolerant tokenizer alone; G31's wrapped-repaint still shares that
+  paint path. Until that lexer exists, a real editor plus `crust --check` is the
+  answer.
+- Fuzzy history search (Ctrl-R)
 - Async completion / completion plugins
 - ~~`|>` pipe operator in TS~~ — **decided, won't fix**: crust's `|` is already the pipe; TS uses `.pipe()`
 - ~~`[0..9]` range-literal syntax~~ — **decided, won't fix**: collides with the JSON-array literal and the shell's `[ … ]` test; `range(a, b)` / `seq` cover it

@@ -2488,17 +2488,16 @@ Honest about what doesn't work yet:
 - **No syntax highlighting in the editor — a costed decision, not an oversight.**
   Measured 2026-10-29: a full `tokenize` + `classify` pass over a 2000-character
   line costs **0.1 ms**, and ANSI colour bytes do not move the cursor, so neither
-  CPU nor the paint is the obstacle. Three other things are: the lexer classifies
-  an *incomplete* token as a shell stage, so the line you are typing is painted
-  as shell until its head token closes — **4–5 colour flips per line** for a
-  classify-based highlighter, with `parse()` throwing on 3–11 % of prefixes; a
+  CPU nor the paint is the obstacle. Two things are: the lexer classifies an
+  *incomplete* token as a shell stage, so the line you are typing is painted as
+  shell until its head token closes — **4–5 colour flips per line** for a
+  classify-based highlighter, with `parse()` throwing on 3–11 % of prefixes; and a
   tolerant tokenizer with its own "in progress" state is effectively a second
-  grammar to maintain; and every paint site would have to agree with the terminal
-  in **cells**, an arithmetic the editor does not have yet (it counts characters
-  where a terminal moves columns — the same arithmetic that misplaces the caret on
-  double-width glyphs, `docs/audit/gaps/G32-wide-glyph-caret-drift.md`, and that
-  G31's wrapped-repaint bug lives on). The working route today: put the line in a
-  file and let your editor highlight it, and use
+  grammar to maintain. A third obstacle came down on 2026-10-30: the editor used to
+  count characters where a terminal moves columns, and now measures every column in
+  **cells** (`src/width.ts`), so it is no longer a reason to leave this unbuilt —
+  the tokenizer is. The working route today: put the line in a file and let your
+  editor highlight it, and use
   [`--check`](#checking-a-line-without-running-it) on the one you are unsure about.
 
 ### Syntax we deliberately did not add
