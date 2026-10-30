@@ -32,7 +32,7 @@ whose stages are all ordinary commands is handed to `sh -c` untouched.
 | `expect 201` / `expect 2xx` | status assertion, counts mismatches, fails at drain |
 | `stats [--every N] [--out f.json]` | summary: count/rps/status histogram/p50/p95/p99 |
 | `parallel N` | modifier: fan-out for the NEXT stage (http, lambda, or fn — anything else errors) |
-| `sql "SELECT …" $1-params` | registered fn — rows stream one item each (needs `$DATABASE_URL`) |
+| `sql "SELECT …" ?-params` | registered fn — `?` is the bind placeholder; rows stream one item each (needs `$DATABASE_URL`) |
 | `range(1,1) \| sql "… WHERE id = ?"` | mid-pipeline, the upstream item BINDS as the first parameter when the line declares none (an explicit param wins); rows stream one item each in both positions |
 | anything else | plain shell via `sh -c` |
 
@@ -99,7 +99,7 @@ range(1, 5) | (n => n * n) | sort -rn
 {"name": "x"} | POST :3000/users | assert (r => r.status === 201) | (r => r.json()) | assert (u => u.id > 0)
 
 # DB verification — rows stream, assert sees each row object
-sql "SELECT count(*)::int AS c FROM users WHERE email = $1" "a@b.c" | assert (r => r.c === 1)
+sql "SELECT count(*)::int AS c FROM users WHERE email = ?" "a@b.c" | assert (r => r.c === 1)
 
 # fan out any per-item work
 read fixtures/*.json | parallel 8 | POST :3000/users | expect 2xx

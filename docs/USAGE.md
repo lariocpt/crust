@@ -177,7 +177,14 @@ The edges, all measured:
   `{"v": "$1"} | (x => x.v) | capture ENV` — then use `$ENV`.
 - **Fn args are positionals, not SQL placeholders**: `sql "… WHERE name = $1"`
   expands the script's `$1` into the query; the bound-parameter placeholder is
-  `?` — `sql "… WHERE name = ?" "Court"`.
+  `?` — `sql "… WHERE name = ?" "Court"`. Crust rewrites `?` to `$n` for `postgres://`/`postgresql://`
+  URLs and leaves every other dialect's query byte-for-byte as written (sqlite's
+  placeholder really is `?`, mysql's is too). Two edges: Postgres's jsonb `?`
+  operator (`WHERE data ? 'key'`) reads as a placeholder in a query that also binds
+  parameters, so spell it `jsonb_exists(data, 'key')`; and a query that arrives
+  unfinished — `$1` expanded to nothing, so it ends on `= ` — now fails with
+  `sql: $n in this query is a script POSITIONAL argument…` instead of the driver's
+  `syntax error at end of input`.
 - **`source <file> [args…]`** hands the args to the *sourced* file — its `$0`
   is its own path — and restores the caller's positionals when the file ends.
 
