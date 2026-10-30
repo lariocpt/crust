@@ -207,20 +207,50 @@ export async function readLine(opts: EditorOpts): Promise<string | null> {
   stdin.resume();
   stdout.write(prompt);
 
-  // Put the cursor `n` columns left of where the last paint ENDED. Every paint
-  // ends at the visual end of its own text, so this is the one cursor rule the
-  // draft line and the search line share.
-  const place = (n: number): void => {
-    if (n > 0) stdout.write(CSI + n + "D");
-  };
-
-  // G32 — the ONE place the draft caret's distance is computed, and it counts
+  // G32 — the ONE place the draft caret's position is computed, and it counts
   // CELLS, not characters: a terminal's back-tab moves columns, so every
   // double-width glyph to the right of the caret used to leave the caret one
   // column too far right (`echo 日本` +2). `buf` stays character-indexed; only
   // this conversion crosses into the terminal's unit.
-  const placeRightOfCaret = (): void => {
-    place(cells(buf.slice(cursor)));
+  // G37 — and the ROW the offset sits on, with the same model `backToCol0` and
+  // the render climb are built on: offset o sits at row floor(o / width),
+  // column o % width — an exact multiple of the width sits at column 0 of the
+  // NEXT row (the wrap is pending or already happened), which floor() gives for
+  // free. The old placement was a single backtab of v - o, and a terminal's
+  // back-tab (CUB) stops at column 0 of the CURRENT row — it never climbs — so
+  // a move that crossed a wrap boundary clamped at column 0 of the line's END
+  // row, one or more rows too low, and the next repaint climbed from a cursor
+  // that was already too low (the G31 smear signature returned; measured
+  // 2026-10-30 in the G31 probe: 8 lefts expected (x=29, row 2), got (x=0, row 3)).
+  const caretRowCol = (o: number, width: number): [number, number] => [
+    Math.floor(o / width),
+    o % width,
+  ];
+
+  // Re-position the cursor from where the last paint ENDED (the row/column of v)
+  // to the caret's true position (the row/column of o), both derived from the
+  // recorded cells. Only `paintDraft` calls it — the search line counts back
+  // with `backToCol0` and never needs a mid-line target.
+  const placeCaret = (o: number, v: number, width: number): void => {
+    if (o >= v) return; // caret at the paint's end: the cursor already sits there
+    const [tRow, tCol] = caretRowCol(o, width);
+    const [eRow, eCol] = caretRowCol(v, width);
+    if (tRow === eRow) {
+      // Same row: the single backtab the pre-fix placement got right (within one
+      // row, v - o = eCol - tCol), kept so a line that fits never gains row moves
+      // (pinned by a control test).
+      if (eCol > tCol) stdout.write(CSI + (eCol - tCol) + "D");
+    } else {
+      // tRow < eRow only — o <= v is monotone, the caret is never past the
+      // paint's end, so a descend is impossible. Climb to the target row first,
+      // then adjust within it: a backtab can only move LEFT, so a target to the
+      // RIGHT of the end column must use CUF — and CUF cannot scroll here,
+      // because the target column is inside the row (tCol < width) and the move
+      // never crosses the right margin. Equal columns: the climb alone.
+      stdout.write(CSI + (eRow - tRow) + "A");
+      if (tCol > eCol) stdout.write(CSI + (tCol - eCol) + "C");
+      else if (eCol > tCol) stdout.write(CSI + (eCol - tCol) + "D");
+    }
   };
 
   const termWidth = (): number => (stdout.columns && stdout.columns > 0 ? stdout.columns : 80);
@@ -262,8 +292,8 @@ export async function readLine(opts: EditorOpts): Promise<string | null> {
 
   const render = (): void => {
     const width = termWidth();
-    // Rows the PREVIOUS paint occupied. When it wrapped, `placeRightOfCaret` had
-    // left the cursor somewhere in the MIDDLE of the line, and `\r` is column 0 of
+    // Rows the PREVIOUS paint occupied. When it wrapped, `placeCaret` had left
+    // the cursor somewhere in the MIDDLE of the line, and `\r` is column 0 of
     // the CURRENT row — so the repaint re-emitted the whole draft from there and
     // the wrap pushed another copy of the prompt down the screen on every
     // keystroke (G31, measured in tmux at 30 columns with a 35-cell prompt). Climb
@@ -288,12 +318,14 @@ export async function readLine(opts: EditorOpts): Promise<string | null> {
   const paintDraft = (): void => {
     const width = termWidth();
     const visual = promptLen + cells(buf);
+    // The caret's offset from the line's start, in cells: the ONE number both
+    // the placement and the next repaint's climb derive from, so measure and
+    // motion cannot drift (G32's rule).
+    const caretOff = promptLen + cells(buf.slice(0, cursor));
     stdout.write(prompt + buf + CSI + "K");
-    placeRightOfCaret();
+    placeCaret(caretOff, visual, width);
     draftPaintCells = visual;
-    // The caret's offset from the line's start: where `placeRightOfCaret` left the
-    // cursor, which is what the next repaint counts up from.
-    draftCaretCells = promptLen + cells(buf.slice(0, cursor));
+    draftCaretCells = caretOff;
     // Did this paint end flush with the width? `paintDraft` is the only writer of
     // the draft line, so this is the wrap state that entering search mode trusts:
     // at the flush point the terminal has already moved to the next row, and a
