@@ -824,6 +824,14 @@ export function builtinInShellRefusal(stageText: string): string | null {
   if (!text) return null;
   const sp = text.search(/\s/);
   const head = sp === -1 ? text : text.slice(0, sp);
+  // `crust mcp` is a MODE the shell spawns, not a builtin a session runs —
+  // sh's `command not found` (127) here would read as a broken installation.
+  if (head === "mcp" && !Bun.which(head)) {
+    return (
+      "mcp is crust's Model Context Protocol server — start it from a shell " +
+      "(`crust mcp`); it owns stdin/stdout, so it cannot run inside a session."
+    );
+  }
   if (!isToolBuiltin(head) || Bun.which(head)) return null;
   const where = head === "logs" ? " A `logs` session takes its filters at the `logs>` prompt." : "";
   return (

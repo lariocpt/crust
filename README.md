@@ -124,7 +124,7 @@ logs> search "connection reset"
 logs> buffer 50000
 ```
 
-**Agent skills.** Nine SKILL.md guides that teach a coding agent to drive
+**Agent skills.** Ten SKILL.md guides that teach a coding agent to drive
 crust — pipelines, fixtures, mocks, load runs, `procs` — installed from the
 binary itself into `.agents/skills/`, the cross-client directory Codex, Cursor
 and OpenCode read, with a link per skill under `.claude/skills/` because Claude
@@ -146,6 +146,23 @@ exits `0`. Piped or non-TTY installs (CI) keep installing everything. Installed
 from npm, `npm install` asks once — silently skipped on CI, when output is
 piped, for a global install, or when crust skills already sit in either path;
 `CRUST_NO_SKILLS=1` stops the question for good.
+
+**MCP server.** `crust mcp` speaks the Model Context Protocol over stdio, so an
+MCP-capable agent (OpenCode, Claude Code, Codex, Cursor) drives crust directly —
+every capability is a first-class tool, not a shell to fumble through. One-shot
+tools (`crust_run_line`, `crust_check_line`, `crust_test_fixture`,
+`crust_load_run`, …) run a fresh crust process per call; lifecycle tools keep a
+**mock server, a supervised `procs` runner, or a buffered `logs` session open
+across calls** and tear them down honestly on exit. A nonzero run is always an
+`isError` result with the verbatim output — never a false pass:
+
+```bash
+# register with any MCP host (OpenCode / Claude Code style):
+# { "mcpServers": { "crust": { "command": "crust", "args": ["mcp"] } } }
+printf '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}\n{"jsonrpc":"2.0","method":"notifications/initialized"}\n{"jsonrpc":"2.0","id":2,"method":"tools/list"}\n' | crust mcp
+```
+
+The `crust-mcp` skill teaches an agent which `crust_*` tool fits which task.
 
 ## What crust is not
 
