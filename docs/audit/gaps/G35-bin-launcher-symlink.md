@@ -1,6 +1,8 @@
 # G35 — the `bin/crust` launcher dies when invoked through a symlinked bin (BLOCKER)
 
-**Status: OPEN.** Reported in the 2026-10-30 dogfood (BUG-2), confirmed on this
+**Status: FIXED 2026-10-30** — crust `608eb33`.
+
+Reported in the 2026-10-30 dogfood (BUG-2), confirmed on this
 checkout. Severity: blocker for the common install shapes — the launcher is what npm
 ships.
 
