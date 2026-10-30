@@ -1,5 +1,6 @@
 import { complete } from "./completion";
 import { searchHistory } from "./history";
+import { cells } from "./width";
 
 const CSI = "\x1b[";
 
@@ -192,7 +193,7 @@ export async function readLine(opts: EditorOpts): Promise<string | null> {
 
   const stdin = process.stdin;
   const stdout = process.stdout;
-  let promptLen = stripAnsi(prompt).length;
+  let promptLen = cells(stripAnsi(prompt));
 
   stdin.setRawMode?.(true);
   stdin.resume();
@@ -203,6 +204,15 @@ export async function readLine(opts: EditorOpts): Promise<string | null> {
   // draft line and the search line share.
   const place = (n: number): void => {
     if (n > 0) stdout.write(CSI + n + "D");
+  };
+
+  // G32 — the ONE place the draft caret's distance is computed, and it counts
+  // CELLS, not characters: a terminal's back-tab moves columns, so every
+  // double-width glyph to the right of the caret used to leave the caret one
+  // column too far right (`echo 日本` +2). `buf` stays character-indexed; only
+  // this conversion crosses into the terminal's unit.
+  const placeRightOfCaret = (): void => {
+    place(cells(buf.slice(cursor)));
   };
 
   const termWidth = (): number => (stdout.columns && stdout.columns > 0 ? stdout.columns : 80);
@@ -233,12 +243,12 @@ export async function readLine(opts: EditorOpts): Promise<string | null> {
 
   const render = (): void => {
     stdout.write("\r" + prompt + buf + CSI + "K");
-    place(buf.length - cursor);
+    placeRightOfCaret();
     // Did this paint end flush with the width? `render` is the only writer of
     // the draft line, so this is the wrap state that entering search mode
     // trusts: at the flush point the terminal has already moved to the next row,
     // and a newline there would SCROLL the screen rather than open a line.
-    draftWrapped = (promptLen + buf.length) % termWidth() === 0;
+    draftWrapped = (promptLen + cells(buf)) % termWidth() === 0;
   };
 
   // Paint the editor's own line at the cursor's row, from column 0. The caller
@@ -246,7 +256,7 @@ export async function readLine(opts: EditorOpts): Promise<string | null> {
   // before (see leaveSearch).
   const paintDraft = (): void => {
     stdout.write(prompt + buf + CSI + "K");
-    place(buf.length - cursor);
+    placeRightOfCaret();
   };
 
   // The search line, painted from column 0: "<prompt><query><match-or-marker>",
@@ -256,7 +266,10 @@ export async function readLine(opts: EditorOpts): Promise<string | null> {
   const paintSearch = (fresh: boolean): void => {
     if (!fresh) replacePaint(searchBack);
     const text = SEARCH_PROMPT + sq + (smatch ?? NO_MATCH);
-    searchVisual = stripAnsi(text).length;
+    // Cells again (G32): this number is how far the NEXT replace counts back to
+    // column 0, and a wide query or match made it short, leaving the previous
+    // paint's tail on screen.
+    searchVisual = cells(stripAnsi(text));
     searchBack = backToCol0(searchVisual, termWidth());
     searchRows = searchVisual === 0 ? 0 : Math.floor((searchVisual - 1) / termWidth());
     stdout.write(text);
@@ -316,7 +329,7 @@ export async function readLine(opts: EditorOpts): Promise<string | null> {
   // wrap flag: a fresh prompt line starts at column 0 with nothing painted.
   const setPrompt = (p: string): void => {
     prompt = p;
-    promptLen = stripAnsi(p).length;
+    promptLen = cells(stripAnsi(p));
     draftWrapped = false;
   };
 
