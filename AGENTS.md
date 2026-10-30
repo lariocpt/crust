@@ -49,11 +49,17 @@ every example. If you change the grammar, those go red before users do.
 
 ## Hard constraints
 
-- **The shipped artifact is a compiled Bun binary** (`bun build --compile`).
-  Code that dynamically imports USER files (fixtures) works, but those files
-  can only import relative modules and Bun builtins — NO third-party npm
-  resolution at runtime. Never add a feature that requires fixtures to
-  import npm packages; point users at `Bun.SQL`, `Bun.file`, etc.
+- **The shipped artifact is a compiled Bun binary** (`bun build --compile`),
+  and the crust bundle itself stays zero-dependency. USER files (fixtures,
+  `init.ts`) are dynamically imported and do standard node_modules
+  resolution walking UP from their own location — third-party npm works
+  under the binary (measured 2026-10-18, G13 probes P1b/P2/P4, Bun v1.4.3:
+  a fixture's `import leftPad from "left-pad"` loads and `lp hi` → `000hi`,
+  exit 0; a missing package fails loud with `import failed: Cannot find
+  package '…' imported from <file>`). So install third-party deps next to
+  the user file (its project dir, or `~/.config/crust/` for init.ts) —
+  keep the bundle clean, and never document a resolution behavior you
+  haven't run through the binary.
 - Keep the fixture runner semantics backward compatible: 0-arg functions
   resolve, 1-arg functions in `input` receive the setup context, 1+-arg
   functions in `output` are matchers `(actual, ctx)`, async matchers are
