@@ -95,6 +95,18 @@ pre-1.0, so minor versions may carry breaking changes.
 
 ### Fixed
 
+- **The launcher follows symlinks, so installs work.** `bin/crust` is the script npm
+  ships as `crust`, and it resolved its own directory from the path it was *invoked*
+  through. Package managers install bins as symlinks into `node_modules/.bin`, so run
+  from there it looked for `crust-bin` — and, in the dev branch, `../src/index.ts` —
+  beside the `.bin` directory, found neither, and died with
+  `Module not found "…/node_modules/.bin/../src/index.ts"`. It now walks the symlink
+  chain with plain `readlink` before taking the directory (BSD `readlink` has no `-f`,
+  and the release matrix builds darwin), so both branches resolve wherever the binary
+  actually lives. Reproduced first through exactly the installed shape; pinned by
+  tests for the symlink, a symlink chain, the dev fallback and a BSD-shaped
+  `readlink`, with the real-path invocation kept as a control.
+
 - **A redirect no longer gets to decide what your stage is.** A stage pattern is
   matched against the whole text, so appending `> f` to `range(1,3)` made it stop
   matching as a `range`, fall through to shell, and die with sh's own
