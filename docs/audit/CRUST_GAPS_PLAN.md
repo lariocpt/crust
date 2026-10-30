@@ -88,7 +88,8 @@ Cheapest and least risky first; the two doc-only ones open the branch.
       → **FIXED 2026-10-30** · site `6e71fb9`
 - [x] **G15** — procs page: `elapsed: 1,842 ms` pin vs `toFixed(0)` → [file](gaps/G15-procs-elapsed-comma.md)
       → **FIXED 2026-10-30** · site `7073831` (crust exonerated: `toFixed(0)` never grouped — the PIN was wrong)
-- [ ] **G16** — verify-web-links page: 4-line pre-deploy gate incomplete as written → [file](gaps/G16-vwl-ci-gate-incomplete.md)
+- [x] **G16** — verify-web-links page: 4-line pre-deploy gate incomplete as written → [file](gaps/G16-vwl-ci-gate-incomplete.md)
+      → **FIXED 2026-10-31** · site `ec4791e` — the gate's 4th line pointed `verify-web-links` at `:3000`, a port the gate never starts (probe: steps 1–3 green, step 4 exit 2 "no sitemap entries found" = the site is not running); the line now uses `$PREVIEW_URL` like the sibling example, the prose states the premise (the built site must already be running on the port `$PREVIEW_URL` points at — the gate never starts it itself), and the failure mode is documented; the dead-port message itself is left flagged, no code change
 - [ ] **G17** — agent-skills index: crust-cli description in the `skills list` block lags the SKILL.md frontmatter (missing "tool subcommands" clause) → [file](gaps/G17-cli-skill-desc-drift.md)
 - [x] **G18** — pipelines page: "SQL placeholders survive untouched" sentence omits the script-positional rule SKILL.md states (site behind) → [file](gaps/G18-pipelines-sql-placeholder-drift.md)
       → **FIXED 2026-10-30** · site `d136fdb`
