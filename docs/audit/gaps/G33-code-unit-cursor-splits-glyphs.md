@@ -190,6 +190,13 @@ submits a clean `M-` line; a half pair would reach the shell as U+FFFD and print
   and nothing in `docs/USAGE.md` or the website claims anything about caret
   granularity — the REPL keybindings table lists what each key does, not glyph
   semantics — so no page and no bullet needed touching.
+- **MCP retro (2026-10-31 standing order): reviewed, no overlap.** The nine
+  `crust_*` tools (`run_line`, `check_line`, `test_fixture`, `test_pipes`,
+  `gen_fixtures`, `verify_web_links`, `load_run` + the mock-server / procs / logs
+  lifecycle) never surface the interactive editor, and neither `skills/crust-mcp`
+  nor the USAGE MCP section documents keybinding or caret semantics — a
+  grapheme-aware cursor changes nothing the MCP contract claims, so no MCP
+  change was made or is owed.
 - **KB** (crust-agent submodule, local commit only — ingest is operator-controlled):
   new `knowledge/learnings/round-10-grapheme-cursor.md` (the rule, the
   decode-layer finding, the harness traps, the probe gotchas);
