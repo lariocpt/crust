@@ -1,6 +1,8 @@
 # G34 — `sql` never converts the documented `?` placeholder; every bound query dies (BLOCKER)
 
-**Status: OPEN.** Reported in the 2026-10-30 dogfood (`~/CRUST-BUGS-30-oct.md`, BUG-1),
+**Status: FIXED 2026-10-30** — crust `83177a1`, site `bad3f38`.
+
+Reported in the 2026-10-30 dogfood (`~/CRUST-BUGS-30-oct.md`, BUG-1),
 verified independently on this checkout the same day. Severity: **blocker** — there is
 no working way to bind a parameter, on the shape three docs and the CHANGELOG tell
 people to write.
@@ -117,6 +119,39 @@ regression is untested surface, not a flake.
    `ab` (that is correct behaviour and must not be "fixed" by the sql change), and a
    query containing `$1` with zero params must produce crust's new named error, not a
    driver syntax error.
+
+## What shipped, and where this dossier's own predictions were wrong
+
+crust `83177a1` (tests in `tests/sql.test.ts`), site `bad3f38`: `queryForDialect()` as the
+single decision point, `toDollarPlaceholders()` as the scanner, the named diagnostic, and
+the skills/site corrected. Three predictions above did not survive contact with the
+machine, and the corrections matter more than the fix:
+
+- **The sqlite end-to-end test is NOT the guard against an ungated rewrite.** The plan
+  said it would go red if the gate were removed. It does not: Bun's sqlite driver accepts
+  `$1` exactly as happily as `?` (measured — both return the row), so a wrong rewrite is
+  invisible there. The mutation check caught the false claim; the gate is pinned instead
+  at `queryForDialect` with an explicit mysql row, where the same mistake IS a syntax
+  error. Cost invisible on one dialect, fatal on another — that is the case for testing
+  the decision, not only the endpoints.
+- **The `''` escape branch cannot be caught by any output test.** An exhaustive sweep over
+  strings built from `{'`, `?`, space, `a}` up to six tokens found **zero** inputs where
+  the escaped-quote reading differs from naive pairing — both consume quotes in pairs, and
+  it is the parity of quotes before a `?` that protects it. Recorded at `scanQuoted`
+  instead of hiding behind a test that merely looks like it pins the branch.
+- **The diagnostic's planned precondition was wrong for the real failure.** Planned as
+  "params empty and `/\$\d/` matches". The dogfood's line declares a param
+  (`… WHERE email = $1" "a@b.c"`), and `$1` is expanded *before* crust sees the string, so
+  there is no `$n` left AND params are non-empty. The signal that works is a tail ending on
+  an operator — impossible in valid SQL — firing regardless of param count, with a control
+  test keeping the documented `| sql "SELECT count(*) FROM t"` pattern legal.
+
+Shipped as predicted: dialect gating, the jsonb `?` limit documented (`jsonb_exists(...)`),
+`crust-pipelines` :102/:35 off the dead form. Beyond the plan: the site's `db-drivers`
+callout had the rule *backwards* ("Postgres uses `$1` … match the engine's style") and
+three further examples taught it too; the callout now carries the measured interpolation
+evidence (`{"v":"X"}` for arg `X`, `unterminated quoted string` for `O'Hara`, and the `?`
+bind returning `{"v":"O'Hara"}` intact).
 
 ## Docs half (same gap, different file)
 
