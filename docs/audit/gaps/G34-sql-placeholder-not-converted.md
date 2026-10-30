@@ -68,6 +68,33 @@ fixes Postgres and **breaks sqlite**. The conversion must be gated on the dialec
   literal `?` in a constant survives (the docs already promise untouched queries when
   nothing binds).
 
+## Re-measured clean on current main (2026-10-30) — the dialect table
+
+Against a live Postgres (`personal-postgres`, log-verified) and a local sqlite file,
+with the table seeded, and separately against Bun with **no crust in the loop**
+(`db.unsafe(q, params)` direct):
+
+| written | dialect | result |
+|---|---|---|
+| `sql "SELECT name FROM t3 WHERE id = ?" 42` | postgres | **FAIL** `crust: syntax error at end of input` |
+| `sql "SELECT name FROM t3 WHERE id = $1" 42` | postgres | **FAIL** same message — the parser ate `$1` first |
+| `sql "SELECT name FROM t3 WHERE id = ?" 42` | sqlite | **PASS** `{"name":"alpha"}` |
+
+The no-crust control is the part that closes the argument: raw `Bun.SQL.unsafe` sent
+the literal `?` to Postgres, whose log is explicit —
+`STATEMENT:  SELECT id, name FROM t2 WHERE name = ? AND id = ?` /
+`ERROR: syntax error at or near "AND"`. **Bun does not convert `?` for postgres**, so
+the conversion has to be crust's, and the sqlite row passing *with the same `?` text*
+is why the conversion must be dialect-gated rather than global.
+
+**A false lead worth keeping in this file**: an earlier probe of mine appeared to show
+the opposite — a `test-pipes` run with `PASS` lines and a Postgres log line showing a
+proper `$2` bind. Both halves of that evidence were artifacts: the invocation matched
+**two** files (`2 file(s): 2 pass`), and `docker logs --since 0s` replayed a stale line
+from an older probe whose SQL already used `$n`. Credentials were wrong in the retry
+(`crust: password authentication failed`), which is what exposed it. Recorded because
+"the fix already works" is the most expensive possible mistake on this gap.
+
 ## Why CI missed it (the actual lesson)
 
 There is **no sql test at all** — `grep -l "sqlSource|unsafe" tests/` finds only

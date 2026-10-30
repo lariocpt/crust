@@ -1298,7 +1298,7 @@ test-fixture --target 'fixtures/**/*.crust.ts' --out report.xml   # JUnit for CI
 > shreds every other fixture still running. If you need a full reset, do it
 > once outside the runner, not per-fixture.
 
-**Module resolution caveat:** when the runner is the AOT-compiled binary (the normal install), fixture files can import relative modules and Bun builtins (`Bun.SQL`, `Bun.file`, …) but NOT third-party npm packages — the compiled binary has no `node_modules` walk. Keep fixture helpers on builtins (use `Bun.SQL` instead of `pg`). Under dev mode (`bun src/index.ts`), the full walk works.
+**Module resolution:** files the runner loads — `.crust.ts` fixtures, `.setup.ts` modules, npm packages auto-dispatched as stages — resolve bare specifiers the ordinary Bun way, walking `node_modules` from the file's own location, **including under the AOT-compiled binary**. Measured 2026-10-30 with the release binary: a `x.setup.ts` doing `import shout from "npkg"` set `$GREETING` and the `test-pipes` line passed. What the binary does not carry is a dependency set of its own — crust ships zero runtime dependencies — so anything a fixture imports has to be installed where the fixture lives. Bun builtins (`Bun.SQL`, `Bun.file`) are still the lighter choice for a helper (no install, no version drift between fixture and runner), but that is a preference, not a resolution limit.
 
 Example fixture:
 
@@ -2407,7 +2407,7 @@ crust -c 'echo "Hello World" | slugify'         # → hello-world
 The conventions:
 
 - The shell-line head matches the package name. Scoped packages drop the scope (`@example/cool-pkg` → `cool-pkg`).
-- The package's default export (or single named function) is called as `fn(item, ...args)`. Source-position calls (`pkg | …` as the first stage) pass `undefined` as the first arg.
+- The package's default export (or single named function) is called as `fn(item, ...args)`. In source position (`pkg …` as the first stage) there is no item, and that slot is **absent rather than passed as `undefined`**, so `args.length` is one shorter. Measured with `export default (...args) => JSON.stringify(args)`: `crust -c 'npkg2 one two'` → `["one","two"]` (a leading `undefined` would print `[null,"one","two"]`), while `crust -c 'echo x | npkg2 one'` → `["x","one"]`. Reading the first parameter still evaluates to `undefined`, so only code that *counts* arguments — an overload on `args.length` — can tell the two shapes apart.
 - Packages with a `bin` field are skipped — they continue to behave as shell commands (`prettier foo.ts` still runs the binary). To opt a binary package into stage dispatch anyway, add a `"crust": {}` field to its `package.json`.
 - To select a non-default export, add `"crust": { "stage": "exportName" }` to the package's `package.json`.
 
