@@ -91,5 +91,15 @@ function commonPrefix(strs: string[]): string {
   for (let i = 1; i < strs.length; i++) {
     while (!strs[i]!.startsWith(p)) p = p.slice(0, -1);
   }
+  // The unit-by-unit shrink can stop with `p` ending in a HIGH SURROGATE — a
+  // lone half-pair that is NOT valid UTF-16 and would splice straight into the
+  // buffer (G33: `a🚀x` + `a🚁x` → `a\ud83d`). The segmenter cannot catch this:
+  // to it a lone surrogate is a whole cluster, so the check must be explicit.
+  // (A prefix of a well-formed string can never end in a lone LOW surrogate —
+  // its high always precedes it inside the prefix — so only the high is at risk.)
+  if (p.length > 0) {
+    const last = p.charCodeAt(p.length - 1);
+    if (last >= 0xd800 && last <= 0xdbff) p = p.slice(0, -1);
+  }
   return p;
 }

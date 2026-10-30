@@ -1,6 +1,6 @@
 import { complete } from "./completion";
 import { searchHistory } from "./history";
-import { cells } from "./width";
+import { cells, graphemeEndAfter, graphemeStartBefore } from "./width";
 
 const CSI = "\x1b[";
 
@@ -337,14 +337,18 @@ export async function readLine(opts: EditorOpts): Promise<string | null> {
         }
         break;
       case "C":
+        // One GLYPH, not one code unit (G33): `graphemeEndAfter` steps over a
+        // whole surrogate pair / combining run / ZWJ family / flag.
         if (cursor < buf.length) {
-          cursor++;
+          cursor = graphemeEndAfter(buf, cursor);
           render();
         }
         break;
       case "D":
+        // One GLYPH, not one code unit (G33): `graphemeStartBefore` steps back
+        // over the whole cluster, so a half pair can never be stranded.
         if (cursor > 0) {
-          cursor--;
+          cursor = graphemeStartBefore(buf, cursor);
           render();
         }
         break;
@@ -359,8 +363,15 @@ export async function readLine(opts: EditorOpts): Promise<string | null> {
         render();
         break;
       case "3":
+        // Delete removes the whole cluster to the right of the caret (G33):
+        // the cluster owning the unit just right of it. A caret stuck
+        // mid-cluster deletes that cluster WHOLE rather than splitting it —
+        // the buffer never gains a half pair.
         if (cursor < buf.length) {
-          buf = buf.slice(0, cursor) + buf.slice(cursor + 1);
+          const e = graphemeEndAfter(buf, cursor);
+          const s = graphemeStartBefore(buf, e);
+          buf = buf.slice(0, s) + buf.slice(e);
+          cursor = s;
           render();
         }
         break;
@@ -484,8 +495,9 @@ export async function readLine(opts: EditorOpts): Promise<string | null> {
       const m = chunk.slice(i + 2).match(/^([ABCDHF3])|^(\d+)~/);
       if (m) {
         if (m[1] === "3") {
-          // Delete edits the query, like Backspace.
-          sq = sq.slice(0, -1);
+          // Delete edits the query, like Backspace — one GLYPH, so a query
+          // ending in an emoji loses the whole glyph, never a half pair (G33).
+          sq = sq.slice(0, graphemeStartBefore(sq, sq.length));
           sskip = 0;
           searchRepaint(false);
         } else {
@@ -519,13 +531,15 @@ export async function readLine(opts: EditorOpts): Promise<string | null> {
           stdout.write("\n");
           return -2;
         }
-        sq = sq.slice(0, -1);
+        // One glyph, not one code unit (G33).
+        sq = sq.slice(0, graphemeStartBefore(sq, sq.length));
         sskip = 0;
         searchRepaint(false);
         return i;
       case 0x7f: // Backspace
       case 0x08:
-        sq = sq.slice(0, -1);
+        // One glyph, not one code unit (G33).
+        sq = sq.slice(0, graphemeStartBefore(sq, sq.length));
         sskip = 0;
         searchRepaint(false);
         return i;
@@ -648,9 +662,15 @@ export async function readLine(opts: EditorOpts): Promise<string | null> {
       }
 
       if (code === 0x7f || code === 0x08) {
+        // Backspace deletes the whole cluster owning the unit just left of the
+        // caret (G33): a surrogate pair, base+combining mark, ZWJ family or
+        // flag goes as ONE glyph. A caret stuck mid-cluster deletes that
+        // cluster whole, never a half pair.
         if (cursor > 0) {
-          buf = buf.slice(0, cursor - 1) + buf.slice(cursor);
-          cursor--;
+          const s = graphemeStartBefore(buf, cursor);
+          const e = graphemeEndAfter(buf, s);
+          buf = buf.slice(0, s) + buf.slice(e);
+          cursor = s;
           render();
         }
         continue;

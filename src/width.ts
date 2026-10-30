@@ -88,3 +88,55 @@ function clusterCells(cluster: string): number {
   if (inRanges(WIDE_RANGES, base)) return 2;
   return 1;
 }
+
+// --- G33: caret motion by grapheme ------------------------------------------
+//
+// The editor's buf/cursor are indexed in UTF-16 CODE UNITS, but the user's
+// unit is the GLYPH. Stepping one unit lands inside a surrogate pair, between
+// a base and its combining mark, mid ZWJ family or mid flag — and every
+// following edit then commits the half pair to the submitted line. The helpers
+// below give the editor the same clustering `cells()` uses, so the motion and
+// the measure cannot drift.
+//
+// A LONE surrogate (only reachable from pre-G33 history or a pair split across
+// two stdin chunks) is its own segment to the segmenter, so the helpers stay
+// consistent for it. But well-formedness checks must NOT rely on the
+// clustering: to the segmenter a lone surrogate is a whole cluster, which is
+// why completion.ts's commonPrefix trims it explicitly.
+
+/** Grapheme cluster start offsets of `text`, ascending (0 first when non-empty). */
+function graphemeStarts(text: string): number[] {
+  const starts: number[] = [];
+  for (const { index } of segmenter.segment(text)) starts.push(index);
+  return starts;
+}
+
+/**
+ * Where the caret lands on a LEFT move from code-unit index `i`: the start of
+ * the cluster that owns the unit just left of `i` (the largest cluster start
+ * strictly less than `i`), or 0 when nothing is to the left. A caret stuck
+ * mid-cluster lands on that cluster's own start, never inside it.
+ */
+export function graphemeStartBefore(text: string, i: number): number {
+  let best = 0;
+  for (const s of graphemeStarts(text)) {
+    if (s < i) best = s;
+    else break;
+  }
+  return best;
+}
+
+/**
+ * Where the caret lands on a RIGHT move from code-unit index `i`: the end of
+ * the cluster whose start is the largest cluster start ≤ `i` (the next start,
+ * or the end of the text). A caret stuck mid-cluster exits that cluster.
+ */
+export function graphemeEndAfter(text: string, i: number): number {
+  // The cluster whose start is the largest start ≤ i ends exactly where the
+  // NEXT cluster begins: with sorted starts that is the first start > i, or
+  // the end of the text.
+  for (const s of graphemeStarts(text)) {
+    if (s > i) return s;
+  }
+  return text.length;
+}
