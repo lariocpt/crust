@@ -190,6 +190,14 @@ export async function readLine(opts: EditorOpts): Promise<string | null> {
   // flag is set, nothing is written there yet). Measured in `render`, which is
   // the only thing that paints the draft line.
   let draftWrapped = false;
+  // Where the LAST draft-line paint ended, in CELLS: the total width it occupied
+  // and the caret's offset from the line's start. `paintDraft` is the only writer
+  // of the draft line, so these describe what is actually on screen — and that is
+  // what tells the next repaint how far to climb (G31). The editor measures its
+  // own paints instead of asking the terminal where the cursor is, because that
+  // question has no portable answer (the same rule `backToCol0` was built on).
+  let draftPaintCells = 0;
+  let draftCaretCells = 0;
 
   const stdin = process.stdin;
   const stdout = process.stdout;
@@ -217,6 +225,17 @@ export async function readLine(opts: EditorOpts): Promise<string | null> {
 
   const termWidth = (): number => (stdout.columns && stdout.columns > 0 ? stdout.columns : 80);
 
+  // The opening prompt write above is a paint like any other, so record it: the
+  // first repaint needs to know how many rows to climb (G31), and a search entry
+  // needs to know whether the terminal is already sitting on the prompt's wrap,
+  // where a newline would SCROLL. `draftWrapped` used to start as `false`, which
+  // is a guess — and a prompt of exactly N×width makes it wrong.
+  // `> 0` because an empty paint leaves the cursor at column 0 of the same row:
+  // that is not a pending wrap.
+  draftPaintCells = promptLen;
+  draftCaretCells = promptLen;
+  draftWrapped = promptLen > 0 && promptLen % termWidth() === 0;
+
   // How far left the NEXT replace must count to reach column 0 after `n`
   // columns were painted from column 0: `n - 1` is the last column that HOLDS a
   // glyph, so the cursor sits one further on — and when a paint landed exactly
@@ -242,21 +261,44 @@ export async function readLine(opts: EditorOpts): Promise<string | null> {
   };
 
   const render = (): void => {
-    stdout.write("\r" + prompt + buf + CSI + "K");
-    placeRightOfCaret();
-    // Did this paint end flush with the width? `render` is the only writer of
-    // the draft line, so this is the wrap state that entering search mode
-    // trusts: at the flush point the terminal has already moved to the next row,
-    // and a newline there would SCROLL the screen rather than open a line.
-    draftWrapped = (promptLen + cells(buf)) % termWidth() === 0;
+    const width = termWidth();
+    // Rows the PREVIOUS paint occupied. When it wrapped, `placeRightOfCaret` had
+    // left the cursor somewhere in the MIDDLE of the line, and `\r` is column 0 of
+    // the CURRENT row — so the repaint re-emitted the whole draft from there and
+    // the wrap pushed another copy of the prompt down the screen on every
+    // keystroke (G31, measured in tmux at 30 columns with a 35-cell prompt). Climb
+    // to the line's first row first, then erase to the bottom: CSI K reaches only
+    // the cursor's own row and the old paint spans several. Nothing ABOVE the
+    // cursor is touched, so this cannot scroll.
+    if (Math.ceil(draftPaintCells / width) > 1) {
+      const climbRows = Math.floor(draftCaretCells / width);
+      if (climbRows > 0) stdout.write(CSI + climbRows + "A");
+      stdout.write("\r" + CSI + "J");
+    } else {
+      // One row: keep the minimal repaint. The fix must not start moving the
+      // cursor on a line that fits (pinned by a control test).
+      stdout.write("\r");
+    }
+    paintDraft();
   };
 
-  // Paint the editor's own line at the cursor's row, from column 0. The caller
-  // is responsible for getting the cursor there and erasing what was there
-  // before (see leaveSearch).
+  // Paint the draft line at the cursor's row, from column 0, and record what that
+  // paint occupied. The caller is responsible for getting the cursor to the right
+  // row and erasing what was there before (render's wrapped path, leaveSearch).
   const paintDraft = (): void => {
+    const width = termWidth();
+    const visual = promptLen + cells(buf);
     stdout.write(prompt + buf + CSI + "K");
     placeRightOfCaret();
+    draftPaintCells = visual;
+    // The caret's offset from the line's start: where `placeRightOfCaret` left the
+    // cursor, which is what the next repaint counts up from.
+    draftCaretCells = promptLen + cells(buf.slice(0, cursor));
+    // Did this paint end flush with the width? `paintDraft` is the only writer of
+    // the draft line, so this is the wrap state that entering search mode trusts:
+    // at the flush point the terminal has already moved to the next row, and a
+    // newline there would SCROLL the screen rather than open a line.
+    draftWrapped = visual > 0 && visual % width === 0;
   };
 
   // The search line, painted from column 0: "<prompt><query><match-or-marker>",
@@ -330,7 +372,15 @@ export async function readLine(opts: EditorOpts): Promise<string | null> {
   const setPrompt = (p: string): void => {
     prompt = p;
     promptLen = cells(stripAnsi(p));
-    draftWrapped = false;
+    // Every caller paints the new prompt from column 0 immediately after
+    // (`stdout.write(prompt)`, or `"\n" + prompt` for the continuation), so
+    // describe THAT paint: the rows the next repaint must climb over, the caret at
+    // its end, and the flush flag MEASURED — `false` was a guess, and a prompt of
+    // exactly N×width makes it wrong right where the search entry decides whether
+    // a newline would scroll the screen.
+    draftPaintCells = promptLen;
+    draftCaretCells = promptLen;
+    draftWrapped = promptLen > 0 && promptLen % termWidth() === 0;
   };
 
   // ---------- Ctrl-R incremental reverse search (G09) ----------
