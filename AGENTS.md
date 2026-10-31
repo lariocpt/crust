@@ -89,9 +89,11 @@ that cannot install itself.
 - **Public** — `.github/workflows/release.yml`, triggered by pushing a `v*`
   tag. Builds linux/darwin × x64/arm64, uploads them plus `SHA256SUMS` to the
   GitHub Release, then publishes `@lariocpt/crust` to npmjs.org (needs the
-  `NPM_TOKEN` repo secret). The version comes from the tag, and it is stamped
-  into `package.json` before the compile — `src/index.ts` imports it for
-  `--version`.
+  `NPM_TOKEN` repo secret). The version comes from the tag, and the commit the
+  tag resolves to alongside it (`gitCommit`; the in-repo default `dev` is what
+  an unstamped build keeps) — both stamped into `package.json` before the
+  compile — `src/index.ts` imports them for `--version` / `--build-info`, and
+  the workflow verifies both out of the compiled binary before uploading.
 - **LAN** — Jenkins job `crust`: binary to apps.in.drlario.org (`BASE+sha`),
   launcher to npm.in.drlario.org (`BASE-ci.N.sha`). The Jenkinsfile's sh blocks
   are Groovy triple-single-quoted: **escape backslashes** (`\\(` not `\(`) or

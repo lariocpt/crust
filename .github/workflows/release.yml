@@ -71,13 +71,21 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile --ignore-scripts
 
-      # src/index.ts imports ../package.json for --version, so the manifest is stamped before
-      # the compile — otherwise every released binary reports the in-repo `-dev` version.
-      - name: Stamp version
+      # src/index.ts imports ../package.json for --version and --build-info, so the manifest
+      # is stamped before the compile — otherwise every released binary reports the in-repo
+      # `-dev` version and the "dev" commit. The commit is the one the checkout actually
+      # resolved: HEAD after a tag-ref checkout is the tagged commit itself, which is what
+      # the binaries were compiled from and what `git diff vA..vB` compares against.
+      - name: Stamp version and commit
+        id: stamp
         run: |
           set -euo pipefail
           sed -i '0,/"version"/s|"version"[[:space:]]*:[[:space:]]*"[^"]*"|"version": "${{ steps.version.outputs.version }}"|' package.json
           grep -m1 '"version"' package.json
+          COMMIT=$(git rev-parse HEAD)
+          sed -i '0,/"gitCommit"/s|"gitCommit"[[:space:]]*:[[:space:]]*"[^"]*"|"gitCommit": "'"$COMMIT"'"|' package.json
+          grep -m1 '"gitCommit"' package.json
+          echo "commit=$COMMIT" >> "$GITHUB_OUTPUT"
 
       - name: Build binaries
         run: |
@@ -95,13 +103,19 @@ jobs:
 
       # Only the runner's own architecture can be executed here, but that is enough to catch
       # the failure that actually happens: a binary built from an unstamped manifest.
-      - name: Verify stamped version
+      - name: Verify stamped version and commit
         run: |
           set -euo pipefail
           got=$(./out/crust-linux-x64 --version | tr -d '\r')
           echo "reported version: $got"
           [ "$got" = "crust ${{ steps.version.outputs.version }}" ] \
             || { echo "FAIL: binary reports '$got', expected 'crust ${{ steps.version.outputs.version }}'"; exit 1; }
+          # The commit is the provenance: a docs-only release is provable only if the stamped
+          # commit actually made it into the binary, so read it back out via --build-info.
+          gotCommit=$(./out/crust-linux-x64 --build-info | jq -r '.gitCommit')
+          echo "reported commit: $gotCommit"
+          [ "$gotCommit" = "${{ steps.stamp.outputs.commit }}" ] \
+            || { echo "FAIL: binary reports commit '$gotCommit', expected '${{ steps.stamp.outputs.commit }}'"; exit 1; }
 
       # sha256sum's own format, so `sha256sum -c SHA256SUMS` works for anyone who downloads
       # the whole set — and both installers parse the same file.

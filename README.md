@@ -45,6 +45,47 @@ Any other platform, or a working copy you intend to change:
 git clone https://github.com/lariocpt/crust.git ~/.crust && ~/.crust/scripts/install-from-source.sh
 ```
 
+### Comparing releases
+
+A tag is a release, and a docs-only tag still ships a fresh ~90 MB binary —
+v0.3.1 over v0.3.0 changed nothing but prose, and proving the two binaries
+were code-identical used to mean a manual A/B of the two cached copies. Every
+binary now answers for itself: `crust --build-info` prints its provenance as
+JSON — the version, the source commit it was built from (`gitCommit`), the Bun
+runtime, and the platform:
+
+```bash
+crust --build-info
+```
+
+```text
+{
+  "version": "0.3.1",
+  "gitCommit": "9f2c1b8…",
+  "bun": "1.3.14",
+  "platform": "linux-x64"
+}
+```
+
+The release workflow stamps the commit the tag points at into the binary, so
+two releases with equal `version` + `gitCommit` are builds of the same source
+tree — and `git diff v0.3.0..v0.3.1` in a checkout of the repo shows exactly
+what (or nothing) changed. That is how a docs-only release proves itself as
+one, in one command per binary. The npm launcher caches one directory per
+version, so the comparison is:
+
+```bash
+~/.cache/crust/0.3.0-linux-x64/crust --build-info
+~/.cache/crust/0.3.1-linux-x64/crust --build-info
+git diff v0.3.0..v0.3.1
+```
+
+The curl channel installs a single binary into `~/.local/bin`; to keep two
+releases side by side, install the older one into its own directory with the
+installer's own options (`--version v0.3.0 --dir /opt/crust-0.3.0`), and the
+same two `--build-info` commands compare them. Builds from an unstamped tree
+(dev, local) report `gitCommit: "dev"`.
+
 ## What it looks like
 
 Every line below is a real one — this README is parsed against the live grammar

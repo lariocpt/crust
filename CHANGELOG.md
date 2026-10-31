@@ -6,6 +6,29 @@ pre-1.0, so minor versions may carry breaking changes.
 
 ## [Unreleased]
 
+### Added
+
+- **`crust --build-info` — release provenance in one command.** Every binary
+  now carries the commit it was built from: the release workflow stamps the
+  commit the tag resolves to into `package.json` as `gitCommit` alongside the
+  version stamp, and the new flag (next to `--version`, listed in `--help`)
+  prints it as JSON — `{ "version", "gitCommit", "bun", "platform" }` — with
+  those four keys as the whole output, so a reader can rely on the shape.
+  Builds from an unstamped tree (dev, local, and the LAN plane, whose version
+  string already carries the short sha) keep the manifest's `"dev"` default.
+  This closes the gap a docs-only release used to leave: v0.3.1 over v0.3.0
+  shipped a fresh ~93 MB binary, and proving the two releases were
+  code-identical required a manual A/B of the two cached binaries. Now
+  `crust --build-info` on each binary answers it — equal `version` +
+  `gitCommit` is the same source tree — and `git diff v0.3.0..v0.3.1` in the
+  repo shows exactly what (or nothing) changed; the npm launcher's
+  one-directory-per-version cache
+  (`~/.cache/crust/<version>-<platform>-<arch>/`) makes the comparison one
+  command per release (README: *Comparing releases*, USAGE.md: the
+  `--build-info` row). `release.yml` now verifies both stamps out of the
+  compiled binary before uploading, so an unstamped manifest fails the
+  release instead of shipping an unprovable one.
+
 ### Fixed
 
 - **The npm launcher self-heals a stale install manifest.** `readManifest`

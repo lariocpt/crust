@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, lstatSync, rmSync } from "node:fs";
+import pkg from "../package.json" with { type: "json" };
 
 const ENTRY = `${import.meta.dir}/../src/index.ts`;
 
@@ -35,6 +36,31 @@ describe("crust CLI", () => {
     // logs that interleave tools. The Jenkinsfile and release.yml compare
     // this exact shape — change one, change all three.
     expect(r.stdout.trim()).toMatch(/^crust \d+\.\d+/);
+    // And the line is EXACTLY that — the provenance fields live in
+    // --build-info, not smuggled in here, so the three readers above can
+    // keep comparing byte for byte.
+    expect(r.stdout).toBe(`crust ${pkg.version}\n`);
+  });
+
+  test("--build-info prints exactly {version, gitCommit, bun, platform} as JSON, exit 0", async () => {
+    const r = await runCli(["--build-info"]);
+    expect(r.code).toBe(0);
+    // Provenance is read by humans and by jq in CI alike: pretty-printed
+    // JSON on stdout, nothing else on either stream.
+    expect(r.stderr).toBe("");
+    const info = JSON.parse(r.stdout) as Record<string, unknown>;
+    // The key set is the contract: a release comparison reads exactly these
+    // four fields, so neither a fifth field nor a renamed one may sneak in.
+    expect(Object.keys(info).sort()).toEqual(["bun", "gitCommit", "platform", "version"]);
+    expect(r.stdout).toBe(`${JSON.stringify(info, null, 2)}\n`);
+    // The values are what the manifest the compile read actually says: this
+    // is an unstamped tree, so the in-repo defaults — the `-dev` version and
+    // the "dev" commit — are what a dev build must report.
+    expect(info.version).toBe(pkg.version);
+    expect(pkg.gitCommit).toBe("dev");
+    expect(info.gitCommit).toBe(pkg.gitCommit);
+    expect(info.bun).toBe(Bun.version);
+    expect(info.platform).toBe(`${process.platform}-${process.arch}`);
   });
 
   test("test-fixture names the workaround when handed a second target (G36)", async () => {
@@ -58,6 +84,9 @@ describe("crust CLI", () => {
     expect(r.code).toBe(0);
     expect(r.stdout).toContain("usage:");
     expect(r.stdout).toContain("-c");
+    // The provenance flag must be discoverable next to --version, not only in
+    // the docs: a flag nobody can find cannot anchor a release comparison.
+    expect(r.stdout).toContain("--build-info");
   });
 
   test("--help lists the builtins", async () => {

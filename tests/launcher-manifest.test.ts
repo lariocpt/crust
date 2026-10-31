@@ -23,8 +23,21 @@ const npmRoot = join(repoRoot, "npm");
 const MANIFEST = join(npmRoot, "install-manifest.json");
 
 const OLD_BIN = "#!/bin/sh\necho FAKE-CRUST-OLD\n";
-const NEW_BIN = "#!/bin/sh\necho FAKE-CRUST-NEW\n";
 const LATEST_VERSION = "0.3.0+cafe123";
+// What the fake release binary answers for `--build-info`. The version and the
+// short sha it records mirror LATEST_VERSION the way a real apps-plane build's
+// provenance mirrors its own version string (`0.3.0+cafe123` ≡ sha cafe123).
+const BUILD_INFO_JSON =
+  '{"version":"0.3.0+cafe123","gitCommit":"cafe123","bun":"1.3.14","platform":"linux-x64"}';
+// Besides answering `--version`, the fake binary answers `--build-info`, so the
+// shim-layer tests can pin the real entry point against the bytes a binary emits.
+const NEW_BIN = `#!/bin/sh
+if [ "$1" = "--build-info" ]; then
+  echo '${BUILD_INFO_JSON}'
+  exit 0
+fi
+echo FAKE-CRUST-NEW
+`;
 
 let dir: string;
 let savedEnv: { XDG_CACHE_HOME?: string; CRUST_APPS_URL?: string; CRUST_SOURCE?: string };
@@ -335,8 +348,10 @@ describe("the npm shim: a bumped package self-heals through the real entry point
     );
   });
 
-  function runShim(): Promise<{ code: number; stdout: string; stderr: string }> {
-    const proc = Bun.spawn(["node", join(pkgRoot, "bin", "crust"), "--version"], {
+  function runShim(
+    args: string[] = ["--version"],
+  ): Promise<{ code: number; stdout: string; stderr: string }> {
+    const proc = Bun.spawn(["node", join(pkgRoot, "bin", "crust"), ...args], {
       stdout: "pipe",
       stderr: "pipe",
       env: {
@@ -371,5 +386,19 @@ describe("the npm shim: a bumped package self-heals through the real entry point
     expect(r.code).toBe(0);
     expect(r.stdout).toContain("FAKE-CRUST-NEW");
     expect(binaryFetches).toBe(0);
+  });
+
+  test("the real entry point passes --build-info through byte for byte", async () => {
+    // The docs tell users to compare releases with `crust --build-info`, and
+    // most installs invoke the binary THROUGH this shim — so the provenance
+    // JSON must survive the launcher untouched: one stray log line on stdout
+    // would corrupt the pipe a CI reader (or jq) consumes, and a mangled exit
+    // code would read as a failed build.
+    binaryFetches = 0;
+    const r = await runShim(["--build-info"]);
+    expect(r.code).toBe(0);
+    expect(binaryFetches).toBe(0); // the pinned manifest is a hit — no re-download
+    expect(r.stdout).toBe(`${BUILD_INFO_JSON}\n`);
+    expect(r.stderr).toBe("");
   });
 });

@@ -46,6 +46,9 @@ usage:
                            file exits 2 — loudly, never a silent no-op)
   crust -h | --help        show this help
   crust -V | --version     show version
+  crust --build-info       show build provenance as JSON (version, gitCommit,
+                           bun, platform) — compare two releases without
+                           running either; dev builds report gitCommit "dev"
 
 ${renderBuiltinList()}`;
 
@@ -149,6 +152,23 @@ async function main(): Promise<void> {
       // updated in the same commit: tests/cli.test.ts, the Jenkinsfile, and
       // .github/workflows/release.yml all compare this line exactly.
       process.stdout.write(`crust ${pkg.version}\n`);
+      process.exit(0);
+    }
+    if (flag === "--build-info") {
+      // Provenance, not a run: this answers "what IS this binary" — no session,
+      // no I/O, nothing to run wrong. The four fields are the whole contract;
+      // a reader (CI, a release comparison) relies on there being no fifth.
+      // `gitCommit` is the stamp the release workflow wrote into package.json
+      // (the commit the tag resolved to); an unstamped tree — dev, local, or
+      // the LAN plane, which keeps its sha in the VERSION string — keeps the
+      // manifest's "dev" default, so the field is total either way.
+      const info = {
+        version: pkg.version,
+        gitCommit: pkg.gitCommit ?? "dev",
+        bun: Bun.version,
+        platform: `${process.platform}-${process.arch}`,
+      };
+      process.stdout.write(`${JSON.stringify(info, null, 2)}\n`);
       process.exit(0);
     }
     if (flag === "-c") {
