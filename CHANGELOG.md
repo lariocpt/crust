@@ -4,6 +4,23 @@ Notable changes to crust. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project is
 pre-1.0, so minor versions may carry breaking changes.
 
+## [Unreleased]
+
+### Fixed
+
+- **The npm launcher self-heals a stale install manifest.** `readManifest`
+  only validated the manifest's plane, so a package version bump (e.g.
+  `0.3.0` → `0.3.1`) left the stale manifest shadowing the new release
+  until a human deleted the file by hand. The manifest now records the
+  package version it was written for and is a cache miss — re-resolve,
+  re-verify sha256, rewrite — unless that version (and the plane) match;
+  malformed files are treated the same way. Manifests from older launcher
+  releases lack the field and are accepted on a core-version match
+  (`X.Y.Z+sha` ≡ `X.Y.Z-ci.N.sha`), so upgrading the launcher costs at most
+  one re-verification, and a `latest`-fallback pin survives the check: the
+  shim keeps launching the binary that was actually verified, not whatever
+  `latest` points at next week.
+
 ## [0.3.0] — 2026-10-31
 
 ### Added
