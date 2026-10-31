@@ -134,8 +134,11 @@ describe("which $ in a value expands, and which does not", () => {
 
   test("a backslash protects one $ and nothing else", async () => {
     const [A, B] = [v(), v()];
-    const r = await run(`${A}=\\$HOME\n${B}=C:\\temp\necho "[${A}=$${A}][${B}=$${B}]"`);
-    expect(r.stdout.trim()).toBe(`[${A}=$HOME][${B}=C:\\temp]`);
+    // printenv, not echo: the CI runner's /bin/sh is dash, whose echo eats the
+    // backslash in C:\temp as a \t escape. The stored value is byte-exact
+    // either way — an echo readback would blame the wrong layer.
+    const r = await run(`${A}=\\$HOME\n${B}=C:\\temp\nprintenv ${A}\nprintenv ${B}`);
+    expect(r.stdout.trim()).toBe("$HOME\nC:\\temp");
   });
 
   test("an unset name expands to empty, like every other crust expansion", async () => {

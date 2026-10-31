@@ -547,7 +547,14 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
       // in-flight handlers went on to call backend.get/put against a closed
       // client: measured with a slow handler, 50 of 50 in-flight requests
       // failed without this await and 50 of 50 succeeded with it.
-      await server.stop();
+      // closeActiveConnections is not decoration: stop() alone closes only the
+      // listener, and already-established keep-alive sockets keep being served
+      // — a stopped mock answered on its own port from the client's pooled
+      // connection (caught on CI's pinned Bun 1.3.14 in the mcp lifecycle
+      // test; local Bun 1.4.3 did not reproduce). "stop" must mean nothing
+      // answers, on every Bun the workflow can build with. (Boolean form: the
+      // installed bun-types still type stop() as `boolean | undefined`.)
+      await server.stop(true);
       await backend.close();
     },
   };
