@@ -152,6 +152,14 @@ Release, verifies its published sha256 before the file is ever made executable,
 and caches it under `~/.cache/crust`. Every install route resolves that same
 artifact.
 
+What it installed is recorded in `install-manifest.json` next to `package.json`
+(plane, binary version, the package version that asked for it, the cached path
+and its sha256). Every run re-checks that the manifest was written for THIS
+package version on THIS plane: a version bump or a plane switch is a cache
+miss, so the launcher re-resolves, re-verifies the sha256 and rewrites the
+manifest — a stale install never shadows a new release, and no file has to be
+deleted by hand.
+
 Supported platforms: linux x64/arm64, macOS x64/arm64. On anything else, build
 from source — see the repository README.
 

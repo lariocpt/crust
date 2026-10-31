@@ -35,7 +35,7 @@ const APPS_URL = (process.env.CRUST_APPS_URL || "https://apps.in.drlario.org").r
 const CACHE_ROOT = path.join(process.env.XDG_CACHE_HOME || path.join(homedir(), ".cache"), "crust");
 const DEFAULT_REPO = "lariocpt/crust";
 
-function readPkg() {
+export function readPkg() {
   return JSON.parse(readFileSync(path.join(PKG_ROOT, "package.json"), "utf8"));
 }
 
@@ -190,14 +190,48 @@ async function resolveFromGithub(pkg) {
   return { version: pkg.version, url: `${base}/${asset}`, sha256, bytes: 0, from: `github.com/${repo}@${tag}`, note: null };
 }
 
-export function readManifest(source = null) {
+// The part of a version both planes share: the apps plane writes a build as
+// `<base>+<sha>`, the LAN npm plane as `<base>-ci.<n>.<sha>` — strip the suffix
+// and both collapse to the same core version.
+function coreVersion(v) {
+  return typeof v === "string" ? v.split(/[+-]/)[0] : null;
+}
+
+/**
+ * @typedef {object} Manifest
+ * @property {string} source the artifact plane ("apps" or "github")
+ * @property {string} version the binary's version as the plane publishes it
+ * @property {string} [packageVersion] the package version the manifest was written for
+ *   (absent on manifests written by older launcher releases)
+ * @property {string} bin absolute path of the verified binary in the cache
+ * @property {string} sha256 verified sha256 of the binary
+ * @property {string} from the plane the binary was resolved from
+ */
+
+/**
+ * @param {object} [pkg] the installed package's package.json (read from disk if omitted)
+ * @param {string|null} [source] the artifact plane this run resolved to
+ * @returns {Manifest|null} the manifest if it validates, otherwise a cache miss
+ */
+export function readManifest(pkg = readPkg(), source = null) {
   if (!existsSync(MANIFEST_PATH)) return null;
   try {
     const m = JSON.parse(readFileSync(MANIFEST_PATH, "utf8"));
-    if (!m || !m.bin || !existsSync(m.bin)) return null;
+    if (!m || typeof m !== "object" || !m.bin || !existsSync(m.bin)) return null;
     // A manifest written under a different plane describes a binary this run did not ask for
     // (someone set CRUST_SOURCE between runs). Re-resolve rather than launch it.
     if (source && m.source && m.source !== source) return null;
+    // Same for a different package version: after a bump (0.3.0 -> 0.3.1) the old manifest
+    // would keep shadowing the new release until a human deleted the file by hand. The
+    // package version the manifest was WRITTEN FOR is `packageVersion`; manifests written by
+    // older launcher releases predate that field, so fall back to the binary's own version
+    // at core granularity — one re-resolve upgrades them to the new shape and pins them.
+    if (typeof pkg?.version !== "string") return null;
+    if (typeof m.packageVersion === "string") {
+      if (m.packageVersion !== pkg.version) return null;
+    } else if (coreVersion(m.version) !== coreVersion(pkg.version)) {
+      return null;
+    }
     return m;
   } catch {
     return null;
@@ -206,11 +240,16 @@ export function readManifest(source = null) {
 
 // Resolve, download if needed, record what was verified, return the manifest.
 // `log` is a sink so the shim can stay quiet on the happy path while the postinstall talks.
+/**
+ * @param {object} [options]
+ * @param {(message: string) => void} [options.log]
+ * @param {(message: string) => void} [options.warn]
+ */
 export async function ensureBinary({ log = () => {}, warn = () => {} } = {}) {
   const pkg = readPkg();
   const source = resolveSource(pkg);
 
-  const cached = readManifest(source);
+  const cached = readManifest(pkg, source);
   if (cached) return cached;
 
   const r = source === "github" ? await resolveFromGithub(pkg) : await resolveFromApps(pkg);
@@ -231,10 +270,20 @@ export async function ensureBinary({ log = () => {}, warn = () => {} } = {}) {
     log(`installed -> ${bin}`);
   }
 
-  const manifest = { source, version: r.version, bin, sha256: r.sha256, from: r.from };
+  const manifest = {
+    source,
+    version: r.version,
+    packageVersion: pkg.version,
+    bin,
+    sha256: r.sha256,
+    from: r.from,
+  };
   // Recorded rather than re-derived: after a `latest` fallback the resolved version is no
   // longer derivable from this package's own version, and the shim must launch the binary
-  // that was actually verified — not whatever latest points at next week.
+  // that was actually verified — not whatever latest points at next week. `packageVersion`
+  // records the package version that ASKED FOR that binary: readManifest rejects a manifest
+  // written for a different one, so a version bump self-heals (re-resolve, re-verify,
+  // rewrite) while a pin written under X.Y.Z still stands on the next run under X.Y.Z.
   try {
     writeFileSync(MANIFEST_PATH, `${JSON.stringify(manifest, null, 2)}\n`);
   } catch (e) {

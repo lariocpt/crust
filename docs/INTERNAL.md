@@ -47,6 +47,24 @@ use the apps form; the shared short sha ties one back to the other and is what
 the launcher matches on. The public plane has no such split — the release tag
 `vX.Y.Z` is the version on both channels.
 
+## Install manifest
+
+The launcher records what it installed in `install-manifest.json` inside the
+package directory: the plane (`source`), the binary's version (`version`), the
+package version that asked for it (`packageVersion`), the cached `bin` path,
+its `sha256`, and the plane it came `from`. Every run re-validates the file:
+a missing file, a parse error, a vanished `bin`, a different `source`, or a
+different `packageVersion` is a cache miss — the binary is re-resolved, the
+sha256 re-verified, and the manifest rewritten. A package version bump
+therefore self-heals instead of leaving a stale manifest shadowing the new
+release until the file is deleted by hand.
+
+`packageVersion` was added with the validation, so manifests written by older
+launcher releases lack it; those are accepted on a core-version match of the
+binary's own version (`0.2.0+78f2a43` ≡ `0.2.0-ci.42.78f2a43` ≡ `0.2.0`),
+which means upgrading the launcher costs at most one re-verification, after
+which the new shape pins the binary.
+
 ## Publishing
 
 - **LAN:** the Jenkins job `crust` (see [`Jenkinsfile`](../Jenkinsfile)). Binary
