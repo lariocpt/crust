@@ -196,6 +196,12 @@ pre-1.0, so minor versions may carry breaking changes.
   "b/*.ts"` and no way out, while CI scripts in the wild pass two globs. Both
   refusals now name the brace glob (`'{a,b}/*.crust.ts'`), which was measured
   against a live mock to expand both directories before it was documented.
+- **`stop` now means nothing answers.** The mock server's stop closed only the
+  listener, so already-established keep-alive sockets kept being served — a
+  stopped mock answered on its own port from the client's pooled connection.
+  Caught by the mcp lifecycle test on CI's pinned Bun; the local Bun happened
+  not to reproduce. Stop now closes active connections too, on every Bun the
+  release workflow builds with.
 
 ### Changed
 
