@@ -56,11 +56,12 @@ mock-server ./swagger.json -p 4747 --proxy http://localhost:3001 --report violat
 ```
 
 **SQL assertions, inline** — rows stream one item each, and an empty result
-fails instead of passing quietly:
+fails instead of passing quietly. The bind placeholder is `?` for every
+dialect (crust rewrites it to `$n` for Postgres URLs):
 
 ```crust
 sql "SELECT count(*)::int AS c FROM buildings WHERE name = 'Court'" | assert (r => r.c === 1)
-sql "SELECT status FROM orders WHERE id = $1" $OID | assert (r => r.status === "paid")
+sql "SELECT status FROM orders WHERE id = ?" $OID | assert (r => r.status === "paid")
 ```
 
 **Pretty logs from every service at once** — `procs` merges stdout and stderr
@@ -89,11 +90,38 @@ logs> filter (e => e.level >= 50) | stats --every 5
 logs> search "connection reset"
 ```
 
+## Interactive shell
+
+The REPL continues a line — a trailing `\`, an unbalanced quote, or an unclosed
+`(` holds the line instead of erroring, so pasted multi-line JSON survives the
+Enter. `Ctrl-R` searches history; `&`, `jobs`, `fg`, `bg`, `wait %N`,
+`kill %N` and `Ctrl-Z` are job control. Scripts take positional arguments
+(`$0`, `$1…`, `$#`, `$@`), a bare `FOO=x` line persists for the session, and
+`source` runs `.ts` files, `.crust` scripts, and shell scripts alike.
+
+## MCP server
+
+`crust mcp` speaks the Model Context Protocol over stdio, so an MCP-capable
+agent (OpenCode, Claude Code, Codex, Cursor) drives crust directly — every
+capability is a first-class tool, not a shell to fumble through. One-shot tools
+(`crust_run_line`, `crust_test_fixture`, `crust_load_run`, …) run a fresh crust
+process per call; lifecycle tools keep a mock server, a supervised `procs`
+runner, or a buffered `logs` session open across calls and tear them down
+honestly on exit. A nonzero run is always an `isError` result with the verbatim
+output — never a false pass.
+
+```json
+{ "mcpServers": { "crust": { "command": "crust", "args": ["mcp"] } } }
+```
+
+The `crust-mcp` skill teaches an agent which `crust_*` tool fits which task.
+
 ## Agent skills
 
 Crust ships the SKILL.md guides that teach a coding agent how to drive it —
-pipelines, fixture suites, load gates, the mock server, `procs`, the link
-checker — embedded in the binary, so they always match the version you run.
+pipelines, fixture suites, load gates, the mock server, `procs`, the log
+sessions, the link checker, the MCP server — embedded in the binary, so they
+always match the version you run.
 They go into `.agents/skills/`, the cross-client directory Codex, Cursor and
 OpenCode read, plus a link per skill in `.claude/skills/` for Claude Code, the
 one mainstream host that doesn't read the standard path:

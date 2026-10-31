@@ -92,7 +92,7 @@ another stage. An empty result **fails** rather than passing quietly.
 
 ```crust
 sql "SELECT count(*)::int AS c FROM buildings WHERE name = 'Court'" | assert (r => r.c === 1)
-sql "SELECT status FROM orders WHERE id = $1" $OID | assert (r => r.status === "paid")
+sql "SELECT status FROM orders WHERE id = ?" $OID | assert (r => r.status === "paid")
 ```
 
 **Pretty logs from every service at once.** `procs` merges stdout and stderr
