@@ -1,5 +1,7 @@
 # crust
 
+[![npm version](https://img.shields.io/npm/v/@lariocpt/crust?label=npm)](https://www.npmjs.com/package/@lariocpt/crust)
+
 **Mock it, test it, load it, tail it: the whole test stack baked into one
 binary.** Spec-driven, generated, zero dependencies.
 
@@ -14,6 +16,10 @@ shell (`crust mock-server openapi.yaml -p 4000`).
 Battle-tested by dogfooding against a real 97-operation production API:
 406 generated fixtures, spec-driven mocking for two client apps, and the
 load pipelines below — all run through the released binary.
+
+**npm:** [@lariocpt/crust on npmjs](https://www.npmjs.com/package/@lariocpt/crust) —
+`npm i -g @lariocpt/crust` installs a small launcher that downloads the same
+sha256-verified release binary (channels below).
 
 **Documentation:** https://lariocpt.github.io/crust-website/
 
