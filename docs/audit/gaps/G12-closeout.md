@@ -99,3 +99,59 @@ is recoverable.
 ## Commit
 
 `docs(limits): the limits section describes what the binary actually does`
+
+---
+
+## Close-out trail (2026-10-31)
+
+Shipped as two direct-to-main commits: **`431abc8`** (content) + the tick
+commit (this file, the plan tick, FIX-PROGRESS ⑧).
+
+**What was done, per this file's own items:**
+
+1. **Limits rewrite** — renamed to plain "Limits" (TOC + heading + README
+   anchor). The section had been kept current gap-by-gap through the campaign,
+   so the rewrite was a rename plus a full re-verification, not a re-author.
+   Every crust line still parses under `tests/docs-lint.test.ts`.
+2. **Repo docs** — PLAN: the `$(…)` parked entry marked decided (refusal +
+   capture shipped in `085e0bf`); the highlighting pointer follows the rename;
+   job control and `|>`/`[0..9]` were already marked by G10/G02. Contract:
+   already marked by G02. README: already current except the anchor.
+   **CHANGELOG was the real finding**: twelve shipped behaviors had no entry —
+   job control, source-bash, REPL line assembly, Ctrl-R (Added); sql `?`
+   binding, wrap smear, caret cells, grapheme editing, wrap-row crossing,
+   one-target refusals (Fixed); `--version` shape, `$(…)`-in-crust-stage
+   refusal (Changed). All added from the plan's FIXED lines + KB measurements.
+   Examples: `examples/capture.crust` added (both routes, runs green);
+   `args.crust` existed but nothing pointed at it — USAGE now references both.
+3. **Website parity** — **no site change was needed.** The site's only
+   "## Limits" is mock-server's own feature list (remote `$ref`,
+   `additionalProperties`, faker data, hot-reload), measured and current; no
+   page carried the `#limits-in-v02` anchor or stale limits copy.
+4. **KB** — the campaign's per-gap commits had already landed everything this
+   item asked for: `round-10-limits-measured.md` (stdin §1, capture trailing
+   newline §8, …), `round-10-job-control.md` (SIGSTOP/SIGTSTP),
+   `round-10-highlighting-costed.md` (the highlighting×cursor-column trap),
+   `round-10-cells-vs-characters.md`, and round-5-repl-and-logs addenda for
+   the editor seam (G08/G09). Added here: the limits closure table in
+   `dogfood/CURRENT-STATE.md` — KB `6dd4624a`.
+5. **Final verification** — gates green: 1408 tests / 2 skip / 0 fail, tsc
+   clean, biome 0 errors, `bun run build`, `--check` spot-check ok. Then the
+   by-hand re-run of every Limits bullet against `bin/crust`: job table +
+   `disown` absent from crust (falls to sh), bare `FOO=x` persists while the
+   prefix form lives one command, piped-program drains stdin and script mode
+   does not, sourced shell script returns only exported env (`printenv PLAIN`
+   exits 1), `$(…)` in a crust stage refuses naming both routes, a redirect
+   on a crust stage refuses naming the workaround, highlighting is an absence.
+   Every survivor reproduced; every closed bullet behaves the other way.
+6. **Tick** — done in the tick commit.
+
+**Deviations from this file's own prescriptions** (the campaign ran on
+conventions written after this dossier):
+
+- No PRs and no `docs/limits-gap-closure` branches: everything went
+  direct-to-main with mesh-sync, as all 36 earlier gaps did. The trail is the
+  commit shas: crust `431abc8` + tick, site `b9d6d85` (parity check, no
+  change), KB `6dd4624a`.
+- KB commits are local-only; no re-ingest and no submodule pointer bump —
+  ingest is operator-controlled.
