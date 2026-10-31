@@ -1,0 +1,7 @@
+# Capture-as-substitution: crust stages have no $(…), so capture into a
+# variable first — then it is just a variable, usable anywhere one fits.
+date +%s | capture TS
+echo "captured epoch: $TS"
+# The other route: a shell stage keeps sh's own $(…) — `echo` is not a crust
+# builtin, so this line runs in sh and substitutes there.
+echo "second route: $(date +%s)"

@@ -26,7 +26,7 @@ Mock it, test it, load it, tail it: the whole test stack baked into one binary. 
 - [Job control](#job-control)
 - [Configuration (`init.ts`)](#configuration-initts)
 - [Examples](#examples)
-- [Limits in v0.2](#limits-in-v02)
+- [Limits](#limits)
 
 ---
 
@@ -187,6 +187,9 @@ The edges, all measured:
   `syntax error at end of input`.
 - **`source <file> [args…]`** hands the args to the *sourced* file — its `$0`
   is its own path — and restores the caller's positionals when the file ends.
+
+`examples/args.crust` prints every shape above and runs as
+`crust examples/args.crust prod staging`.
 
 ### Checking a line without running it
 
@@ -664,6 +667,8 @@ GET :3000/?t=$TS
   immediately: a capture that silently captured nothing turns into a
   baffling `""` expansion three lines later. Mind the names: capturing into
   `TOKEN`, `BASE`, or `PATH` overwrites those for the rest of the run.
+  `examples/capture.crust` is this section's substitution pattern as a
+  runnable file.
 - `stats` — consumes the stream and yields one summary: `count`, `wallMs`,
   `rps`, a status histogram, and real `p50/p95/p99/meanMs` latency
   percentiles from the timed-request records.
@@ -2508,7 +2513,7 @@ echo src/index.ts | bundle
 
 ---
 
-## Limits in v0.2
+## Limits
 
 Honest about what doesn't work yet:
 

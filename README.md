@@ -173,7 +173,7 @@ suspends crust's own pipelines and builtins, not a foreground child's terminal;
 a plain `FOO=x` line is session
 state that persists, the same code `export` runs (only the `FOO=x cmd`
 prefix is transient). The full list lives in
-[Limits](docs/USAGE.md#limits-in-v02).
+[Limits](docs/USAGE.md#limits).
 
 ## Docs
 

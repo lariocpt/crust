@@ -92,6 +92,37 @@ pre-1.0, so minor versions may carry breaking changes.
   Answering yes hands the terminal to the picker. Every failure path resolves to
   "declined" with exit 0 — a postinstall that fails takes the whole install with
   it, and not wanting to answer a question is not a reason to refuse a package.
+- **Job control.** `&` backgrounds a line into a job table, and `jobs [-l]`,
+  `fg`, `bg`, `wait %N`, `kill %N` and Ctrl-Z work against it. The measurement
+  that shaped it: SIGSTOP is the only stop the runtime honors — Bun swallows
+  `SIGTSTP` and its children inherit that ignore — so Ctrl-Z suspends crust's
+  own pipelines and builtins, while a foreground inherit-stdio child takes
+  Ctrl-C (the child dies, the line reports 130). The parked claim that job
+  control "needs Bun-side support it doesn't yet expose" was wrong in both
+  halves: `detached: true` really does setsid. Still out, by the Limits
+  section: `disown`, `nohup`, job patterns (`%?vim`).
+- **`source` runs shell scripts.** A file carrying a shell marker — a
+  `.sh`/`.bash`/`.zsh` extension or a shell `#!` shebang — runs **once in a
+  child shell**: the exported `KEY=value` diff is applied to the session, the
+  script's exit code is the line's, and its side effects are real. Unsets
+  don't propagate and the child's cwd never comes back. An unmarked file that
+  looks like multi-line shell, or that doesn't parse as crust, is refused with
+  both options named — never half-run.
+- **The REPL continues a line.** A trailing `\` drops to a `…` continuation
+  prompt, and an unbalanced quote (`"`, `'`, `` ` ``) or unclosed `(` continues
+  too — so a pasted multi-line JSON literal, or a heredoc body inside a shell
+  stage (the join keeps the real newlines a `\` join would destroy), survives
+  the Enter. The editor assembles; the lexer and parser are untouched. The
+  assembled entry is one line: one history item, `↑` recalls it whole, and the
+  REPL and a script agree character for character on what runs. The old
+  `empty stage` refusal that told REPL users to use a trailing `\` the REPL did
+  not have is gone with it.
+- **Ctrl-R fuzzy history search.** zsh semantics, including the two that are
+  the opposite of the obvious guess: `Enter` *accepts* — the match moves onto
+  the prompt line, still editable, and the next `Enter` runs it — and a query
+  that matches nothing puts the query itself on the line rather than replaying
+  the last match. Searching from the `…` continuation prompt is safe: leaving
+  search never resolves the pending line.
 
 ### Fixed
 
@@ -133,6 +164,38 @@ pre-1.0, so minor versions may carry breaking changes.
 - **`--check` now lints `skills install`.** The line had nothing declarative to
   check, so a wrong flag surfaced only at run time; `skills install --bogus` is
   caught at parse time alongside the other tools.
+- **`sql` now binds the placeholder the docs promise.** `sql "… WHERE name = ?" "Court"`
+  died on every call: the documented `?` was never converted to a bound
+  parameter, so the "bound query" story the docs told was false at the driver. The fix is dialect-gated — sqlite's placeholder *is* `?`,
+  Postgres' is `$n` — with a scanner for placeholders inside literals and a
+  named diagnostic for the mismatched dialect; the naive `?`→`$n` rewrite would
+  have broken sqlite, which is exactly what it must not do.
+- **A wrapped draft no longer smears on every keystroke.** `render()` wrote
+  `"\r" + prompt + buf + CSI K` — and `"\r"` returns to column 0 of the
+  *current* row, so a draft already wrapped left stale text on the rows above,
+  worsening with each keypress. The draft line now measures its own paints in
+  cells and a multi-row repaint climbs to the line's first row before `CSI J`.
+- **The caret moves in cells, not characters.** `place(n)` emitted `CSI n D`
+  from a character count where the terminal moves columns, so the visible caret
+  drifted on every double-width glyph. Measurement and motion now share
+  `src/width.ts`, the one cell-width table the editor uses.
+- **Editing is grapheme-aware.** The cursor moved in UTF-16 code units, so
+  Backspace on a freshly typed emoji submitted a lone surrogate — a data
+  corruption reachable by ordinary typing. The caret now moves in graphemes on
+  the same `Intl.Segmenter` clustering `cells()` uses, so measure and motion
+  cannot drift, and a mid-cluster caret deletes its cluster whole, never half
+  a surrogate pair.
+- **The caret crosses wrap rows correctly.** Moving LEFT across a wrap row of a
+  wrapped draft landed on the wrong row: `place(n)` was a single backtab, which
+  cannot change rows. There is now one position model for both ends of a move
+  (offset → row `floor(o/width)`, col `o%width` — an exact multiple sits at
+  col 0 of the next row); a same-row move keeps the single backtab, a crossing
+  move climbs with `CSI A` and then backtabs.
+- **The one-target refusals name the workaround.** `test-fixture 'a/*.ts'
+  'b/*.ts'` — and the `test-pipes` twin — refused with `unexpected argument
+  "b/*.ts"` and no way out, while CI scripts in the wild pass two globs. Both
+  refusals now name the brace glob (`'{a,b}/*.crust.ts'`), which was measured
+  against a live mock to expand both directories before it was documented.
 
 ### Changed
 
@@ -171,6 +234,17 @@ pre-1.0, so minor versions may carry breaking changes.
 - An unbound escape sequence cannot press a key by accident. The picker swallows
   a whole CSI sequence instead of its first two bytes: leaving the tail behind
   fed `f` to the overwrite toggle when a right-arrow was pasted into the menu.
+- **`--version` names the tool.** A bare `0.2.4` in a CI log names no tool; the
+  line is `crust <version>` now. Every exact reader of the old line — the CLI
+  test, the Jenkinsfile version gate, the release workflow — moved in the same
+  commit, so no pipeline kept parsing the old shape.
+- **`$(…)` in a crust stage is refused, not run as literal text.**
+  `GET $(echo host)/get` used to build its URL from the literal characters and
+  die with `getaddrinfo ENOTFOUND $(echo` — a network-shaped error answering a
+  parse-level question. The refusal fires before anything runs and names the
+  two routes that work: end the line with a shell stage, or capture into a
+  variable first (`date +%s | capture TS`, then `$TS`). Shell stages keep sh's
+  own `$(…)` untouched, and `${x}` was always a variable, never a command.
 
 ## [0.2.4] — 2026-08-25
 

@@ -68,9 +68,9 @@ Below this line is in v0.1. Anything else is v0.2+, period.
 - `bundle()`, `optimize()`, `tar()`, `run-smoke()`, `dest dir/` as a packaging sink
 - ~~Job control (`fg`/`bg`/Ctrl-Z)~~ — **shipped** (2026-10-29): `&`, `jobs [-l]`, `fg`, `bg`, `wait %N`, `kill %N`, Ctrl-Z suspend via SIGSTOP. See `docs/USAGE.md` → "Job control".
 - ~~`|>` operator and `[0..9]` range-literal~~ — **decided, won't fix** (2026-10-16): crust's `|` already *is* the pipe, and `[a..b]` collides with the JSON-array literal and with the shell's `[ … ]` test. `range(a, b)` / `seq` cover it; in TS, `.pipe()`. See `docs/USAGE.md` → "Syntax we deliberately did not add".
-- `$(...)` command substitution / backticks mid-pipeline
+- ~~`$(...)` command substitution / backticks mid-pipeline~~ — **decided, won't fix** (crust `085e0bf`): crust stages refuse `$(…)` before anything runs and name the two routes that work — end the line with a shell stage, or capture into a variable first (`date +%s | capture TS`, then `$TS`). See `docs/USAGE.md` → "Limits".
 - Multi-line input / heredocs
-- ~~Syntax highlighting / fuzzy history search~~ — history search **shipped** (2026-10-27, Ctrl-R); highlighting **closed as a deliberate absence** (2026-10-29, measured — see `docs/USAGE.md` → "Limits in v0.2")
+- ~~Syntax highlighting / fuzzy history search~~ — history search **shipped** (2026-10-27, Ctrl-R); highlighting **closed as a deliberate absence** (2026-10-29, measured — see `docs/USAGE.md` → "Limits")
 - The Crust distro ISO
 - RPM packaging
 
