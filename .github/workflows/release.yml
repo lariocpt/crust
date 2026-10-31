@@ -17,6 +17,9 @@ on:
 
 permissions:
   contents: write
+  # Publishing the staged launcher to npm.pkg.github.com (what the repo's
+  # Packages tab mirrors) needs this on the default GITHUB_TOKEN.
+  packages: write
 
 jobs:
   test:
@@ -180,5 +183,32 @@ jobs:
       - name: Publish to npmjs.org
         working-directory: npmstage
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --access public
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }
+        run: |
+          set -euo pipefail
+          VERSION="$(node -p "require('./package.json').version")"
+          # npm cannot republish a version, and the workflow_dispatch input
+          # exists to re-release a tag after a failed step — so a version an
+          # earlier run already shipped is a skip with a notice, not a
+          # failure. The binary-before-launcher invariant still holds: the
+          # release job created the matching GitHub Release before either
+          # publish ran.
+          if npm view "@lariocpt/crust@$VERSION" version --registry https://registry.npmjs.org >/dev/null 2>&1; then
+            echo "@lariocpt/crust@$VERSION is already on npmjs.org — skipping"
+          else
+            npm publish --access public
+          fi
+
+      # The repo's Packages tab only mirrors npm.pkg.github.com — the npmjs
+      # publish above never shows up there. Same staged package, second
+      # registry: the launcher already points at the GitHub Releases plane
+      # (crust.source=github), so the binary-before-launcher invariant is
+      # unchanged. The token is bound to the host in the user npmrc, which
+      # the fresh runner keeps only for this job.
+      - name: Publish to GitHub Packages
+        working-directory: npmstage
+        env:
+          NODE_AUTH_TOKEN: ${{ github.token }}
+        run: |
+          npm config set //npm.pkg.github.com/:_authToken "$NODE_AUTH_TOKEN"
+          npm publish --registry https://npm.pkg.github.com

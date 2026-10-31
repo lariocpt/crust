@@ -1,0 +1,73 @@
+name: Backfill GitHub Packages
+
+# Publishes an existing tag's launcher to npm.pkg.github.com — the registry
+# the repository's Packages tab mirrors (npmjs.org publishes never appear
+# there). New tags do not need this: release.yml publishes to both.
+#
+# This is the reduced form of release.yml's npm job: no test job, no
+# compile. The binaries the staged launcher resolves are already the
+# release assets uploaded when the tag was first released, and the
+# binary-before-launcher invariant is therefore untouched. Keep the staging
+# jq in sync with release.yml's "Stage package" step.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to backfill, e.g. v0.2.0"
+        required: true
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Stage package
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$' \
+            || { echo "FAIL: tag '$TAG' is not vMAJOR.MINOR.PATCH"; exit 1; }
+          rm -rf npmstage && cp -r npm npmstage
+          # Agent skills ride along in the tarball (package.json "files" lists skills/).
+          cp -r skills npmstage/skills
+          jq --arg v "$VERSION" --arg repo "${{ github.repository }}" '
+            .name = "@lariocpt/crust"
+            | .version = $v
+            | .crust.source = "github"
+            | .crust.repo = $repo
+            | .os = ["linux", "darwin"]
+            | .cpu = ["x64", "arm64"]
+            | del(.publishConfig)
+          ' npm/package.json > npmstage/package.json
+          cat npmstage/package.json
+
+      - name: Publish to GitHub Packages (idempotent)
+        working-directory: npmstage
+        env:
+          NODE_AUTH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          npm config set //npm.pkg.github.com/:_authToken "$NODE_AUTH_TOKEN"
+          VERSION="$(node -p "require('./package.json').version")"
+          # Re-dispatch safe: a version this registry already has is a skip,
+          # not a failure. The view below uses the same token binding.
+          if npm view "@lariocpt/crust@$VERSION" version --registry https://npm.pkg.github.com >/dev/null 2>&1; then
+            echo "@lariocpt/crust@$VERSION is already on GitHub Packages — skipping"
+          else
+            npm publish --registry https://npm.pkg.github.com
+          fi
+          # Verification artifact: what the registry now serves.
+          npm view "@lariocpt/crust" versions --registry https://npm.pkg.github.com --json
