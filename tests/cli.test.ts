@@ -28,10 +28,29 @@ async function runCli(
 }
 
 describe("crust CLI", () => {
-  test("--version prints version, exit 0", async () => {
+  test("--version prints `crust <version>`, exit 0", async () => {
     const r = await runCli(["--version"]);
     expect(r.code).toBe(0);
-    expect(r.stdout.trim()).toMatch(/^\d+\.\d+/);
+    // The tool name is part of the contract (G36): CI pastes this line into
+    // logs that interleave tools. The Jenkinsfile and release.yml compare
+    // this exact shape — change one, change all three.
+    expect(r.stdout.trim()).toMatch(/^crust \d+\.\d+/);
+  });
+
+  test("test-fixture names the workaround when handed a second target (G36)", async () => {
+    const r = await runCli(["test-fixture", "a/*.crust.ts", "b/*.crust.ts"]);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toContain('unexpected argument "b/*.crust.ts"');
+    expect(r.stderr).toContain("one target per call");
+    expect(r.stderr).toContain("brace glob like '{a,b}/*.crust.ts'");
+  });
+
+  test("test-pipes names the workaround when handed a second target (G36)", async () => {
+    const r = await runCli(["test-pipes", "a/*.pipes", "b/*.pipes"]);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toContain('unexpected argument "b/*.pipes"');
+    expect(r.stderr).toContain("one target per call");
+    expect(r.stderr).toContain("brace glob like '{a,b}/*.pipes'");
   });
 
   test("--help prints usage, exit 0", async () => {

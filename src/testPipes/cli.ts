@@ -47,7 +47,10 @@ export async function runCli(args: string[]): Promise<number> {
       process.stdout.write(USAGE);
       return 0;
     }
-    if (rest.length > 0) throw new FlagError(`unexpected argument "${rest[0]}"`);
+    if (rest.length > 0)
+      throw new FlagError(
+        `unexpected argument "${rest[0]}" — one target per call; to run several sets, use a brace glob like '{a,b}/*.pipes'`,
+      );
     target = values.target as string | undefined;
     out = values.out as string | undefined;
     bail = values.bail === true;

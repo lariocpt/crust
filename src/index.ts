@@ -144,7 +144,11 @@ async function main(): Promise<void> {
       process.exit(0);
     }
     if (flag === "-V" || flag === "--version") {
-      process.stdout.write(`${pkg.version}\n`);
+      // `crust <version>`, not a bare version: CI pastes this line into logs
+      // that interleave tools, and a bare `0.2.0-dev` names no tool. Readers
+      // updated in the same commit: tests/cli.test.ts, the Jenkinsfile, and
+      // .github/workflows/release.yml all compare this line exactly.
+      process.stdout.write(`crust ${pkg.version}\n`);
       process.exit(0);
     }
     if (flag === "-c") {

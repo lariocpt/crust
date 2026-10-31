@@ -58,6 +58,28 @@ pipeline {
                     echo "APPS_VERSION=${BASE}+${SHA}"            > version.env
                     echo "NPM_VERSION=${BASE}-ci.${BUILD_NUMBER}.${SHA}" >> version.env
                     cat version.env
+
+                    # Provenance (audit G36): a published version must be checkable out
+                    # from main. The dogfood found 0.2.0-ci.34.25195c9 — a sha that main
+                    # cannot resolve, i.e. provenance nobody can check out. Record the
+                    # ref the build was cut from, and refuse to publish what main cannot
+                    # resolve. (If origin/main is unreachable entirely, warn loudly but
+                    # do not block — an infra failure must not masquerade as provenance.)
+                    GIT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+                    echo "GIT_BRANCH=$GIT_BRANCH" >> version.env
+                    if git fetch --quiet origin main 2>/dev/null; then MAIN_REF=FETCH_HEAD
+                    elif git rev-parse --verify --quiet origin/main >/dev/null; then MAIN_REF=origin/main
+                    else MAIN_REF=""; fi
+                    if [ -n "$MAIN_REF" ] && git merge-base --is-ancestor "$SHA" "$MAIN_REF"; then
+                        echo "provenance: $SHA on $GIT_BRANCH is reachable from $MAIN_REF"
+                    elif [ -n "$MAIN_REF" ]; then
+                        echo "FAIL: $SHA (branch $GIT_BRANCH) is not reachable from $MAIN_REF."
+                        echo "A published version's provenance must be checkable out from main."
+                        echo "Merge $GIT_BRANCH to main first, or do not publish this build."
+                        exit 1
+                    else
+                        echo "WARN: cannot resolve origin/main — provenance of $SHA ($GIT_BRANCH) NOT verified"
+                    fi
                 '''
             }
         }
@@ -124,7 +146,7 @@ pipeline {
                     # destination ships a binary reporting 0.1.0-dev and nobody notices.
                     got=$(./out/crust --version | tr -d "\\r")
                     echo "reported version: $got"
-                    [ "$got" = "$APPS_VERSION" ] || { echo "FAIL: binary reports '$got', expected '$APPS_VERSION'"; exit 1; }
+                    [ "$got" = "crust $APPS_VERSION" ] || { echo "FAIL: binary reports '$got', expected 'crust $APPS_VERSION'"; exit 1; }
                 '''
             }
         }

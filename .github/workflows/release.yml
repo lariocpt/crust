@@ -97,8 +97,8 @@ jobs:
           set -euo pipefail
           got=$(./out/crust-linux-x64 --version | tr -d '\r')
           echo "reported version: $got"
-          [ "$got" = "${{ steps.version.outputs.version }}" ] \
-            || { echo "FAIL: binary reports '$got', expected '${{ steps.version.outputs.version }}'"; exit 1; }
+          [ "$got" = "crust ${{ steps.version.outputs.version }}" ] \
+            || { echo "FAIL: binary reports '$got', expected 'crust ${{ steps.version.outputs.version }}'"; exit 1; }
 
       # sha256sum's own format, so `sha256sum -c SHA256SUMS` works for anyone who downloads
       # the whole set — and both installers parse the same file.
