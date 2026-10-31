@@ -4,7 +4,7 @@ Notable changes to crust. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project is
 pre-1.0, so minor versions may carry breaking changes.
 
-## [Unreleased]
+## [0.3.0] — 2026-10-31
 
 ### Added
 
