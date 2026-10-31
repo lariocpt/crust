@@ -121,8 +121,7 @@ GET :4747/__crust/violations | (r => r.json()) | (v => v.violations.filter(x => 
 
 The `(r => r.json())` stage is not optional: an HTTP stage hands you the
 response object, so reading `.violations` off it straight away is `undefined`
-and the gate dies with `predicate threw` — which looks like a broken assert
-rather than a missing decode.
+and the gate dies with `crust: undefined is not an object (evaluating 'v.violations.filter')` — which looks like a broken assert rather than a missing decode.
 
 `DELETE /__crust/violations` clears between runs; `--report file.ndjson`
 appends every violation as NDJSON for CI artifacts (requires `--proxy`).
