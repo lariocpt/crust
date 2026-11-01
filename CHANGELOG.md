@@ -28,6 +28,24 @@ pre-1.0, so minor versions may carry breaking changes.
   `--build-info` row). `release.yml` now verifies both stamps out of the
   compiled binary before uploading, so an unstamped manifest fails the
   release instead of shipping an unprovable one.
+- **`gen-fixtures` emits in the receiving project's indent.** A biome
+  project's pre-commit hook normalises generated files to its own formatter,
+  so a 2-space emit into a tab-indented repo made every regeneration diff the
+  whole matrix — the churn the diff-against-regeneration discipline exists to
+  catch. The tool now looks up the nearest `biome.json` (walking up from
+  `--out`, then from the working directory when the out tree is outside the
+  project) and applies its formatter to the `.crust.ts` fixtures and to
+  `flows.gen.setup.ts`: `indentStyle: "tab"` emits a tab, `"space"` emits
+  `indentWidth` spaces (the keys read the way biome reads them — a
+  `javascript.formatter` beside a top-level `formatter` overrides it, and
+  values biome itself rejects fall back to biome's own defaults). A config at
+  biome's own default, or no `biome.json` on either walk, keeps the historical
+  2-space form byte for byte and stays silent — zero behaviour change for
+  non-biome repos. A non-default choice is disclosed
+  (`gen-fixtures: emitting with tab indent (biome.json at <path>)`); a config
+  that is not valid JSON is reported and treated as absent, so a broken
+  formatter can never fail a generation. `.pipes` files are untouched — their
+  lines start at column 0.
 
 ### Fixed
 

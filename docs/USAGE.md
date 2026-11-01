@@ -1405,7 +1405,16 @@ Derives a **negative-case fixture matrix** from an OpenAPI 3.x spec (Swagger
 2.0 is auto-converted): for every operation the spec documents, cases the
 server must *reject*. Output is one `<tag>.gen.crust.ts` per OpenAPI tag in
 `--out` (the directory is **deleted and recreated** every run — never edit
-generated files), runnable by [test-fixture](#test-fixture).
+generated files), runnable by [test-fixture](#test-fixture). The emitted
+indent follows the receiving project's own formatter: the nearest `biome.json`
+on the chain up from `--out`, falling back to the chain up from the working
+directory when the out tree is not inside the project — `indentStyle: "tab"`
+emits tabs, `"space"` emits `indentWidth` spaces, and a config with neither
+key, or no `biome.json` on either walk, keeps crust's historical 2-space form,
+so a biome pre-commit hook never rewrites a generated file. A non-default
+choice is disclosed on stdout, naming the config; a config that is not valid
+JSON is reported and treated as absent, since a broken formatter must never
+fail a generation.
 
 ```bash
 gen-fixtures --swagger ./openapi.json --out tests/gen --setup ./tests/gen-setup.ts
