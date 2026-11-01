@@ -197,7 +197,7 @@ jobs:
       - name: Publish to npmjs.org
         working-directory: npmstage
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -euo pipefail
           VERSION="$(node -p "require('./package.json').version")"
