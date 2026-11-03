@@ -1406,15 +1406,25 @@ Derives a **negative-case fixture matrix** from an OpenAPI 3.x spec (Swagger
 server must *reject*. Output is one `<tag>.gen.crust.ts` per OpenAPI tag in
 `--out` (the directory is **deleted and recreated** every run — never edit
 generated files), runnable by [test-fixture](#test-fixture). The emitted
-indent follows the receiving project's own formatter: the nearest `biome.json`
+style follows the receiving project's own formatter: the nearest `biome.json`
 on the chain up from `--out`, falling back to the chain up from the working
-directory when the out tree is not inside the project — `indentStyle: "tab"`
-emits tabs, `"space"` emits `indentWidth` spaces, and a config with neither
-key, or no `biome.json` on either walk, keeps crust's historical 2-space form,
-so a biome pre-commit hook never rewrites a generated file. A non-default
-choice is disclosed on stdout, naming the config; a config that is not valid
-JSON is reported and treated as absent, since a broken formatter must never
-fail a generation.
+directory when the out tree is not inside the project. From that one file
+crust resolves the whole style biome would apply to the TypeScript it writes
+— a `javascript.formatter` layer applied over a top-level `formatter`, with
+every absent key filled with biome's own default: `indentStyle` (a tab, or
+`indentWidth` spaces — default space/2), `lineWidth` wrapping (default 80),
+`quoteStyle` (default double, with biome's escape-minimising flip for strings
+full of the other quote), and the order of imported names — biome 2.x's
+`organizeImports` assist is ON by default, so names come out in the natural
+order the assist sorts with, and only an explicit `"off"` or
+`assist.enabled: false` keeps the historical code-point sort. A value biome
+itself rejects is treated as absent. This is what makes a biome pre-commit
+hook — or a post-generation `biome check --write` — a no-op over the matrix
+instead of a whole-matrix rewrite on every regeneration. No `biome.json` on
+either walk keeps crust's historical 2-space form byte for byte (zero
+behaviour change for non-biome repos); a non-default indent is disclosed on
+stdout, naming the config; and a config that is not valid JSON is reported
+and treated as absent, since a broken formatter must never fail a generation.
 
 ```bash
 gen-fixtures --swagger ./openapi.json --out tests/gen --setup ./tests/gen-setup.ts

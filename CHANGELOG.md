@@ -4,6 +4,13 @@ Notable changes to crust. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project is
 pre-1.0, so minor versions may carry breaking changes.
 
+## [Unreleased]
+
+### Changed
+
+- **`gen-fixtures` now emits the receiving project's full biome style, not just its indent.** The config walk added in 0.3.2 (nearest `biome.json` up from `--out`, then up from the working directory) now resolves the whole formatter the way biome would apply it: a `javascript.formatter` layer over a top-level `formatter`, and every absent key filled with biome's own default — `indentStyle` (space/2), `lineWidth` (80), `quoteStyle` (double, with biome's escape-minimising flip for strings full of the other quote), and `organizeImports` (ON by default in biome 2.x). Imported names therefore come out in the natural order the assist sorts with; only an explicit `"off"` — or `assist.enabled: false` — keeps the historical code-point sort, and a value biome itself rejects is treated as absent. For consumers the effect is that their post-generation `biome check --write`, and any biome pre-commit hook, is now a no-op safety net over the generated matrix instead of a fixer: gen writes the form biome would settle on, so a regeneration never diffs the whole matrix. No `biome.json` on either walk keeps the historical 2-space form byte for byte (measured against the v0.3.2 binary), so non-biome repos see zero behaviour change.
+- **A `biome.json` that is present now resolves to the full style biome would apply — defaults included — not to the historical form.** 0.3.2's "a config at biome's own default keeps the historical 2-space form byte for byte" held while only the indent was read; with wrapping, quotes and import order in play, a defaults-only config diverges from the 0.3.2-era form in exactly those dimensions. The first regeneration after upgrading therefore converges on the biome form: a checked-in matrix whose files already went through a biome pass diffs empty, one committed raw churns once (wrapping, quote choice, import order) and is a no-op from the next regeneration on. The indent is still the only dimension disclosed on stdout (`gen-fixtures: emitting with tab indent (biome.json at <path>)`), and a config that is not valid JSON is still reported and treated as absent.
+
 ## [0.3.2] — 2026-11-01
 
 ### Added
