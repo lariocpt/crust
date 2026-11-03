@@ -1,6 +1,10 @@
 name: Release
 
 # Tag-driven: `git tag v0.2.0 && git push origin v0.2.0` publishes both public channels.
+# The release commit also bumps the root package.json to the version: this workflow
+# stamps from the tag and never reads the in-repo value, but the LAN Jenkins plane
+# derives its BASE from it, so a release commit that skips the bump mislabels
+# every LAN build.
 #
 # ORDER IS LOAD-BEARING. The binaries must exist as release assets BEFORE the npm package is
 # published, because the npm package is a ~4 KB launcher that resolves its binary from the

@@ -95,7 +95,12 @@ that cannot install itself.
   compile — `src/index.ts` imports them for `--version` / `--build-info`, and
   the workflow verifies both out of the compiled binary before uploading.
 - **LAN** — Jenkins job `crust`: binary to apps.in.drlario.org (`BASE+sha`),
-  launcher to npm.in.drlario.org (`BASE-ci.N.sha`). The Jenkinsfile's sh blocks
+  launcher to npm.in.drlario.org (`BASE-ci.N.sha`). `BASE` is the root
+  `package.json` version minus a trailing `-dev`, and the public plane stamps
+  from the tag without reading it — so the release commit must also bump the
+  root `package.json` to the release version. It sat at `0.2.0-dev` through
+  v0.3.3, and every LAN build since v0.2.4 was mislabeled for it. The
+  Jenkinsfile's sh blocks
   are Groovy triple-single-quoted: **escape backslashes** (`\\(` not `\(`) or
   the pipeline won't compile. Sibling containers can't resolve LAN DNS —
   `--add-host npm.in.drlario.org:host-gateway` where needed.
