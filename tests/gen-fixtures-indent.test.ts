@@ -1,7 +1,7 @@
-// The emitted indent must match the project that receives the generated
-// files: a biome project's pre-commit hook normalises the gen output to its
-// own formatter, so a 2-space emit into a tab repo diffs the whole matrix on
-// every regeneration. The contract under test:
+// The emitted style must match the project that receives the generated
+// files: a biome project's pre-commit hook (biome check --write) normalises
+// the gen output to its own formatter, so an emit that disagrees diffs the
+// whole matrix on every regeneration. The contract under test:
 //
 //   1. the nearest biome.json governs — walked up from --out, then from cwd
 //      when the out tree is not inside the working project;
@@ -9,9 +9,16 @@
 //      absent key -> biome's own default (space/2), applied over the
 //      top-level formatter in the order biome applies them
 //      (javascript.formatter last);
-//   3. no biome.json on either walk -> the historical 2-space form, byte for
+//   3. `lineWidth` (biome's default 80 when the key is absent) governs where
+//      long calls, import lists and matcher chains wrap;
+//   4. `javascript.formatter.quoteStyle` (biome's default "double") governs
+//      string literals, with biome's escape-minimising flip;
+//   5. `assist.actions.source.organizeImports` (ON by default in biome 2.x)
+//      sorts imported names in CLDR ASCII natural order; only an explicit
+//      "off" or `assist.enabled: false` keeps the legacy code-point sort;
+//   6. no biome.json on either walk -> the historical 2-space form, byte for
 //      byte (zero behaviour change for non-biome repos);
-//   4. a config biome itself would reject (unparseable) is disclosed and
+//   7. a config biome itself would reject (unparseable) is disclosed and
 //      treated as absent — generation never fails on a broken formatter.
 //
 // Three layers, mirroring launcher-manifest.test.ts: the pure unit (the
@@ -31,7 +38,9 @@ import {
   findBiomeJsonUp,
   indentUnitForBiomeConfig,
   reindentTwoSpace,
+  resolveEmitStyle,
   resolveIndentUnit,
+  styleForBiomeConfig,
 } from "../src/genFixtures/indent";
 
 const ENTRY = `${import.meta.dir}/../src/index.ts`;
@@ -228,6 +237,190 @@ describe("resolveIndentUnit", () => {
   });
 });
 
+describe("styleForBiomeConfig", () => {
+  // organizeImports — the truth table. Biome 2.x defaults the assist ON:
+  // an absent key (or a value biome would reject) still re-sorts, and only
+  // an explicit "off" — or a disabled assist — keeps the legacy code-point
+  // order. Measured: a config with no assist key at all still re-sorted a
+  // code-point-sorted import list under both biome 2.4.13 and 2.5.7.
+  test("organizeImports defaults to on for an empty config", () => {
+    expect(styleForBiomeConfig({}).organizeImports).toBe(true);
+  });
+
+  test("an absent assist key keeps organizeImports on", () => {
+    expect(styleForBiomeConfig({ formatter: { indentStyle: "tab" } }).organizeImports).toBe(true);
+  });
+
+  test('an explicit organizeImports "on" is on', () => {
+    expect(
+      styleForBiomeConfig({ assist: { actions: { source: { organizeImports: "on" } } } })
+        .organizeImports,
+    ).toBe(true);
+  });
+
+  test('an explicit organizeImports "off" is off', () => {
+    expect(
+      styleForBiomeConfig({ assist: { actions: { source: { organizeImports: "off" } } } })
+        .organizeImports,
+    ).toBe(false);
+  });
+
+  test("assist.enabled false wins over an explicit on", () => {
+    expect(
+      styleForBiomeConfig({
+        assist: { enabled: false, actions: { source: { organizeImports: "on" } } },
+      }).organizeImports,
+    ).toBe(false);
+  });
+
+  test("a value biome would reject leaves the default (on) standing", () => {
+    expect(
+      styleForBiomeConfig({ assist: { actions: { source: { organizeImports: "maybe" } } } })
+        .organizeImports,
+    ).toBe(true);
+  });
+
+  // lineWidth — biome's default 80 when the key is absent, the javascript
+  // layer on top of the top level, rejected values fall back to the default.
+  test("lineWidth defaults to 80 when absent", () => {
+    expect(styleForBiomeConfig({}).lineWidth).toBe(80);
+  });
+
+  test("the javascript layer overrides the top-level lineWidth", () => {
+    expect(
+      styleForBiomeConfig({
+        formatter: { lineWidth: 100 },
+        javascript: { formatter: { lineWidth: 120 } },
+      }).lineWidth,
+    ).toBe(120);
+  });
+
+  test("a lineWidth biome would reject falls back to 80", () => {
+    for (const bad of [0, -5, 2.5, "80"]) {
+      expect(styleForBiomeConfig({ formatter: { lineWidth: bad } }).lineWidth).toBe(80);
+    }
+  });
+
+  // quoteStyle — javascript.formatter only (biome 2.x has no top-level
+  // quoteStyle to layer), default "double". The escape-minimising flip is
+  // applied at emit time, not here.
+  test("quoteStyle defaults to double", () => {
+    expect(styleForBiomeConfig({}).quoteStyle).toBe("double");
+  });
+
+  test("quoteStyle single stands", () => {
+    expect(
+      styleForBiomeConfig({ javascript: { formatter: { quoteStyle: "single" } } }).quoteStyle,
+    ).toBe("single");
+  });
+
+  test("a top-level formatter.quoteStyle is not a biome 2.x key — ignored", () => {
+    expect(styleForBiomeConfig({ formatter: { quoteStyle: "single" } }).quoteStyle).toBe("double");
+  });
+
+  test("a quoteStyle biome would reject falls back to double", () => {
+    expect(
+      styleForBiomeConfig({ javascript: { formatter: { quoteStyle: "backtick" } } }).quoteStyle,
+    ).toBe("double");
+  });
+
+  // indent — a tab unit counts as the resolved indentWidth columns in the
+  // fit checks, whatever the indent style; the javascript layer wins.
+  test("a tab config gives a tab unit at the default count", () => {
+    const s = styleForBiomeConfig({ formatter: { indentStyle: "tab" } });
+    expect(s.unit).toBe("\t");
+    expect(s.indentWidth).toBe(2);
+  });
+
+  test("a tab with a wider indentWidth keeps the tab but the wider count", () => {
+    const s = styleForBiomeConfig({ formatter: { indentStyle: "tab", indentWidth: 4 } });
+    expect(s.unit).toBe("\t");
+    expect(s.indentWidth).toBe(4);
+  });
+
+  test("the javascript layer overrides the top-level indent", () => {
+    expect(
+      styleForBiomeConfig({
+        formatter: { indentStyle: "tab" },
+        javascript: { formatter: { indentStyle: "space", indentWidth: 4 } },
+      }).unit,
+    ).toBe("    ");
+  });
+});
+
+describe("resolveEmitStyle", () => {
+  let clean: string;
+  let outTree: string;
+  let cwdTree: string;
+
+  beforeAll(async () => {
+    clean = await mkdtemp(join(tmpdir(), "crust-genfx-style-"));
+    outTree = join(clean, "outproj");
+    cwdTree = join(clean, "cwdproj");
+    await mkdir(outTree, { recursive: true });
+    await mkdir(cwdTree, { recursive: true });
+  });
+  afterAll(async () => {
+    await rm(clean, { recursive: true, force: true });
+  });
+
+  test("no biome.json on either walk -> the legacy record, silent", () => {
+    const logs: string[] = [];
+    const style = resolveEmitStyle(join(clean, "elsewhere", "out"), (l) => logs.push(l), clean);
+    expect(style).toEqual({
+      unit: DEFAULT_INDENT_UNIT,
+      indentWidth: 2,
+      lineWidth: Number.POSITIVE_INFINITY,
+      quoteStyle: "json",
+      organizeImports: false,
+      legacy: true,
+      biomeJson: null,
+    });
+    expect(logs).toEqual([]);
+  });
+
+  test("a biome.json in the out tree governs, with the full record", async () => {
+    await writeFile(
+      join(outTree, "biome.json"),
+      JSON.stringify({
+        formatter: { indentStyle: "tab" },
+        javascript: { formatter: { quoteStyle: "single" } },
+      }),
+    );
+    const style = resolveEmitStyle(join(outTree, "tests", "gen"), () => {}, cwdTree);
+    expect(style).toEqual({
+      unit: "\t",
+      indentWidth: 2,
+      lineWidth: 80,
+      quoteStyle: "single",
+      organizeImports: true,
+      legacy: false,
+      biomeJson: join(outTree, "biome.json"),
+    });
+  });
+
+  test("the cwd fallback names the config it found, off wins for the sort", async () => {
+    await rm(join(outTree, "biome.json"), { force: true });
+    await writeFile(
+      join(cwdTree, "biome.json"),
+      JSON.stringify({
+        formatter: { indentStyle: "space", indentWidth: 4 },
+        assist: { actions: { source: { organizeImports: "off" } } },
+      }),
+    );
+    const style = resolveEmitStyle(join(outTree, "tests", "gen"), () => {}, cwdTree);
+    expect(style).toEqual({
+      unit: "    ",
+      indentWidth: 4,
+      lineWidth: 80,
+      quoteStyle: "double",
+      organizeImports: false,
+      legacy: false,
+      biomeJson: join(cwdTree, "biome.json"),
+    });
+  });
+});
+
 describe("reindentTwoSpace", () => {
   test("the 2-space unit returns the input itself (the zero-behaviour-change path)", () => {
     const t = 'export default [\n  {\n    name: "x",\n  },\n];\n';
@@ -365,10 +558,40 @@ export function resolvePath(ctx, template) {
 
 // The deterministic prefix of <tag>.gen.crust.ts: the header plus the FIRST
 // fixture entry (the 401 case — no data/schema lines, so the entry is fully
-// fixed by the spec above). Authored in crust's native 2-space form; the tab
-// and 4-space variants are written out by hand, not produced by the code
-// under test.
+// fixed by the spec above). Authored per style, by hand from the contract,
+// and every non-legacy form verified byte for byte against the running
+// biome: `biome check --write` on the emitted file is a no-op (2.4.13 and
+// 2.5.7 agree on all of them).
+//
+// The import line is 78 columns, so it stays on one line in every style
+// (width 80 and 100 alike). What the styles split on is the NAME ORDER:
+// biome 2.x's organizeImports assist is ON by default, so every emit that
+// resolves through a biome.json takes the natural order (headersFor before
+// JSON_HEADERS — the pair where case-sensitive and case-insensitive order
+// disagree), and only the TRUE legacy form (no biome.json) and an explicit
+// organizeImports "off" keep the legacy code-point sort. The biome styles
+// also take the quote flip — `body` holds `"` so it takes single quotes
+// under quoteStyle "double" — while the legacy forms keep the escaped
+// JSON.stringify output byte for byte.
+//
+// (The consumer-shaped project — explicit double, explicit on, no lineWidth
+// — resolves to the SAME style as the bare tab config, and its output is
+// byte-identical to the tab goldens: the consumer test reuses them, which is
+// itself the pin that the two configs must not drift.)
+
 const WIDGETS_HEADER = [
+  "// GENERATED by crust gen-fixtures — DO NOT EDIT.",
+  "// Regenerate: gen-fixtures --swagger <spec> --out <dir> --setup <module>",
+  'import { headersFor, JSON_HEADERS, resolvePath, shared } from "../../setup.ts";',
+  "",
+  "type Ctx = Awaited<ReturnType<typeof shared>>;",
+  "",
+  "export default [",
+];
+
+// The legacy header: the code-point sort the emitter keeps when no biome.json
+// is in play, or when one explicitly says organizeImports "off".
+const WIDGETS_HEADER_LEGACY = [
   "// GENERATED by crust gen-fixtures — DO NOT EDIT.",
   "// Regenerate: gen-fixtures --swagger <spec> --out <dir> --setup <module>",
   'import { JSON_HEADERS, headersFor, resolvePath, shared } from "../../setup.ts";',
@@ -377,7 +600,59 @@ const WIDGETS_HEADER = [
   "",
   "export default [",
 ];
+
 const WIDGETS_ENTRY_401_NATIVE = [
+  "  {",
+  '    name: "POST /api/things/{thingId}/widgets without credentials -> 401",',
+  "    setup: shared,",
+  "    input: (ctx: Ctx) => ({",
+  '      url: resolvePath(ctx, "/api/things/{thingId}/widgets"),',
+  '      method: "POST",',
+  "      headers: JSON_HEADERS,",
+  '      body: \'{"name":"gen-value-x"}\',',
+  "    }),",
+  "    output: {",
+  "      status: 401,",
+  "    },",
+  "  },",
+];
+
+const WIDGETS_ENTRY_401_TAB = [
+  "\t{",
+  '\t\tname: "POST /api/things/{thingId}/widgets without credentials -> 401",',
+  "\t\tsetup: shared,",
+  "\t\tinput: (ctx: Ctx) => ({",
+  '\t\t\turl: resolvePath(ctx, "/api/things/{thingId}/widgets"),',
+  '\t\t\tmethod: "POST",',
+  "\t\t\theaders: JSON_HEADERS,",
+  '\t\t\tbody: \'{"name":"gen-value-x"}\',',
+  "\t\t}),",
+  "\t\toutput: {",
+  "\t\t\tstatus: 401,",
+  "\t\t},",
+  "\t},",
+];
+
+const WIDGETS_ENTRY_401_SPACE4 = [
+  "    {",
+  '        name: "POST /api/things/{thingId}/widgets without credentials -> 401",',
+  "        setup: shared,",
+  "        input: (ctx: Ctx) => ({",
+  '            url: resolvePath(ctx, "/api/things/{thingId}/widgets"),',
+  '            method: "POST",',
+  "            headers: JSON_HEADERS,",
+  '            body: \'{"name":"gen-value-x"}\',',
+  "        }),",
+  "        output: {",
+  "            status: 401,",
+  "        },",
+  "    },",
+];
+
+// The TRUE legacy form — no biome.json anywhere, emitted by the subprocess
+// tests with a clean cwd. Identical to the 0.3.2 output, byte for byte.
+
+const WIDGETS_ENTRY_401_LEGACY = [
   "  {",
   '    name: "POST /api/things/{thingId}/widgets without credentials -> 401",',
   "    setup: shared,",
@@ -392,38 +667,25 @@ const WIDGETS_ENTRY_401_NATIVE = [
   "    },",
   "  },",
 ];
-const WIDGETS_ENTRY_401_TAB = [
-  "\t{",
-  '\t\tname: "POST /api/things/{thingId}/widgets without credentials -> 401",',
-  "\t\tsetup: shared,",
-  "\t\tinput: (ctx: Ctx) => ({",
-  '\t\t\turl: resolvePath(ctx, "/api/things/{thingId}/widgets"),',
-  '\t\t\tmethod: "POST",',
-  "\t\t\theaders: JSON_HEADERS,",
-  '\t\t\tbody: "{\\"name\\":\\"gen-value-x\\"}",',
-  "\t\t}),",
-  "\t\toutput: {",
-  "\t\t\tstatus: 401,",
-  "\t\t},",
-  "\t},",
-];
-const WIDGETS_ENTRY_401_SPACE4 = [
-  "    {",
-  '        name: "POST /api/things/{thingId}/widgets without credentials -> 401",',
-  "        setup: shared,",
-  "        input: (ctx: Ctx) => ({",
-  '            url: resolvePath(ctx, "/api/things/{thingId}/widgets"),',
-  '            method: "POST",',
-  "            headers: JSON_HEADERS,",
-  '            body: "{\\"name\\":\\"gen-value-x\\"}",',
-  "        }),",
-  "        output: {",
-  "            status: 401,",
-  "        },",
-  "    },",
-];
+
 // The name lines of the second and third entries (403, then the first 400
-// case) plus the 400 case's fieldErrors matcher continuation (level 4).
+// case) plus the 400 case's fieldErrors matcher. Three shapes, all
+// biome-faithful (measured, not guessed):
+//
+//   - native (crust's own space/2 config, lineWidth 100): the header fits
+//     and the whole chain fits on one line below the arrow;
+//   - tab (biome's default width 80): the header fits but the chain does
+//     not — one operand per line, `&&` trailing;
+//   - space4 (width 80 at indentWidth 4): even the header does not fit —
+//     the type literal breaks one member per line, then the per-operand
+//     chain.
+//
+// In every shape the broken chain sits ONE indent level below the `data:`
+// property — that is where biome puts an arrow body that breaks. (The
+// legacy template broke after the arrow too and kept the chain on one line
+// regardless of width, which for a width that fits the chain is the same
+// line biome keeps — the two width-80 shapes are where 0.3.3 diverges from
+// 0.3.2.)
 const WIDGETS_LATER_LINES: Record<string, string[]> = {
   native: [
     '    name: "POST /api/things/{thingId}/widgets as non-member -> 403",',
@@ -433,17 +695,116 @@ const WIDGETS_LATER_LINES: Record<string, string[]> = {
   tab: [
     '\t\tname: "POST /api/things/{thingId}/widgets as non-member -> 403",',
     "\t\tname: \"POST /api/things/{thingId}/widgets missing required 'name' -> 400\",",
-    '\t\t\t\td.code === "validation" && d.fieldErrors !== undefined && "name" in d.fieldErrors,',
+    '\t\t\t\td.code === "validation" &&',
+    "\t\t\t\td.fieldErrors !== undefined &&",
+    '\t\t\t\t"name" in d.fieldErrors,',
   ],
   space4: [
     '        name: "POST /api/things/{thingId}/widgets as non-member -> 403",',
     "        name: \"POST /api/things/{thingId}/widgets missing required 'name' -> 400\",",
-    '                d.code === "validation" && d.fieldErrors !== undefined && "name" in d.fieldErrors,',
+    "            data: (d: {",
+    "                code?: string;",
+    "                fieldErrors?: Record<string, unknown>;",
+    "            }) =>",
+    '                d.code === "validation" &&',
+    "                d.fieldErrors !== undefined &&",
+    '                "name" in d.fieldErrors,',
   ],
 };
 
-// flows.gen.setup.ts in full, per unit, for the single /api/things flow.
 const FLOWS_SETUP_NATIVE = [
+  "// GENERATED by crust gen-fixtures — DO NOT EDIT.",
+  'import { headersFor, resolvePath, shared } from "../../../setup.ts";',
+  "",
+  "export default async function setup(): Promise<void> {",
+  "  const ctx = await shared();",
+  '  const headers = headersFor(ctx, "member");',
+  '  const auth = Object.entries(headers).filter(([k]) => k.toLowerCase() !== "content-type");',
+  "  if (auth.length === 0) {",
+  "    throw new Error(\"gen flows: headersFor(ctx, 'member') returned no auth header\");",
+  "  }",
+  "  if (auth.length > 1) {",
+  "    // Flows carry exactly ONE auth header ($GEN_AUTH_HEADER) — silently",
+  "    // dropping the rest would make every generated request fail mysteriously.",
+  "    throw new Error(",
+  "      `gen flows: headersFor(ctx, 'member') returned ${auth.length} auth headers (${auth",
+  "        .map(([k]) => k)",
+  "        .join(",
+  '          ", ",',
+  "        )}) — generated flows can send only one; reduce headersFor to a single auth header`,",
+  "    );",
+  "  }",
+  "  process.env.GEN_AUTH_HEADER = `${auth[0]![0]}: ${auth[0]![1]}`;",
+  '  process.env.GEN_URL_API_THINGS = resolvePath(ctx, "/api/things");',
+  "}",
+];
+
+const FLOWS_SETUP_TAB = [
+  "// GENERATED by crust gen-fixtures — DO NOT EDIT.",
+  'import { headersFor, resolvePath, shared } from "../../../setup.ts";',
+  "",
+  "export default async function setup(): Promise<void> {",
+  "\tconst ctx = await shared();",
+  '\tconst headers = headersFor(ctx, "member");',
+  "\tconst auth = Object.entries(headers).filter(",
+  '\t\t([k]) => k.toLowerCase() !== "content-type",',
+  "\t);",
+  "\tif (auth.length === 0) {",
+  "\t\tthrow new Error(",
+  "\t\t\t\"gen flows: headersFor(ctx, 'member') returned no auth header\",",
+  "\t\t);",
+  "\t}",
+  "\tif (auth.length > 1) {",
+  "\t\t// Flows carry exactly ONE auth header ($GEN_AUTH_HEADER) — silently",
+  "\t\t// dropping the rest would make every generated request fail mysteriously.",
+  "\t\tthrow new Error(",
+  "\t\t\t`gen flows: headersFor(ctx, 'member') returned ${auth.length} auth headers (${auth",
+  "\t\t\t\t.map(([k]) => k)",
+  "\t\t\t\t.join(",
+  '\t\t\t\t\t", ",',
+  "\t\t\t\t)}) — generated flows can send only one; reduce headersFor to a single auth header`,",
+  "\t\t);",
+  "\t}",
+  "\tprocess.env.GEN_AUTH_HEADER = `${auth[0]![0]}: ${auth[0]![1]}`;",
+  '\tprocess.env.GEN_URL_API_THINGS = resolvePath(ctx, "/api/things");',
+  "}",
+];
+
+const FLOWS_SETUP_SPACE4 = [
+  "// GENERATED by crust gen-fixtures — DO NOT EDIT.",
+  'import { headersFor, resolvePath, shared } from "../../../setup.ts";',
+  "",
+  "export default async function setup(): Promise<void> {",
+  "    const ctx = await shared();",
+  '    const headers = headersFor(ctx, "member");',
+  "    const auth = Object.entries(headers).filter(",
+  '        ([k]) => k.toLowerCase() !== "content-type",',
+  "    );",
+  "    if (auth.length === 0) {",
+  "        throw new Error(",
+  "            \"gen flows: headersFor(ctx, 'member') returned no auth header\",",
+  "        );",
+  "    }",
+  "    if (auth.length > 1) {",
+  "        // Flows carry exactly ONE auth header ($GEN_AUTH_HEADER) — silently",
+  "        // dropping the rest would make every generated request fail mysteriously.",
+  "        throw new Error(",
+  "            `gen flows: headersFor(ctx, 'member') returned ${auth.length} auth headers (${auth",
+  "                .map(([k]) => k)",
+  "                .join(",
+  '                    ", ",',
+  "                )}) — generated flows can send only one; reduce headersFor to a single auth header`,",
+  "        );",
+  "    }",
+  "    process.env.GEN_AUTH_HEADER = `${auth[0]![0]}: ${auth[0]![1]}`;",
+  '    process.env.GEN_URL_API_THINGS = resolvePath(ctx, "/api/things");',
+  "}",
+];
+
+// The legacy flows file: every line fits the historical form — the join
+// call inline, the throws inline — exactly what 0.3.2 emitted.
+
+const FLOWS_SETUP_LEGACY = [
   "// GENERATED by crust gen-fixtures — DO NOT EDIT.",
   'import { headersFor, resolvePath, shared } from "../../../setup.ts";',
   "",
@@ -467,56 +828,10 @@ const FLOWS_SETUP_NATIVE = [
   '  process.env.GEN_URL_API_THINGS = resolvePath(ctx, "/api/things");',
   "}",
 ];
-const FLOWS_SETUP_TAB = [
-  "// GENERATED by crust gen-fixtures — DO NOT EDIT.",
-  'import { headersFor, resolvePath, shared } from "../../../setup.ts";',
-  "",
-  "export default async function setup(): Promise<void> {",
-  "\tconst ctx = await shared();",
-  '\tconst headers = headersFor(ctx, "member");',
-  '\tconst auth = Object.entries(headers).filter(([k]) => k.toLowerCase() !== "content-type");',
-  "\tif (auth.length === 0) {",
-  "\t\tthrow new Error(\"gen flows: headersFor(ctx, 'member') returned no auth header\");",
-  "\t}",
-  "\tif (auth.length > 1) {",
-  "\t\t// Flows carry exactly ONE auth header ($GEN_AUTH_HEADER) — silently",
-  "\t\t// dropping the rest would make every generated request fail mysteriously.",
-  "\t\tthrow new Error(",
-  "\t\t\t`gen flows: headersFor(ctx, 'member') returned ${auth.length} auth headers (${auth",
-  "\t\t\t\t.map(([k]) => k)",
-  '\t\t\t\t.join(", ")}) — generated flows can send only one; reduce headersFor to a single auth header`,',
-  "\t\t);",
-  "\t}",
-  "\tprocess.env.GEN_AUTH_HEADER = `${auth[0]![0]}: ${auth[0]![1]}`;",
-  '\tprocess.env.GEN_URL_API_THINGS = resolvePath(ctx, "/api/things");',
-  "}",
-];
-const FLOWS_SETUP_SPACE4 = [
-  "// GENERATED by crust gen-fixtures — DO NOT EDIT.",
-  'import { headersFor, resolvePath, shared } from "../../../setup.ts";',
-  "",
-  "export default async function setup(): Promise<void> {",
-  "    const ctx = await shared();",
-  '    const headers = headersFor(ctx, "member");',
-  '    const auth = Object.entries(headers).filter(([k]) => k.toLowerCase() !== "content-type");',
-  "    if (auth.length === 0) {",
-  "        throw new Error(\"gen flows: headersFor(ctx, 'member') returned no auth header\");",
-  "    }",
-  "    if (auth.length > 1) {",
-  "        // Flows carry exactly ONE auth header ($GEN_AUTH_HEADER) — silently",
-  "        // dropping the rest would make every generated request fail mysteriously.",
-  "        throw new Error(",
-  "            `gen flows: headersFor(ctx, 'member') returned ${auth.length} auth headers (${auth",
-  "                .map(([k]) => k)",
-  '                .join(", ")}) — generated flows can send only one; reduce headersFor to a single auth header`,',
-  "        );",
-  "    }",
-  "    process.env.GEN_AUTH_HEADER = `${auth[0]![0]}: ${auth[0]![1]}`;",
-  '    process.env.GEN_URL_API_THINGS = resolvePath(ctx, "/api/things");',
-  "}",
-];
 
-async function scaffoldProject(style: "none" | "tab" | "space4"): Promise<string> {
+async function scaffoldProject(
+  style: "none" | "tab" | "space4" | "consumer" | "off",
+): Promise<string> {
   const proj = await mkdtemp(join(tmpdir(), "crust-genfx-indent-"));
   await writeFile(join(proj, "spec.json"), JSON.stringify(SPEC));
   await writeFile(join(proj, "setup.ts"), SETUP);
@@ -529,6 +844,34 @@ async function scaffoldProject(style: "none" | "tab" | "space4"): Promise<string
     await writeFile(
       join(proj, "biome.json"),
       JSON.stringify({ formatter: { indentStyle: "space", indentWidth: 4 } }),
+    );
+  // The adopting project's shape (mybodycorpai): tab, explicit double, NO
+  // lineWidth key (biome's default 80 governs), organizeImports on.
+  if (style === "consumer")
+    await writeFile(
+      join(proj, "biome.json"),
+      JSON.stringify(
+        {
+          formatter: { indentStyle: "tab" },
+          javascript: { formatter: { quoteStyle: "double" } },
+          assist: { actions: { source: { organizeImports: "on" } } },
+        },
+        null,
+        2,
+      ),
+    );
+  // The one non-legacy shape that keeps the legacy code-point import order.
+  if (style === "off")
+    await writeFile(
+      join(proj, "biome.json"),
+      JSON.stringify(
+        {
+          formatter: { indentStyle: "tab" },
+          assist: { actions: { source: { organizeImports: "off" } } },
+        },
+        null,
+        2,
+      ),
     );
   return proj;
 }
@@ -630,13 +973,16 @@ describe("generateFixtures: a space/indentWidth-4 project governs the emit", () 
   });
 });
 
-describe("generateFixtures: no biome.json in the out tree keeps the 2-space form", () => {
-  // The in-process cwd is this repo, whose biome.json is space/2 — biome's
-  // own default — so the cwd fallback resolves to the legacy unit here. This
-  // pins the path every existing gen test (temp dirs, no biome.json) takes.
-  // The TRUE "no biome.json anywhere" resolution is pinned by the
-  // resolveIndentUnit unit test above and the clean-cwd subprocess test
-  // below, because an in-process run cannot unset this repo's own config.
+describe("generateFixtures: no biome.json in the out tree, the cwd's biome.json governs", () => {
+  // The in-process cwd is this repo, whose biome.json is space/2 with
+  // lineWidth 100 and quoteStyle "double" — so the cwd fallback resolves to
+  // the repo's own style: the legacy 2-space unit, but double-quoted strings
+  // (with the flip), width-100 wrapping and the natural import order. This
+  // pins the path every existing gen test (temp dirs, no biome.json in the
+  // out tree) takes. The TRUE "no biome.json anywhere" resolution is pinned
+  // by the resolveEmitStyle unit test above and the clean-cwd subprocess
+  // test below, because an in-process run cannot unset this repo's own
+  // config.
   let proj: string;
 
   beforeAll(async () => {
@@ -646,7 +992,7 @@ describe("generateFixtures: no biome.json in the out tree keeps the 2-space form
     await rm(proj, { recursive: true, force: true });
   });
 
-  test("the emit is byte-identical to the historical form", async () => {
+  test("the emit resolves to the repo's own style, 2-space unit included", async () => {
     const logs: string[] = [];
     const result = await generateFixtures({
       swagger: join(proj, "spec.json"),
@@ -663,13 +1009,13 @@ describe("generateFixtures: no biome.json in the out tree keeps the 2-space form
     ]);
     for (const line of WIDGETS_LATER_LINES.native) expect(widgets).toContain(line);
     expect(widgets.join("\n")).not.toMatch(/\t/);
-    // The 2-space unit is the historical form itself: no disclosure, no
-    // other notice — the run is silent, which is the zero-behaviour-change
-    // guarantee in its strongest form.
+    // The 2-space unit is biome's own default, so the indent is not
+    // disclosed — the run is silent. (The byte-for-byte zero-behaviour
+    // change is the no-config path, pinned by the clean-cwd test below.)
     expect(logs).toEqual([]);
   });
 
-  test("the legacy flows.gen.setup.ts is unchanged", async () => {
+  test("the flows.gen.setup.ts matches the repo-styled golden", async () => {
     await generateFixtures({
       swagger: join(proj, "spec.json"),
       out: join(proj, "tests", "gen2"),
@@ -729,13 +1075,85 @@ describe("gen-fixtures subprocess: a clean tree keeps the legacy 2-space form", 
     expect(r.code).toBe(0);
     expect(r.stdout).not.toContain("emitting with");
     const widgets = (await Bun.file(join(out, "widgets.gen.crust.ts")).text()).split("\n");
-    expect(widgets.slice(0, WIDGETS_HEADER.length + WIDGETS_ENTRY_401_NATIVE.length)).toEqual([
-      ...WIDGETS_HEADER,
-      ...WIDGETS_ENTRY_401_NATIVE,
-    ]);
+    expect(
+      widgets.slice(0, WIDGETS_HEADER_LEGACY.length + WIDGETS_ENTRY_401_LEGACY.length),
+    ).toEqual([...WIDGETS_HEADER_LEGACY, ...WIDGETS_ENTRY_401_LEGACY]);
     expect(widgets.join("\n")).not.toMatch(/\t/);
     const setup = await Bun.file(join(out, "flows", "flows.gen.setup.ts")).text();
-    expect(setup).toBe(FLOWS_SETUP_NATIVE.join("\n") + "\n");
+    expect(setup).toBe(FLOWS_SETUP_LEGACY.join("\n") + "\n");
+  });
+});
+
+// The adopting project's shape (mybodycorpai): tab, explicit double, no
+// lineWidth key (biome's default 80 governs), organizeImports on. This
+// resolves to the SAME style as the bare tab config — the output must match
+// the tab goldens byte for byte, and reusing them is the pin that the
+// explicit keys never drift from biome's defaults.
+
+describe("generateFixtures: the consumer-shaped config resolves like the tab config", () => {
+  let proj: string;
+
+  beforeAll(async () => {
+    proj = await scaffoldProject("consumer");
+  });
+  afterAll(async () => {
+    await rm(proj, { recursive: true, force: true });
+  });
+
+  test("widgets and flows come out byte-identical to the tab goldens", async () => {
+    const logs: string[] = [];
+    const result = await generateFixtures({
+      swagger: join(proj, "spec.json"),
+      out: join(proj, "tests", "gen"),
+      setup: join(proj, "setup.ts"),
+      log: (l) => logs.push(l),
+    });
+    const widgets = (await Bun.file(result.files.find((f) => f.includes("widgets"))!).text()).split(
+      "\n",
+    );
+    expect(widgets.slice(0, WIDGETS_HEADER.length + WIDGETS_ENTRY_401_TAB.length)).toEqual([
+      ...WIDGETS_HEADER,
+      ...WIDGETS_ENTRY_401_TAB,
+    ]);
+    for (const line of WIDGETS_LATER_LINES.tab) expect(widgets).toContain(line);
+    const flows = await Bun.file(join(proj, "tests", "gen", "flows", "flows.gen.setup.ts")).text();
+    expect(flows).toBe(FLOWS_SETUP_TAB.join("\n") + "\n");
+    // The tab unit is not biome's default, so the indent is disclosed.
+    expect(logs).toEqual([
+      `gen-fixtures: emitting with tab indent (biome.json at ${join(proj, "biome.json")})`,
+    ]);
+  });
+});
+
+// organizeImports is ON by default in biome 2.x, so an explicit "off" is
+// the ONE non-legacy config that keeps the legacy code-point import order:
+// every other config that resolves through a biome.json takes the natural
+// order. The rest of the emit is plain tab-shaped.
+
+describe('gen-fixtures subprocess: organizeImports "off" keeps the code-point sort', () => {
+  let proj: string;
+  beforeAll(async () => {
+    proj = await scaffoldProject("off");
+  });
+  afterAll(async () => {
+    await rm(proj, { recursive: true, force: true });
+  });
+
+  test("the import keeps code-point order, everything else is tab-shaped", async () => {
+    const out = join(proj, "tests", "gen");
+    const r = await runGen(
+      [join(proj, "spec.json"), "-o", out, "-s", join(proj, "setup.ts")],
+      proj,
+    );
+    expect(r.code).toBe(0);
+    const widgets = (await Bun.file(join(out, "widgets.gen.crust.ts")).text()).split("\n");
+    expect(widgets.slice(0, WIDGETS_HEADER_LEGACY.length + WIDGETS_ENTRY_401_TAB.length)).toEqual([
+      ...WIDGETS_HEADER_LEGACY,
+      ...WIDGETS_ENTRY_401_TAB,
+    ]);
+    for (const line of WIDGETS_LATER_LINES.tab) expect(widgets).toContain(line);
+    const setup = await Bun.file(join(out, "flows", "flows.gen.setup.ts")).text();
+    expect(setup).toBe(FLOWS_SETUP_TAB.join("\n") + "\n");
   });
 });
 

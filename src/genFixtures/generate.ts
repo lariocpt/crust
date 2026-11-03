@@ -25,12 +25,16 @@
  * a generated CRUD flow suite: --out/flows/flows.gen.pipes + its sibling
  * flows.gen.setup.ts, runnable by test-pipes with zero extra flags.
  *
- * The emitted TypeScript takes the indent of the project it lands in: the
- * nearest biome.json (walked up from --out, then from cwd) decides — a tab
- * style emits tabs, a space style emits its width, an absent key takes
- * biome's own default (space/2). No biome.json on either walk keeps the
- * historical 2-space form, byte for byte. The walk and the reindent live in
- * indent.ts.
+ * The emitted TypeScript takes the style of the project it lands in: the
+ * nearest biome.json (walked up from --out, then from cwd) decides — indent
+ * (a tab style emits tabs, a space style its width), lineWidth wrapping,
+ * javascript.formatter.quoteStyle, and the natural order biome sorts
+ * imported names with — biome 2.x's organizeImports assist is ON by
+ * default, so only a config that switches it "off" (or disables the whole
+ * assist) keeps the legacy code-point sort. No biome.json on either walk
+ * keeps the historical 2-space form, byte for byte. The config walk lives in
+ * indent.ts, the biome-faithful emit primitives (quotes, wrapping, natural
+ * sort) in layout.ts.
  *
  * ## The setup-module contract
  *
@@ -81,7 +85,16 @@ import {
   sampleFromPattern,
 } from "../mockServer/schemaTypes";
 import { validateSchema } from "../mockServer/validateRequest";
-import { DEFAULT_INDENT_UNIT, reindentTwoSpace, resolveIndentUnit } from "./indent";
+import { DEFAULT_INDENT_UNIT, type EmitStyle, reindentTwoSpace, resolveEmitStyle } from "./indent";
+import {
+  fits,
+  formatCall,
+  formatImport,
+  formatJsonProperty,
+  pad,
+  quoteStringLiteral,
+  sortSpecifiers,
+} from "./layout";
 
 type Schema = {
   /** 3.0 writes a string; 3.1 may write a union array (`["string","null"]`). Read via primaryType. */
@@ -971,39 +984,82 @@ function deriveCases(
 // Emission
 // ---------------------------------------------------------------------------
 
-function emitFixture(c: GenCase, used: Set<string>): string {
-  let headersExpr: string;
+function emitFixture(c: GenCase, used: Set<string>, style: EmitStyle): string {
+  const lines: string[] = [
+    "  {",
+    `    name: ${quoteStringLiteral(c.name, style)},`,
+    "    setup: shared,",
+    "    input: (ctx: Ctx) => ({",
+  ];
+  lines.push(
+    pad(3) +
+      formatCall(style, 3, "url: ", "resolvePath", ["ctx", quoteStringLiteral(c.path, style)], ","),
+  );
+  lines.push(`${pad(3)}method: ${quoteStringLiteral(c.method.toUpperCase(), style)},`);
   if (c.auth === "none") {
     used.add("JSON_HEADERS");
-    headersExpr = "JSON_HEADERS";
+    lines.push("      headers: JSON_HEADERS,");
   } else {
     used.add("headersFor");
-    headersExpr = `headersFor(ctx, ${JSON.stringify(c.auth)})`;
+    lines.push(
+      pad(3) +
+        formatCall(
+          style,
+          3,
+          "headers: ",
+          "headersFor",
+          ["ctx", quoteStringLiteral(c.auth, style)],
+          ",",
+        ),
+    );
   }
-  const bodyLine =
-    c.body === undefined ? "" : `\n      body: ${JSON.stringify(JSON.stringify(c.body))},`;
-  const dataMatcher = c.expectValidationField
-    ? `\n      data: (d: { code?: string; fieldErrors?: Record<string, unknown> }) =>\n        d.code === "validation" && d.fieldErrors !== undefined && ${JSON.stringify(c.expectValidationField)} in d.fieldErrors,`
-    : c.expectValidationCode
-      ? `\n      data: (d: { code?: string }) => d.code === "validation",`
-      : "";
-  // `schema` is the runner's reserved response-conformance key — emitted only
-  // when the spec documents a schema for the expected status (post-deref, so
-  // it's inline JSON; example-only specs emit nothing here).
-  const schemaLine =
-    c.responseSchema === undefined ? "" : `\n      schema: ${JSON.stringify(c.responseSchema)},`;
-  return `  {
-    name: ${JSON.stringify(c.name)},
-    setup: shared,
-    input: (ctx: Ctx) => ({
-      url: resolvePath(ctx, ${JSON.stringify(c.path)}),
-      method: ${JSON.stringify(c.method.toUpperCase())},
-      headers: ${headersExpr},${bodyLine}
-    }),
-    output: {
-      status: ${c.expectStatus},${dataMatcher}${schemaLine}
-    },
-  },`;
+  if (c.body !== undefined) {
+    // A string literal is never wrappable, and `body` is below biome's
+    // break-after-colon key width — the line overflows and biome lets it.
+    lines.push(`${pad(3)}body: ${quoteStringLiteral(JSON.stringify(c.body), style)},`);
+  }
+  lines.push("    }),", "    output: {", `      status: ${c.expectStatus},`);
+  if (c.expectValidationField) {
+    const fieldLit = quoteStringLiteral(c.expectValidationField, style);
+    const header = `data: (d: { code?: string; fieldErrors?: Record<string, unknown> }) =>`;
+    const chain = `d.code === "validation" && d.fieldErrors !== undefined && ${fieldLit} in d.fieldErrors`;
+    if (!style.legacy && fits(style, 3, `${header} ${chain},`)) {
+      lines.push(pad(3) + `${header} ${chain},`);
+    } else {
+      // Below the arrow (biome joins the one-liner only when it fits; the
+      // legacy template always broke here — keep that shape byte for byte).
+      // When even the header line does not fit, biome breaks the type
+      // literal's members one per line, closing `}) =>` at the property's
+      // own level.
+      lines.push(
+        style.legacy || fits(style, 3, header)
+          ? pad(3) + header
+          : `${pad(3)}data: (d: {\n${pad(4)}code?: string;\n${pad(4)}fieldErrors?: Record<string, unknown>;\n${pad(3)}}) =>`,
+      );
+      if (style.legacy || fits(style, 4, `${chain},`)) {
+        lines.push(`${pad(4)}${chain},`);
+      } else {
+        // The chain does not fit on one line below the arrow: biome puts one
+        // operand per line, `&&` trailing.
+        lines.push(
+          `${pad(4)}d.code === "validation" &&`,
+          `${pad(4)}d.fieldErrors !== undefined &&`,
+          `${pad(4)}${fieldLit} in d.fieldErrors,`,
+        );
+      }
+    }
+  } else if (c.expectValidationCode) {
+    lines.push('      data: (d: { code?: string }) => d.code === "validation",');
+  }
+  if (c.responseSchema !== undefined) {
+    lines.push(
+      style.legacy
+        ? `${pad(3)}schema: ${JSON.stringify(c.responseSchema)},`
+        : pad(3) + formatJsonProperty(style, "schema", c.responseSchema, 3),
+    );
+  }
+  lines.push("    },", "  },");
+  return lines.join("\n");
 }
 
 /** Rewrite the CLI's --setup value into an import specifier valid from outDir. */
@@ -1267,31 +1323,67 @@ function emitFlowsPipes(flows: FlowPlan[]): string {
 ${flows.map(emitFlow).join("\n")}`;
 }
 
-function emitFlowsSetup(flows: FlowPlan[], specifier: string): string {
+function emitFlowsSetup(flows: FlowPlan[], specifier: string, style: EmitStyle): string {
   const urlLines = flows
     .map(
       (f) =>
-        `  process.env.GEN_URL_${f.envName} = resolvePath(ctx, ${JSON.stringify(f.template)});`,
+        pad(1) +
+        formatCall(
+          style,
+          1,
+          `process.env.GEN_URL_${f.envName} = `,
+          "resolvePath",
+          ["ctx", quoteStringLiteral(f.template, style)],
+          ";",
+        ),
     )
     .join("\n");
+  const noAuthThrow = formatCall(
+    style,
+    2,
+    "throw ",
+    "new Error",
+    [quoteStringLiteral("gen flows: headersFor(ctx, 'member') returned no auth header", style)],
+    ";",
+  );
+  // The overlong tail after `.join(", ")` is template-literal text biome
+  // cannot move; when the line does not fit, the only thing biome breaks is
+  // the join call's own argument.
+  const joinTail =
+    "}) — generated flows can send only one; reduce headersFor to a single auth header`";
+  const joinCall = formatCall(style, 4, "", ".join", [quoteStringLiteral(", ", style)], joinTail);
+  const bigThrow = formatCall(
+    style,
+    2,
+    "throw ",
+    "new Error",
+    [
+      "`gen flows: headersFor(ctx, 'member') returned ${auth.length} auth headers (${auth\n" +
+        `${pad(4)}.map(([k]) => k)\n${pad(4)}${joinCall}`,
+    ],
+    ";",
+  );
   return `// GENERATED by crust gen-fixtures — DO NOT EDIT.
-import { headersFor, resolvePath, shared } from ${JSON.stringify(specifier)};
+${formatImport(style, sortSpecifiers(["headersFor", "resolvePath", "shared"], style), specifier)}
 
 export default async function setup(): Promise<void> {
   const ctx = await shared();
-  const headers = headersFor(ctx, "member");
-  const auth = Object.entries(headers).filter(([k]) => k.toLowerCase() !== "content-type");
+  const headers = headersFor(ctx, ${quoteStringLiteral("member", style)});
+  ${formatCall(
+    style,
+    1,
+    "const auth = ",
+    "Object.entries(headers).filter",
+    [`([k]) => k.toLowerCase() !== ${quoteStringLiteral("content-type", style)}`],
+    ";",
+  )}
   if (auth.length === 0) {
-    throw new Error("gen flows: headersFor(ctx, 'member') returned no auth header");
+    ${noAuthThrow}
   }
   if (auth.length > 1) {
     // Flows carry exactly ONE auth header ($GEN_AUTH_HEADER) — silently
     // dropping the rest would make every generated request fail mysteriously.
-    throw new Error(
-      \`gen flows: headersFor(ctx, 'member') returned \${auth.length} auth headers (\${auth
-        .map(([k]) => k)
-        .join(", ")}) — generated flows can send only one; reduce headersFor to a single auth header\`,
-    );
+    ${bigThrow}
   }
   process.env.GEN_AUTH_HEADER = \`\${auth[0]![0]}: \${auth[0]![1]}\`;
 ${urlLines}
@@ -1455,16 +1547,18 @@ export async function generateFixtures(opts: GenerateOpts): Promise<GenerateResu
     withNoCases += none;
   }
 
-  // The emitted files must carry the indent the receiving project's formatter
+  // The emitted files must carry the style the receiving project's formatter
   // would apply, or its pre-commit hook rewrites the whole matrix on every
   // regeneration. No biome.json on either walk keeps the historical 2-space
-  // form byte for byte; a biome at its own default resolves to the same unit
-  // and is equally untouched — only a genuinely different style is disclosed.
-  const { unit, biomeJson } = resolveIndentUnit(outDir, log);
-  if (biomeJson !== null && unit !== DEFAULT_INDENT_UNIT) {
+  // form byte for byte. The notice names the indent — the dimension a reader
+  // sees first — so a config resolving to the historical unit stays silent
+  // even when its other dimensions (wrapping, quotes, import order) no
+  // longer match the pre-style-aware form.
+  const style = resolveEmitStyle(outDir, log);
+  if (style.biomeJson !== null && style.unit !== DEFAULT_INDENT_UNIT) {
     log(
-      `gen-fixtures: emitting with ${unit === "\t" ? "tab" : `${unit.length}-space`} indent ` +
-        `(biome.json at ${biomeJson})`,
+      `gen-fixtures: emitting with ${style.unit === "\t" ? "tab" : `${style.unit.length}-space`} indent ` +
+        `(biome.json at ${style.biomeJson})`,
     );
   }
 
@@ -1478,12 +1572,11 @@ export async function generateFixtures(opts: GenerateOpts): Promise<GenerateResu
     if (cases.length === 0) continue;
     totalCases += cases.length;
     const used = new Set<string>(["resolvePath", "shared"]);
-    const fixtures = cases.map((c) => emitFixture(c, used)).join("\n");
-    const names = [...used].sort().join(", ");
+    const fixtures = cases.map((c) => emitFixture(c, used, style)).join("\n");
     const file = reindentTwoSpace(
       `// GENERATED by crust gen-fixtures — DO NOT EDIT.
 // Regenerate: gen-fixtures --swagger <spec> --out <dir> --setup <module>
-import { ${names} } from ${JSON.stringify(specifier)};
+${formatImport(style, sortSpecifiers(used, style), specifier)}
 
 type Ctx = Awaited<ReturnType<typeof shared>>;
 
@@ -1491,7 +1584,7 @@ export default [
 ${fixtures}
 ];
 `,
-      unit,
+      style.unit,
     );
     const outFile = resolve(outDir, `${tag.replace(/[^\w.-]+/g, "-")}.gen.crust.ts`);
     await writeFile(outFile, file);
@@ -1519,7 +1612,10 @@ ${fixtures}
       await writeFile(flowFile, emitFlowsPipes(flows));
       await writeFile(
         resolve(flowsDir, "flows.gen.setup.ts"),
-        reindentTwoSpace(emitFlowsSetup(flows, setupSpecifier(opts.setup, flowsDir)), unit),
+        reindentTwoSpace(
+          emitFlowsSetup(flows, setupSpecifier(opts.setup, flowsDir), style),
+          style.unit,
+        ),
       );
       flowCount = flows.length;
     }

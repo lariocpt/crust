@@ -1121,8 +1121,9 @@ describe("response-schema emission", () => {
       log: () => {},
     });
     const text = await Bun.file(result.files.find((f) => f.includes("wombats"))!).text();
-    // The 400 matrix cases carry the documented 400 response schema…
-    expect(text).toContain('schema: {"type":"object","required":["code"]');
+    // The 400 matrix cases carry the documented 400 response schema… (formatted in crust's own
+    // biome style by the in-process cwd fallback — biome-layout object, not raw JSON).
+    expect(text).toContain('schema: { type: "object", required: ["code"]');
     // …and it appears only on cases expecting 400 (the spec documents no other schemas).
     const perCase = text.split("name:").slice(1);
     for (const c of perCase) {
@@ -1981,9 +1982,11 @@ describe("an allOf-composed request body (F36)", () => {
     // The `unexpected extra property` case sends the base body plus one unknown key, so the emitted
     // body is the base body in the flesh: the field must hold something its pattern accepts. Before
     // the fix this line read "code":"x" — a value crust invented for a field it never looked up.
+    // (The body is single-quoted here because this in-process run takes crust's own biome.json —
+    // quoteStyle double flips a string full of `"` — exactly the emit-style contract.)
     expect(text).toContain("crustUnexpectedProp");
-    expect(text).toMatch(/\\"code\\":\\"CN-\d{4}\\"/);
-    expect(text).not.toMatch(/\\"code\\":\\"x\\"/);
+    expect(text).toMatch(/"code":"CN-\d{4}"/);
+    expect(text).not.toMatch(/"code":"x"/);
   });
 
   test("a name required twice is not a case twice", async () => {
@@ -2439,9 +2442,8 @@ describe("a union body whose branch carries the required (F43)", () => {
     expect(r.result.withNoCases).toBe(0);
     expect(r.text).toContain("missing required 'url'");
     // the base body carries a real value for the branch's field — not `{}`, and not `"x"`
-    expect(r.text).toContain(
-      '"{\\"url\\":\\"gen-value-x\\",\\"format\\":\\"__not_a_real_enum_value__\\"}"',
-    );
+    // (single-quoted: the in-process emit takes crust's own biome.json quoteStyle).
+    expect(r.text).toContain(`'{"url":"gen-value-x","format":"__not_a_real_enum_value__"}'`);
   });
 
   test("anyOf behaves the same way (linode writes records this shape)", async () => {
