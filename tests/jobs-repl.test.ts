@@ -129,6 +129,15 @@ async function waitState(pid: number, want: string[], ms = 2000): Promise<string
  * command line is deliberate: a substring also matches whatever shell is driving
  * `bun test`, whose command line contains this very file's text, and that false
  * positive once reported a killed job as still running.
+ *
+ * A sh-family process must ALSO be the line's own `sh -c` child: the syntax
+ * preflight (F19) runs `sh -n -c <stage>` BEFORE runLine arms the Ctrl-Z/Ctrl-C
+ * watchers, and its argv carries the very same `sleep <token>`. Counting it
+ * made waitRunning answer "the child started" while the watcher was still
+ * unarmed — the press was a no-op, the real child spawned after it, and the
+ * line hung to its 15s timeout: the #107-#115 flake (no ^Z echo, then
+ * "Expected 148, Received 0" once the harness killed the dangling child).
+ * Idle hides it — a fast `sh -n` dies before any poll sees it; load does not.
  */
 function pidsRunning(token: string): number[] {
   const out: number[] = [];
@@ -140,6 +149,7 @@ function pidsRunning(token: string): number[] {
       const argv = readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0").filter(Boolean);
       const exe = (argv[0] ?? "").split("/").pop() ?? "";
       if (!["sleep", "sh", "bash", "dash"].includes(exe)) continue;
+      if (exe !== "sleep" && argv[1] !== "-c") continue;
       if (argv.some((a) => a === token || a === `sleep ${token}`)) out.push(pid);
     } catch {}
   }
