@@ -91,7 +91,15 @@ pipeline {
                     # Version to Compile and published whatever built. Same image and the
                     # same --frozen-lockfile as Compile, so a green build here is a real
                     # statement about the artifact that follows.
-                    CID=$(docker create -w /w oven/bun:1 sh -c '
+                    # --cpu-shares: this host also serves model inference at nice 0, and bun
+                    # runs itself — and every child it spawns — at nice 20. When the box is
+                    # oversubscribed a nice-20 test child cannot get scheduled to process its
+                    # queued SIGSTOP, so the Ctrl-Z pipeline tests time out at 15s: green at
+                    # idle, red under load (#107-#114 all died on the same two tests while a
+                    # ~10-core inference session ran). Shares map to cgroup cpu.weight, which
+                    # CFS honors across nice values, so the test container gets CPU when the
+                    # box is oversubscribed instead of queueing behind the inference backlog.
+                    CID=$(docker create --cpu-shares 262144 -w /w oven/bun:1 sh -c '
                         set -eu
                         cd /w
                         bun install --frozen-lockfile --ignore-scripts
