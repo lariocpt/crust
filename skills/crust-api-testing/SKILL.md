@@ -67,6 +67,9 @@ writes the same text report stdout shows; the file never changes the exit code.
   exits 0 — gate with `expect 200` or `stats | assert (s =>
   s.redirectRefused === 0)`; exit 0 alone is never request success in load
   mode.
+- Result shapes per execution context (`Response` vs timed `{status, ms, url}`
+  records, body draining, `.json()` availability): canonical table at
+  https://lariocpt.github.io/crust-website/docs/http-result-shapes/.
 - Exit codes: 0 all pass · 1 any fail · 2 no files/bad args.
 
 ## .crust.ts fixtures (test-fixture)
