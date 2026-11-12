@@ -104,17 +104,22 @@ export async function loadConfig(ctx: Context, configPath?: string): Promise<voi
   // an init.ts that imports a package with its own dependencies fails
   // resolution (measured 2026-11-12), and the session carried on as if the
   // config were empty, every crust.fn silently unregistered. The distinction
-  // is WHO the loader could not find: "Cannot find module '<path>'" names the
-  // config itself (quoted; also covers /dev/null, which exists but is not a
-  // module), while a dependency failure reads "Cannot find package 'x'
-  // imported from <path>" — the config is the importer there, unquoted.
+  // is WHO the loader could not find: the config itself ("Cannot find module
+  // '<path>'" — also covers /dev/null, which exists but is not a module, and
+  // ENOENT "open '<path>'") versus one of its imports ("Cannot find package
+  // 'x' from '<path>'" / "imported from <path>" — bun versions differ here,
+  // 1.3.14 vs 1.4.3 measured, so match only the config-as-missing-subject
+  // shapes and treat everything else as a failure worth reporting).
   try {
     await import(path);
   } catch (err) {
     const code = (err as { code?: string }).code;
     const msg = (err as Error).message ?? "";
     const missingConfig =
-      (code === "ERR_MODULE_NOT_FOUND" || code === "ENOENT") && msg.includes(`'${path}'`);
+      (code === "ERR_MODULE_NOT_FOUND" || code === "ENOENT") &&
+      (msg.includes(`module '${path}'`) ||
+        msg.includes(`open '${path}'`) ||
+        msg.includes(`stat '${path}'`));
     if (!missingConfig) {
       process.stderr.write(`crust: failed to load ${path}: ${msg}\n`);
     }
