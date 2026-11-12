@@ -37,6 +37,11 @@ The installer drops the binary in `~/.local/bin` (override with `--dir`); the
 npm package is a small launcher that fetches the same release asset on first
 use. Prebuilt binaries cover linux and macOS on x64 and arm64.
 
+A **mongo variant** of the binary bundles the MongoDB driver so the `mongo`
+builtin works out of the box: `bash -s -- crust-mongo` on the installer, or
+`npm i -g @lariocpt/crust-mongo`. The clean default stays zero-dependency and
+points at the variant when `mongo` is used on it.
+
 ### Build from source
 
 Any other platform, or a working copy you intend to change:

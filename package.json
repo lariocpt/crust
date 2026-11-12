@@ -1,6 +1,6 @@
 {
   "name": "crust",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "gitCommit": "dev",
   "description": "Mock it, test it, load it, tail it: the whole test stack baked into one binary. Spec-driven, generated, zero dependencies.",
   "license": "MIT",
@@ -44,6 +44,7 @@
     "@types/bun": "latest",
     "husky": "^9.1.7",
     "lint-staged": "^17.0.5",
+    "mongodb": "^7.9.0",
     "typescript": "^5.6.0"
   },
   "lint-staged": {

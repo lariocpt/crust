@@ -402,3 +402,14 @@ describe("the npm shim: a bumped package self-heals through the real entry point
     expect(r.stderr).toBe("");
   });
 });
+
+describe("assetName: the mongo variant resolves a distinct release asset", () => {
+  test("clean builds keep the original name forever", () => {
+    expect(mod.assetName("linux", "x64")).toBe("crust-linux-x64");
+    expect(mod.assetName("linux", "x64", null)).toBe("crust-linux-x64");
+  });
+  test("the mongo variant appends its suffix", () => {
+    expect(mod.assetName("linux", "x64", "mongo")).toBe("crust-linux-x64-mongo");
+    expect(mod.assetName("darwin", "arm64", "mongo")).toBe("crust-darwin-arm64-mongo");
+  });
+});

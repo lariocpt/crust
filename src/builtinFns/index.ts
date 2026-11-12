@@ -2,6 +2,7 @@ import type { Context } from "../types";
 import { base64, base64Usage } from "./base64";
 import { bundle, bundleUsage } from "./bundle";
 import { jwt, jwtUsage } from "./jwt";
+import { mongo, mongoUsage } from "./mongo";
 import { salt, saltUsage } from "./salt";
 import { sql, sqlUsage } from "./sql";
 import { wait, waitUsage } from "./wait";
@@ -12,6 +13,7 @@ export function registerBuiltinFns(ctx: Context): void {
   ctx.functions.set("jwt", jwt as (...a: unknown[]) => unknown);
   ctx.functions.set("bundle", bundle as (...a: unknown[]) => unknown);
   ctx.functions.set("sql", sql as (...a: unknown[]) => unknown);
+  ctx.functions.set("mongo", mongo as (...a: unknown[]) => unknown);
   ctx.functions.set("wait", wait as (...a: unknown[]) => unknown);
 }
 
@@ -27,6 +29,7 @@ export const BUILTIN_FN_USAGE: Record<string, string> = {
   jwt: jwtUsage,
   bundle: bundleUsage,
   sql: sqlUsage,
+  mongo: mongoUsage,
   wait: waitUsage,
 };
 
@@ -36,6 +39,7 @@ const BUILTIN_FNS: Record<string, (...a: unknown[]) => unknown> = {
   jwt,
   bundle,
   sql,
+  mongo,
   wait,
 };
 

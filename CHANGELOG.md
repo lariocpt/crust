@@ -4,6 +4,46 @@ Notable changes to crust. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project is
 pre-1.0, so minor versions may carry breaking changes.
 
+## [0.3.5] — 2026-11-12
+
+### Added
+
+- **`mongo "<expr>"` builtin.** MongoDB as a pipeline citizen, shaped after
+  `sql`: `mongo "db.users.find({active: true}).limit(10)"` streams one item
+  per document (cursors drained via `toArray()`); a write yields its result
+  object as one item. Mid-pipeline the upstream item binds as `item` —
+  `read docs.json | (s => JSON.parse(s)) | mongo "db.users.insertMany(item)"`.
+  Shell sugar (`db.coll.…`) is proxied over the driver's real
+  `db.collection("coll")` shape. Connection from `$MONGODB_URI`
+  (`$MONGO_URL` accepted), database from `$MONGODB_DB` or the URI path.
+  Loud failures throughout: a bad expression is caught before any network
+  call, a bad method is a labelled expression failure, never a stack dump.
+- **Two binaries per platform: clean and `-mongo`.** A compiled Bun binary
+  cannot load an npm package with dependencies at runtime (measured across
+  bun 1.3.14 / 1.4.3 / 1.4.4-canary — the driver's own `bson` import never
+  resolves from outside the bundle), so the driver is bundled at build time
+  instead: `src/index-mongo.ts` statically imports `mongodb` (a
+  devDependency, ~+4 MB) and registers it through a `setBundledMongo` seam.
+  The clean binary stays zero-dependency; its `mongo` fails loud and names
+  the variant to install. Install channels: `install.sh crust-mongo` or
+  `npm i -g @lariocpt/crust-mongo` (same launcher, `crust.variant` selects
+  the asset and the cache key). The release workflow builds all eight
+  assets and verifies the variant contract through real compiled binaries —
+  the only place the `$bunfs` code path can be exercised.
+
+### Fixed
+
+- **A config that exists but fails to load is now a loud warning.**
+  `loadConfig` swallowed every `ERR_MODULE_NOT_FOUND` as "no config file,
+  that's fine" — which also matched failures raised from *inside* an existing
+  `init.ts`. A config importing an unresolvable package loaded as nothing at
+  all: no warning, exit 0, every `crust.fn` silently unregistered. Only the
+  exact "path does not exist" case stays quiet.
+- **Docs corrected to the measured resolution reality**: under the compiled
+  binary, `init.ts`/fixture npm imports resolve for dep-free packages only
+  (`left-pad` loads, `mongodb` does not). The previous blanket claim
+  over-generalized a dep-free probe.
+
 ## [0.3.4] — 2026-11-12
 
 ### Added

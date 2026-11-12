@@ -43,6 +43,19 @@ curl -fsSL https://raw.githubusercontent.com/lariocpt/crust/main/install.sh | ba
 npm i -g @lariocpt/crust
 ```
 
+Two binaries ship per platform. The default one is zero-dependency; the
+**mongo variant** bundles the MongoDB driver so the `mongo` builtin works
+out of the box (it is a few MB larger and otherwise identical):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/lariocpt/crust/main/install.sh | bash -s -- crust-mongo
+npm i -g @lariocpt/crust-mongo
+```
+
+They install the same `crust` command — pick one channel; installing both npm
+packages globally conflicts by design. On the clean binary, `mongo` fails
+loudly and names the variant to install; nothing else differs.
+
 Prebuilt binaries cover linux and macOS on x64 and arm64; on anything else,
 build from source with `scripts/install-from-source.sh`. (Internal LAN
 channels are documented in [docs/INTERNAL.md](INTERNAL.md).)
@@ -1358,7 +1371,7 @@ test-fixture --target 'fixtures/**/*.crust.ts' --out report.xml   # JUnit for CI
 > shreds every other fixture still running. If you need a full reset, do it
 > once outside the runner, not per-fixture.
 
-**Module resolution:** files the runner loads — `.crust.ts` fixtures, `.setup.ts` modules, npm packages auto-dispatched as stages — resolve bare specifiers the ordinary Bun way, walking `node_modules` from the file's own location, **including under the AOT-compiled binary**. Measured 2026-10-30 with the release binary: a `x.setup.ts` doing `import shout from "npkg"` set `$GREETING` and the `test-pipes` line passed. What the binary does not carry is a dependency set of its own — crust ships zero runtime dependencies — so anything a fixture imports has to be installed where the fixture lives. Bun builtins (`Bun.SQL`, `Bun.file`) are still the lighter choice for a helper (no install, no version drift between fixture and runner), but that is a preference, not a resolution limit.
+**Module resolution:** files the runner loads — `.crust.ts` fixtures, `.setup.ts` modules, npm packages auto-dispatched as stages — resolve bare specifiers the ordinary Bun way, walking `node_modules` from the file's own location, **including under the AOT-compiled binary** — for packages that carry **no dependencies of their own**. Measured 2026-10-30 with the release binary: a `x.setup.ts` doing `import shout from "npkg"` set `$GREETING` and the `test-pipes` line passed. Re-measured 2026-11-12 with a package that has its own dependencies (`mongodb`, importing `bson`): under the compiled binary that import fails with `Cannot find package '…'` even when the package sits in `node_modules` beside the file — the binary's resolver cannot follow the dependency graph of an external package. So under the binary: dep-free npm imports work, packages with dependencies do not (they work when running crust from source). What the binary does not carry is a dependency set of its own — crust ships zero runtime dependencies — so anything a fixture imports has to be installed where the fixture lives. Bun builtins (`Bun.SQL`, `Bun.file`) are still the lighter choice for a helper (no install, no version drift between fixture and runner), and under the binary they are often the only choice.
 
 Example fixture:
 
@@ -2131,6 +2144,7 @@ Each builtin answers `-h`/`--help` with its usage screen and exit 0 — **at par
 | `jwt sign \| verify \| decode --secret <s>` | HS256 JWT. Reads `$JWT_SECRET` if `--secret` omitted. Item can be a JSON string (sign) or a token (verify/decode). |
 | `bundle <entry> [--outdir \| --outfile \| --minify \| --sourcemap \| --target=bun\|browser\|node]` | Wraps `Bun.build` for one-shot bundling. With `--outfile`, writes the first artifact and returns `{outfile, bytes}`. |
 | `sql "<query>" [params…]` | Runs a SQL query via Bun's SQL client using `$DATABASE_URL`. **Streams one item per row in both positions** — as a source and mid-pipeline. **The query is always the one you wrote on the line**, whatever the upstream item is; mid-pipeline that item **binds as the first parameter** when the line declares none, so `range(1,1) \| sql "SELECT … WHERE id = ?"` queries id 1 and `"beta" \| sql "SELECT … WHERE name = ?"` queries `'beta'`. An explicitly declared parameter still wins. |
+| `mongo "<expr>"` | Runs an expression on a live `db` handle against `$MONGODB_URI` (or `$MONGO_URL`), database from `$MONGODB_DB` or the URI path. **Streams one item per document** — a cursor (`find`/`aggregate`) is drained with `toArray()`; a write yields its result object as one item. Shell sugar works: `db.users.find({active: true}).limit(10)` (the driver's `db.collection("users")` shape is proxied for you). Mid-pipeline the upstream item binds as `item` — `read docs.json \| (s => JSON.parse(s)) \| mongo "db.users.insertMany(item)"`. **Needs the mongo-bundled binary**: install `@lariocpt/crust-mongo` (or `install.sh crust-mongo`); the clean binary says so and exits 1. |
 | `wait <target> [--timeout <dur>] [--interval <dur>] [--probe-timeout <dur>]` | Blocks until a target answers, then emits `{target, ready, ms, attempts}`. Target: `:3001/health` / `http(s)://…` (ready = any 2xx) or `port:5432` (TCP connect). **A bare `:3000` probes `/`** — a spec-driven server (mock-server, most APIs) has no root route, so it 404s forever and `wait` burns the whole timeout on a server that is already up: point it at a real path, or use `port:3000`. Durations like `300ms`/`30s`/`2m` (defaults 30s / 500ms). `--probe-timeout` caps each probe (default `min(interval*4, 2s)`) — raise it for slow-to-accept targets. Not ready in time → error, exit 1 — CI-friendly. |
 
 **`base64` shadows a real command, and the two disagree about its argument.**
@@ -2513,6 +2527,8 @@ The conventions:
 Cached at `~/.cache/crust/globals.json`; invalidated automatically when the global `package.json` changes.
 
 **2. `crust.fn(name, handler)` in `init.ts`** — for packages whose API doesn't fit the calling convention (anything with method-dispatch like chalk, anything that needs setup), and for ad-hoc helpers:
+
+> **Under the released binary, an `init.ts` import only resolves for packages with no dependencies of their own** (measured 2026-11-12: dep-free `left-pad` loads; `mongodb`, which imports `bson`, fails with `Cannot find package`). From source, any installed package works. A config that fails to load is now a loud `crust: failed to load …` warning — it used to be silent. Install the package next to the `init.ts` (`cd ~/.config/crust && bun add …`); for packages with dependencies, run crust from source or use the variant that bundles what you need (e.g. `@lariocpt/crust-mongo`).
 
 ```ts
 import chalk from "chalk";

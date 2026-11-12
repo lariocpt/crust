@@ -87,6 +87,7 @@ first slot is **your data**, and each function decides what to do with it:
 | `salt [bytes] [hex\|base64\|base64url]` | one salt, size = the argument | **one salt per item**; the size is the argument *trailing* the item |
 | `jwt sign\|verify\|decode --secret <s>` | payload/token = the argument | the item **is** the payload (sign) or token (verify/decode) |
 | `sql "<query>" [params…]` | streams rows | the query stays the one you wrote; the item **binds as the first parameter** when the line declares none |
+| `mongo "<expr>"` | streams documents — an expression on `db` (`db.users.find({}).limit(10)`), cursor drained per item | the item binds as `item` in the expression — `… \| mongo "db.users.insertMany(item)"`; needs the mongo-bundled binary (`@lariocpt/crust-mongo`) |
 | `wait <target> [--timeout <dur>]` | waits for the argument | the item is the target |
 | `bundle <entry> [--outfile…]` | bundles the argument | a string item **is an entrypoint** |
 
@@ -98,6 +99,8 @@ lines users.csv | salt 16
 jwt sign '{"sub":"42"}' --secret k
 sql "select id, email from users limit 5" | (r => r.email)
 range(2,2) | (n => "beta") | sql "SELECT name FROM t WHERE name = ?" | assert (r => r.name === "beta")
+mongo "db.users.find({active: true}).limit(10)"
+read docs.json | (s => JSON.parse(s)) | mongo "db.users.insertMany(item)"
 wait :3001/health --timeout 30s
 bundle src/index.ts --outfile dist/app.js --minify
 ```

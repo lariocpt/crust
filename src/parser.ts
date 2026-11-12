@@ -7,6 +7,7 @@
 import { expandEnv, splitArgs } from "./args";
 import { BUILTIN_FN_USAGE, isBuiltinFn } from "./builtinFns";
 import { base64, base64Stage } from "./builtinFns/base64";
+import { mongo, mongoSource, mongoStage } from "./builtinFns/mongo";
 import { sql, sqlSource, sqlStage } from "./builtinFns/sql";
 import { builtinInShellRefusal } from "./builtins";
 import { formatItem } from "./format";
@@ -404,7 +405,11 @@ export function buildSource(kind: StageKind, ctx?: Context): Pipeline<unknown> {
       // as a single item.
       return Pipeline.of(
         (async function* () {
-          const result = await (fn === sql ? sqlSource(kind.args) : fn(...kind.args));
+          const result = await (fn === sql
+            ? sqlSource(kind.args)
+            : fn === mongo
+              ? mongoSource(kind.args)
+              : fn(...kind.args));
           if (Array.isArray(result)) {
             for (const r of result) yield r;
           } else {
@@ -552,9 +557,11 @@ function applyStage(
       const apply = (item: unknown) =>
         fn === sql
           ? sqlStage(kind.args, item)
-          : fn === base64
-            ? base64Stage(kind.args, item)
-            : fn(item, ...kind.args);
+          : fn === mongo
+            ? mongoStage(kind.args, item)
+            : fn === base64
+              ? base64Stage(kind.args, item)
+              : fn(item, ...kind.args);
       const mapped =
         concurrency !== null && concurrency !== undefined
           ? (input.pipe(transforms.parallel(concurrency, apply) as never) as Pipeline<unknown>)
