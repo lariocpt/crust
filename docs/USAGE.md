@@ -670,6 +670,14 @@ date +%s | capture TS
 GET :3000/?t=$TS
 ```
 
+> **Report availability:** `expect` throws at drain, so an `expect` placed
+> before `stats` that fails prevents the summary from ever being emitted
+> (the `expect 200 | stats` shape above illustrates syntax, not CI
+> reporting). When the summary or report must survive a status failure, put
+> `stats` (and `stats --out …`) before the gates and gate status on the
+> summary instead — the [CI gates](#ci-gates-thresholds-baselines-exit-codes)
+> section below is the primary pattern.
+
 - `parallel N` — sets the fan-out for the NEXT stage (it is a modifier, not a
   buffering stage). It applies to http verbs (load mode — see above), TS
   lambdas, and registered functions (`parallel 4 | sql "…"`); putting it
@@ -703,7 +711,11 @@ GET :3000/?t=$TS
   `rps`, a status histogram, real `p50/p95/p99/meanMs` latency percentiles
   from the timed-request records, and the failure tallies `timedOut` and
   `redirectRefused` — always present (0 on a clean run), so a gate can read
-  `s.redirectRefused === 0` without guessing whether the key exists.
+  `s.redirectRefused === 0` without guessing whether the key exists. It
+  **reports, it does not gate**: nothing `stats` emits fails the pipeline,
+  so a run whose every request was refused prints `{"status":{"0":N}}` and
+  still exits 0 unless a gate is present — the gates are the `assert` stages
+  after it.
 - `stats --every N` — additionally emits a **per-window delta summary** every
   N seconds (`{window: 1, …}`, `{window: 2, …}`) and finishes with one
   cumulative summary tagged `{final: true}`. Windows flush on the item path —
@@ -713,21 +725,24 @@ GET :3000/?t=$TS
   percentiles stay honest.
 - `stats --out results.json` — also writes the run to a versioned JSON
   artifact: `{crustStats: 1, startedAt, urls, summary, windows?}` where
-  `summary` is exactly the stdout summary object. The file is written
-  **before** the final summary is yielded, so a downstream threshold gate
-  that fails the pipeline still leaves the artifact behind for CI upload.
-  The path is env-expanded (`--out $RUN_DIR/health.json`); only `.json` is
-  supported.
+  `summary` is exactly the stdout summary object. The artifact is flushed
+  **after every window and before each yield** — write-then-rename
+  (`results.json.tmp`, then rename), so a torn write never leaves invalid
+  JSON — which is what lets the file survive a downstream gate: it is on
+  disk before the summary that trips a failing `assert` is emitted, and the
+  file is left behind for CI upload. The path is env-expanded
+  (`--out $RUN_DIR/health.json`); only `.json` is supported.
 
 ### CI gates: thresholds, baselines, exit codes
 
 `stats` yields plain objects, and `assert` awaits real JS predicates — so
-thresholds are just composition, no special syntax:
+thresholds are just composition, no special syntax. The primary CI pattern is
+**report-preserving and status-first**: collect the statistics — and write
+the report — before applying any aggregate gate, and gate the status
+histogram before judging latency or rate:
 
 ```bash
-load 30s 100/s | parallel 50 | GET :3000/health | stats \
-  | assert (s => s.p95 < 200) \
-  | assert (s => s.rps > 80)
+load 30s 100/s | parallel 50 | GET :3000/health | stats --out load/last.json | assert (s => Object.keys(s.status).every(k => k.startsWith("2"))) | assert (s => s.timedOut === 0) | assert (s => s.redirectRefused === 0) | assert (s => s.p95 < 200) | assert (s => s.rps > 80)
 ```
 
 Chain **one assert per threshold**: the failure message names the exact
@@ -735,6 +750,42 @@ predicate and prints the actual summary —
 `assert: item 1 failed (s => s.p95 < 200) — got {"count":3000,…,"p95":312.4,…}` —
 and the line exits 1, which `crust -c` propagates (it stops at the first
 failing line).
+
+Why that shape — the five properties the pattern buys you:
+
+- **`stats` reports, it does not gate.** The summary — the `timedOut` and
+  `redirectRefused` tallies included — only describes what happened; nothing
+  `stats` emits fails the pipeline, and a run whose every request was refused
+  prints `{"status":{"0":N}}` and exits 0 unless a gate is present. The
+  counters *report* outcomes; the `assert` stages after `stats` are the only
+  thing that fails a run.
+- **Latency-only gates are satisfiable by fast 500s.** A mid-pipeline `GET`
+  yields a timed `{status, ms, url}` record whether or not `parallel` is
+  written, and `stats` builds its percentiles from *every* timed record,
+  whatever its status — a 500 in 2ms is under any p95 budget. So the status
+  histogram is gated first: a fast error storm passes every latency gate and
+  must be stopped by the status one.
+- **The report survives a failing gate — `expect` before `stats` does
+  not.** With `--out`, the artifact is flushed after every window and before
+  each yield (write-then-rename), so it is on disk before the summary that
+  trips a failing `assert` is emitted — the file outlives the failure for CI
+  upload. The contrast: an `expect` placed *before* `stats` throws at drain,
+  before `stats` has consumed anything — a failing expect prevents the
+  summary (and any `--out` file) from ever existing. That is why the pattern
+  gates status on the summary instead (see the ordering trap at the end of
+  this section).
+- **"Measured nothing" never passes.** A zero-request run — a glob that
+  matched nothing, a filter that dropped everything, a server never reached —
+  yields a summary tagged `empty: true`, and `assert` refuses it outright;
+  `{count: 0, p95: 0}` used to satisfy `s => s.p95 < 200` and pass a CI gate.
+- **`rps` is the ACHIEVED rate, never the target.** `stats.rps` is measured
+  from the records that actually passed — crust cannot report a rate it did
+  not sustain. When the target was not sustained, the `load` source already
+  said so on stderr (`load: target 3000 ticks — emitted 2868, dropped 132
+  (downstream saturated; raise parallel N?), achieved 95.6/s`): stale slots
+  are skipped, never burst. A drop report means the number under the rate
+  gate is the honest one — raise `parallel N` or lower the rate before
+  quoting percentiles. A drop is never a pass.
 
 **What makes a line fail.** As of v0.2 the gate is honest in three more places
 that used to exit 0:
@@ -790,8 +841,10 @@ and the reported value is the bucket's upper bound — never faster than reality
 requests and made each `--every` window re-sort the cumulative array, which
 blocked the load client itself for up to 1.6s per window on a long soak.
 
-**Baselines.** `--out` writes the artifact; an async assert reads it back.
-The "worse than 2× baseline p95 is a failure" gate is one line:
+**Baselines.** The primary pattern with its p95 threshold swapped for a
+baseline read: `--out` writes the current artifact, and an async assert reads
+the recorded one back. "Worse than 2× the baseline p95 is a failure" is one
+line:
 
 ```bash
 load 10s 100/s | parallel 50 | GET :3000/health | stats --out load/last.json \
@@ -823,9 +876,13 @@ load 30s 100/s | parallel 50 | GET :3000/health | stats | assert (s => s.p95 < 2
 ```
 
 **Ordering trap:** in `… | expect 200 | stats | assert (…)`, a failing
-`expect` throws at drain — *before* `stats` emits — so you lose the summary.
-Either gate status inside the predicate (`s.status["200"] === s.count`) or
-accept that a hard expect failure hides the stats.
+`expect` throws at drain — *before* `stats` emits — so you lose the summary:
+no percentiles, no histogram, and no `--out` artifact either, because
+`stats` never ran. That is the trap the primary pattern above sidesteps —
+`stats --out` sits before every gate, so the summary and the report exist
+even when the status gate fails. Either gate status inside the predicate
+(`s.status["200"] === s.count`) or accept that a hard expect failure hides
+the stats.
 
 ### Timing a pipeline (`time "label"`)
 
