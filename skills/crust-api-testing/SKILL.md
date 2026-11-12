@@ -160,6 +160,13 @@ whose create body cannot be filled — are dropped and NAMED on stdout
 (`gen-fixtures: 2 case(s) skipped for POST /things …`, `skipping flow for
 /things …`). A silently smaller suite would look like coverage.
 
+Every generation's LAST write is `<out>/gen-manifest.json`: each case with
+its expectation's provenance (`contract:<spec pointer>` when the spec
+documents the status), each skip, each unsupported op — review it BEFORE
+running. Deterministic (same spec + version → byte-identical); it records
+generation, never execution.
+https://lariocpt.github.io/crust-website/docs/recipes/gen-fixtures/
+
 ## Generated cases are candidates, not certified coverage
 
 A generator can derive request mutations from a schema. It cannot universally

@@ -1605,6 +1605,23 @@ test-fixture --target 'tests/gen/*.gen.crust.ts' --threads 8
 test-pipes --target tests/gen/flows/flows.gen.pipes   # generated CRUD flows
 ```
 
+**`gen-manifest.json` — the review artifact.** The last write of every
+successful generation is `gen-manifest.json` inside `--out`: every generated
+case with its expectation's PROVENANCE — `contract:paths.<path>.<method>.responses.<code>`
+when the spec documents that status for the operation (every case family
+today is gated on a documented response; crust never assumes a status the
+contract is silent on), `convention:<name>` if a status were ever assumed by
+rule rather than read from the spec — plus every skip (dropped cases, skipped
+flows, `flowOverrides.skip`) with the same reason stdout shows, and every
+unsupported operation with what crust could not derive. Prerequisites are
+NAMES (`auth`, `scope:member`, `resource:<param>`), never values from your
+setup module. The file is deterministic — no timestamps; the spec is
+identified by a sha256 of its content — so the same spec + crust version
+regenerate it byte-identically, and it states its own limit in every copy:
+it records generation only, nothing in it was executed or verified. It lives
+inside `--out`, so the directory wipe takes it with it, and a failed
+generation never leaves one behind.
+
 Derived cases:
 
 - **401** when the op documents a *middleware* 401 — a 401 response whose

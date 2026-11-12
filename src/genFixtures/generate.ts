@@ -25,6 +25,13 @@
  * a generated CRUD flow suite: --out/flows/flows.gen.pipes + its sibling
  * flows.gen.setup.ts, runnable by test-pipes with zero extra flags.
  *
+ * The last write of a successful generation is --out/gen-manifest.json: a
+ * deterministic, timestamp-free record of every generated case with its
+ * expectation PROVENANCE (the spec node that documents the status, or a
+ * crust convention), plus every skip and unsupported operation. It records
+ * generation only — nothing in it was executed or verified. See
+ * GenManifest below.
+ *
  * The emitted TypeScript takes the style of the project it lands in: the
  * nearest biome.json (walked up from --out, then from cwd) decides — indent
  * (a tab style emits tabs, a space style its width), lineWidth wrapping,
@@ -73,8 +80,10 @@
  *     flow (e.g. a required FK no static value can satisfy). Read at
  *     generation time.
  */
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
+import pkg from "../../package.json" with { type: "json" };
 import { loadSpec, type OpenApiSpec } from "../mockServer/loadSpec";
 import { resolveRef, withRefSiblings } from "../mockServer/mockResponse";
 import {
@@ -161,6 +170,8 @@ export interface GenerateResult {
    * per-operation notices get filtered by harnesses — this number is the aggregate that survives.
    */
   withNoCases: number;
+  /** Path of the gen-manifest.json written into --out (see GenManifest). */
+  manifestPath: string;
 }
 
 // Optional per-collection-template flow tuning from the setup module: some
@@ -683,6 +694,16 @@ interface GenCase {
   path: string; // with {params} placeholders — resolved by the setup module
   body?: Record<string, unknown>;
   expectStatus: number;
+  /**
+   * Where the expected status came from, recorded in gen-manifest.json (never
+   * emitted into the fixture files). `contract:<spec pointer>` when the spec
+   * documents that response for this operation — set at the gate that decides
+   * the case exists, never re-derived in a second pass. `convention:<name>`
+   * when crust assumed the status without documentation; no fixture case does
+   * that today (every family is gated on a documented response), and the
+   * setup-module override seam (F6) will add `configured:<module>`.
+   */
+  expectationSource: string;
   expectValidationField?: string;
   /** Assert only status + code === "validation" (no fieldErrors matcher). */
   expectValidationCode?: boolean;
@@ -724,6 +745,16 @@ interface BodylessOp {
 }
 
 /**
+ * An operation with a JSON request body whose spec documents no 400. The
+ * validation matrix is gated on the documented status (crust never assumes
+ * 400), so the matrix is absent — recorded in the manifest's `unsupported`
+ * so the silence is reviewable rather than invisible.
+ */
+interface NoMatrixOp {
+  template: string;
+}
+
+/**
  * The operation's request body, when the method can actually carry one.
  *
  * A body on GET or HEAD is a body nobody can send: fetch refuses to build the request at all
@@ -757,10 +788,16 @@ function deriveCases(
   scope: ScopeConfig,
   unsound: UnsoundOp[],
   bodyless: BodylessOp[],
+  noMatrix: NoMatrixOp[],
 ): GenCase[] {
   const cases: GenCase[] = [];
   const responses = op.responses ?? {};
   const has = (code: number) => String(code) in responses;
+  // Provenance pointer for this operation's documented responses — the
+  // gen-manifest's `contract:` target. The path template and method are the
+  // spec's own keys, so a reviewer can open the spec at exactly this node.
+  const responsePointer = (code: number) =>
+    `contract:paths.${path}.${method.toLowerCase()}.responses.${code}`;
   // A documented 401 only implies "requires auth" when it's the middleware's
   // 401 — public endpoints like login document 401 for bad credentials.
   const desc401 = String(responses["401"]?.description ?? "");
@@ -788,6 +825,7 @@ function deriveCases(
       path,
       body: authzBody,
       expectStatus: 401,
+      expectationSource: responsePointer(401),
     });
   }
 
@@ -799,6 +837,7 @@ function deriveCases(
       path,
       body: authzBody,
       expectStatus: 403,
+      expectationSource: responsePointer(403),
     });
   }
 
@@ -810,6 +849,7 @@ function deriveCases(
       path,
       body: authzBody,
       expectStatus: 404,
+      expectationSource: responsePointer(404),
     });
   }
 
@@ -818,6 +858,7 @@ function deriveCases(
   // must resolve to a caller inside the shared scope).
   if (bodySchema && has(400)) {
     const validAuth = requiresAuth ? "member" : "none";
+    const matrixSource = responsePointer(400);
     // Same composed view as baseBody, on purpose: the field list drives `missing required '<field>'`
     // cases, so a name the spec requires through an `allOf` branch would otherwise get no case at
     // all — and a property declared only in a branch would get a `wrong type` case built from
@@ -834,6 +875,7 @@ function deriveCases(
         path,
         body: withoutField,
         expectStatus: 400,
+        expectationSource: matrixSource,
         expectValidationField: field,
       });
       // Only when the value is ACTUALLY rejected. A field whose schema constrains nothing —
@@ -852,6 +894,7 @@ function deriveCases(
           path,
           body: { ...base, [field]: wrongValue },
           expectStatus: 400,
+          expectationSource: matrixSource,
           expectValidationField: field,
         });
       }
@@ -868,6 +911,7 @@ function deriveCases(
           path,
           body: { ...base, [field]: "__not_a_real_enum_value__" },
           expectStatus: 400,
+          expectationSource: matrixSource,
           expectValidationField: field,
         });
       }
@@ -887,6 +931,7 @@ function deriveCases(
           path,
           body: { ...base, [field]: wrongValue },
           expectStatus: 400,
+          expectationSource: matrixSource,
           expectValidationField: field,
         });
       const ft = primaryType(fs);
@@ -931,6 +976,7 @@ function deriveCases(
         path,
         body: { ...base, crustUnexpectedProp: "gen-extra" },
         expectStatus: 400,
+        expectationSource: matrixSource,
         expectValidationCode: true,
       });
     }
@@ -964,6 +1010,11 @@ function deriveCases(
         });
       }
     }
+  } else if (bodySchema) {
+    // A JSON body whose op documents no 400: the matrix is absent because
+    // crust never assumes the status where the contract is silent. Disclosed
+    // in the manifest rather than silently missing.
+    noMatrix.push({ template: `${method.toUpperCase()} ${path}` });
   }
 
   // Attach the documented response schema (if any) for each case's expected
@@ -978,6 +1029,115 @@ function deriveCases(
     bodyless.push({ template: `${method.toUpperCase()} ${path}`, kept: cases.length });
 
   return cases;
+}
+
+// ---------------------------------------------------------------------------
+// gen-manifest.json — the generation record
+//
+// Generation is not execution: a generated case is a candidate expectation,
+// and the reviewer needs to see WHERE each expectation came from (the spec
+// node that documents it, or a crust convention) and WHAT was skipped, in the
+// artifact itself rather than only in a stdout scrollback. The manifest is
+// written as the LAST write of a successful generation, so a crashed run
+// never leaves a manifest claiming files that do not exist. It is
+// deterministic — same spec bytes + same crust version → byte-identical file:
+// no timestamps, the spec is identified by a content hash instead. Prereq-
+// isites are NAMES (auth, scope:member, resource:<param>) — never a value
+// from the setup module, a header, or a credential.
+// ---------------------------------------------------------------------------
+
+export interface GenManifestCase {
+  /** `METHOD /path/template` — the operation the case belongs to. */
+  operation: string;
+  /** The case name exactly as generated into the fixture file. */
+  case: string;
+  /** What the case mutates (or "baseline" when nothing is mutated). */
+  mutation: string;
+  expectStatus: number;
+  /** `contract:<spec pointer>` | `convention:<name>` (F6 adds `configured:<module>`). */
+  expectationSource: string;
+  prerequisites: string[];
+}
+
+export interface GenManifestSkip {
+  operation: string;
+  /** The same reason string stdout shows for this skip. */
+  reason: string;
+}
+
+export interface GenManifestUnsupported {
+  operation: string;
+  /** What crust could not derive for this operation, and why. */
+  assumption: string;
+}
+
+export interface GenManifest {
+  crustGenManifest: 1;
+  crustVersion: string;
+  spec: { path: string; sha256: string };
+  note: string;
+  cases: GenManifestCase[];
+  skipped: GenManifestSkip[];
+  unsupported: GenManifestUnsupported[];
+}
+
+// The mutation phrases deriveCases writes into case names. A case name is
+// `METHOD /path <mutation> -> NNN`; the manifest records the mutation without
+// the operation prefix or the status suffix, so a reviewer reads what was
+// perturbed, not the whole title again.
+const MUTATION_MARKERS = [
+  "without credentials",
+  "as non-member",
+  "with unknown",
+  "missing required",
+  "wrong type for",
+  "invalid enum for",
+  "too short",
+  "too long",
+  "below minimum",
+  "above maximum",
+  "pattern violation",
+  "unexpected extra property",
+] as const;
+
+function mutationOf(name: string): string {
+  const arrow = name.lastIndexOf(" ->");
+  const body = arrow === -1 ? name : name.slice(0, arrow);
+  let best = -1;
+  for (const marker of MUTATION_MARKERS) {
+    const i = body.indexOf(marker);
+    if (i !== -1 && (best === -1 || i < best)) best = i;
+  }
+  return best === -1 ? "baseline" : body.slice(best);
+}
+
+// Names only — the setup module's values (tokens, ids, base URLs) never
+// enter the manifest. `resource:<param>` names the path placeholder the case
+// needs filled; `scope:member`/`scope:outsider` name the membership the
+// caller role presumes.
+function prerequisitesOf(c: GenCase): string[] {
+  const pre: string[] = [];
+  if (c.auth === "member") pre.push("auth", "scope:member");
+  else if (c.auth === "outsider") pre.push("auth", "scope:outsider");
+  for (const m of c.path.matchAll(/\{(\w+)\}/g)) {
+    const name = `resource:${m[1]}`;
+    if (!pre.includes(name)) pre.push(name);
+  }
+  return pre;
+}
+
+// The spec's own bytes, hashed — the deterministic stand-in for a timestamp.
+// A path spec hashes the file exactly as given; anything loadSpec can fetch
+// but readFile cannot (a URL) hashes the parsed document instead, which is
+// the same content by another route.
+async function specContentHash(specPath: string, rawSpec: unknown): Promise<string> {
+  try {
+    return createHash("sha256")
+      .update(await readFile(specPath))
+      .digest("hex");
+  } catch {
+    return createHash("sha256").update(JSON.stringify(rawSpec)).digest("hex");
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1512,13 +1672,14 @@ export async function generateFixtures(opts: GenerateOpts): Promise<GenerateResu
   const log = opts.log ?? ((line: string) => process.stdout.write(`${line}\n`));
   const unsound: UnsoundOp[] = [];
   const bodyless: BodylessOp[] = [];
+  const noMatrix: NoMatrixOp[] = [];
   const byTag = new Map<string, GenCase[]>();
   for (const [path, methods] of Object.entries(spec.paths ?? {})) {
     for (const [method, op] of Object.entries(methods as Record<string, Operation>)) {
       if (!["get", "post", "patch", "put", "delete"].includes(method)) continue;
       const tag = op.tags?.[0] ?? "untagged";
       const arr = byTag.get(tag) ?? [];
-      arr.push(...deriveCases(path, method, op, scope, unsound, bodyless));
+      arr.push(...deriveCases(path, method, op, scope, unsound, bodyless, noMatrix));
       byTag.set(tag, arr);
     }
   }
@@ -1567,10 +1728,21 @@ export async function generateFixtures(opts: GenerateOpts): Promise<GenerateResu
 
   const specifier = setupSpecifier(opts.setup, outDir);
   const files: string[] = [];
+  const manifestCases: GenManifestCase[] = [];
   let totalCases = 0;
   for (const [tag, cases] of [...byTag.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1))) {
     if (cases.length === 0) continue;
     totalCases += cases.length;
+    for (const c of cases) {
+      manifestCases.push({
+        operation: `${c.method.toUpperCase()} ${c.path}`,
+        case: c.name,
+        mutation: mutationOf(c.name),
+        expectStatus: c.expectStatus,
+        expectationSource: c.expectationSource,
+        prerequisites: prerequisitesOf(c),
+      });
+    }
     const used = new Set<string>(["resolvePath", "shared"]);
     const fixtures = cases.map((c) => emitFixture(c, used, style)).join("\n");
     const file = reindentTwoSpace(
@@ -1596,6 +1768,7 @@ ${fixtures}
   let flowFile: string | null = null;
   let flowCount = 0;
   let flowSkipped = 0;
+  const flowSkips: SkippedFlow[] = [];
   if (opts.flows !== false) {
     const { flows, skipped } = deriveFlows(
       (spec.paths ?? {}) as Record<string, Record<string, Operation>>,
@@ -1605,6 +1778,7 @@ ${fixtures}
       log(`gen-fixtures: skipping flow for ${s.template} — ${s.reason}`);
     }
     flowSkipped = skipped.length;
+    flowSkips.push(...skipped);
     if (flows.length > 0) {
       const flowsDir = resolve(outDir, "flows");
       await mkdir(flowsDir, { recursive: true });
@@ -1621,5 +1795,42 @@ ${fixtures}
     }
   }
 
-  return { outDir, files, totalCases, flowFile, flowCount, flowSkipped, withNoCases };
+  // The manifest is the LAST write of a successful generation: a run that
+  // crashed mid-emit leaves no manifest behind, so a gen-manifest.json in an
+  // out dir always describes a complete generation. It records generation
+  // only — nothing in it was executed. Skips mirror the stdout notices
+  // (dropped-case blame per operation, then each skipped flow with its
+  // reason verbatim); unsupported names what crust could not derive.
+  const manifest: GenManifest = {
+    crustGenManifest: 1,
+    crustVersion: pkg.version,
+    spec: { path: opts.swagger, sha256: await specContentHash(opts.swagger, rawSpec) },
+    note: "Records generation only. Nothing here was executed or verified.",
+    cases: manifestCases,
+    skipped: [
+      ...unsound.map((u) => ({
+        operation: u.template,
+        reason: `${u.dropped} case(s) skipped — ${blameClause(u.specFaults, u.crustFaults, "so a 400 from that body would name the wrong field")}`,
+      })),
+      ...flowSkips.map((s) => ({ operation: s.template, reason: s.reason })),
+    ],
+    unsupported: [
+      ...bodyless.map((b) => ({
+        operation: b.template,
+        assumption:
+          "the spec documents a JSON request body on a method no client can send one with " +
+          "(GET/HEAD — fetch refuses the request), so the 400 matrix could not be derived",
+      })),
+      ...noMatrix.map((n) => ({
+        operation: n.template,
+        assumption:
+          "the spec documents no 400 for this operation, so no validation matrix was " +
+          "derived — crust does not assume 400 where the contract is silent",
+      })),
+    ],
+  };
+  const manifestPath = resolve(outDir, "gen-manifest.json");
+  await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+  return { outDir, files, totalCases, flowFile, flowCount, flowSkipped, withNoCases, manifestPath };
 }

@@ -101,6 +101,9 @@ export async function runCli(args: string[]): Promise<number> {
           : "no qualifying collection paths";
       process.stdout.write(`generated 0 CRUD flows (${why})\n`);
     }
+    // The closing line points at the review artifact: provenance + skips live
+    // in the file, not in this scrollback.
+    process.stdout.write(`gen-fixtures: manifest written — ${result.manifestPath}\n`);
     return 0;
   } catch (err) {
     const message = (err as Error).message;
