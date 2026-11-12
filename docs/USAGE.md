@@ -2591,8 +2591,10 @@ crust.onBeforeStart = async () => {
   console.error(`[crust] session start ${new Date().toISOString()}`);
 };
 
-// Runs right before process.exit, with the resolved exit code. Async ok.
-// Errors are caught and logged — they do not block exit.
+// Runs from the centralized shutdown path, with the resolved exit code.
+// Async ok. A throwing hook logs `crust: onExit error: …` and keeps the
+// original code. A direct process.exit() — including one inside an
+// onSignal handler — bypasses it; so do unhandled signals and kill -9.
 crust.onExit = async (code) => {
   await flushMetrics(code);
 };
@@ -2613,7 +2615,7 @@ crust.onSignal("SIGTERM", async () => {
 });
 ```
 
-Handlers run from the centralized shutdown path, so they fire whether crust exits via `exit N`, Ctrl-D, end of `-c`, or a signal handler that calls `process.exit`.
+`onExit` runs from the centralized shutdown path, so it fires with the resolved code on every end of a run: the `exit` builtin, Ctrl-D at the REPL, the end of a `-c` run, and the end of a `.crust` script or piped-stdin run. Under fail-fast it fires with the failing line's own code (later lines are skipped), and a hook that throws logs `crust: onExit error: …` on stderr without changing that code. What bypasses it: a `process.exit()` called anywhere, including inside an `onSignal` handler; SIGINT and SIGTERM when no `crust.onSignal` handler is registered, which keep their default disposition and kill the process (orphaned detached stage groups run to their own end and init reaps them, so no zombies are left); and `kill -9`, which nothing can intercept. An `onSignal` handler that returns lets the run continue to its natural end, and `onExit` then fires (with 0 when the run completes cleanly). The fail-fast fire, code-preservation, and signal cases above are pinned by `tests/onexit.test.ts`.
 
 ### Custom functions
 
