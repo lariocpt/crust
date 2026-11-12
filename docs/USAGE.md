@@ -1595,6 +1595,10 @@ behaviour change for non-biome repos); a non-default indent is disclosed on
 stdout, naming the config; and a config that is not valid JSON is reported
 and treated as absent, since a broken formatter must never fail a generation.
 
+Generated cases are candidates until a human has reviewed them against the
+contract: work through the [contract-review checklist](CONTRACT-REVIEW.md)
+before running anything the generator produced.
+
 ```bash
 gen-fixtures --swagger ./openapi.json --out tests/gen --setup ./tests/gen-setup.ts
 test-fixture --target 'tests/gen/*.gen.crust.ts' --threads 8

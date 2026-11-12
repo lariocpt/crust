@@ -187,6 +187,41 @@ the other way around. Document unsupported assumptions and skipped cases
 rather than silently reducing coverage or normalizing the contract to fit
 generation.
 
+## Contract review before generation
+
+Review the contract BEFORE generating and record the review beside the
+generated output. Record fields (one per line):
+
+```
+API/service:
+Contract path:
+Contract revision:
+Backend revision, if available:
+Crust version:
+Reviewer:
+Review date:
+Generated output directory:
+Intended execution scope:
+Unresolved discrepancies:
+```
+
+Highest-risk checks (full checklist:
+https://lariocpt.github.io/crust-website/docs/contract-review/):
+
+- Expected statuses come from the reviewed contract — validation cases do
+  NOT default to 400 (a 422 contract must generate 422 expectations).
+- Authorization cases account for intentional 404 concealment; unknown-id
+  cases use syntactically valid identifiers.
+- One intended condition per negative case; unrelated fields stay valid so
+  the request reaches the intended validation layer.
+- Dedicated `--out` dir; regeneration cannot touch manual fixtures; never
+  hand-edit generated files.
+- Classify every failure (backend · contract · generator · environment ·
+  incorrect test) BEFORE changing any expectation.
+- Execution is approved separately — target, identity, resource scope,
+  writes, cleanup. This review grants no permission beyond the recorded
+  execution scope.
+
 ## Workflow for a new API
 
 1. Identify the authoritative contract and record its version or revision.
