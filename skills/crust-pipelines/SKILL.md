@@ -195,9 +195,9 @@ cleanup on their own lines. Blank lines and `#` comments are skipped, so a
 Under fail-fast, an earlier failure means that line never runs. When
 failure-path cleanup is a requirement (containers, temp rows, mock servers),
 use the verified lifecycle hook: `crust.onExit = async (code) => {…}` in
-`init.ts` — it runs from the centralized shutdown path on every exit,
+`init.ts` — it fires on every shutdown-path exit,
 including the fail-fast failure path of `-c`, script, and stdin runs
-(source-verified on v0.3.5), and receives the exit code. If a needed
+(test-pinned by `tests/onexit.test.ts`), and receives the exit code. If a needed
 guarantee is still missing (e.g. `kill -9`), document the limitation rather
 than implying line placement solves it.
 
