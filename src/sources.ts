@@ -10,7 +10,13 @@ import {
   type ReadyTarget,
 } from "./readiness";
 import { shellEnv } from "./shellPath";
-import { HttpTimeoutError, isTimeoutError, labelBodyTimeout } from "./transforms";
+import {
+  HttpRedirectError,
+  HttpTimeoutError,
+  isRedirectError,
+  isTimeoutError,
+  labelBodyTimeout,
+} from "./transforms";
 
 // Set when index.ts consumes stdin as a SCRIPT (the bare `cmd | crust`
 // form reads the pipe to EOF before running a line) so a `stdin |` stage in
@@ -446,6 +452,9 @@ export function request(
       } catch (err) {
         if (minted && isTimeoutError(err)) {
           throw new HttpTimeoutError(method, url, timeoutMs!);
+        }
+        if (init.redirect === "error" && isRedirectError(err)) {
+          throw new HttpRedirectError(method, url);
         }
         // Same labelling as the transform path: name the request that failed.
         const hostHint = url.startsWith("/")

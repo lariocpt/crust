@@ -300,18 +300,24 @@ function resolveKind(text: string, ctx?: Context): StageKind {
   return kind;
 }
 
-function httpOpts(headers: string[]): RequestInit | undefined {
-  if (headers.length === 0) return undefined;
-  const h = new Headers();
-  for (const raw of headers) {
-    // Expand the WHOLE raw string first so -H "$AUTH_HEADER" can hold a
-    // complete `authorization: Bearer …` line (generated flows rely on it).
-    const expanded = expandEnv(raw);
-    const idx = expanded.indexOf(":");
-    if (idx === -1) throw new Error(`-H expects "Key: value", got "${raw}"`);
-    h.set(expanded.slice(0, idx).trim(), expanded.slice(idx + 1).trim());
+function httpOpts(kind: Extract<StageKind, { kind: "http" }>): RequestInit | undefined {
+  const headers = kind.headers;
+  if (headers.length === 0 && kind.redirect === undefined) return undefined;
+  const init: RequestInit = {};
+  if (headers.length > 0) {
+    const h = new Headers();
+    for (const raw of headers) {
+      // Expand the WHOLE raw string first so -H "$AUTH_HEADER" can hold a
+      // complete `authorization: Bearer …` line (generated flows rely on it).
+      const expanded = expandEnv(raw);
+      const idx = expanded.indexOf(":");
+      if (idx === -1) throw new Error(`-H expects "Key: value", got "${raw}"`);
+      h.set(expanded.slice(0, idx).trim(), expanded.slice(idx + 1).trim());
+    }
+    init.headers = h;
   }
-  return { headers: h };
+  if (kind.redirect !== undefined) init.redirect = kind.redirect;
+  return init;
 }
 
 export function buildSource(kind: StageKind, ctx?: Context): Pipeline<unknown> {
@@ -332,7 +338,7 @@ export function buildSource(kind: StageKind, ctx?: Context): Pipeline<unknown> {
         return sources.request(
           kind.verb,
           normalizeUrl(expandEnv(kind.url)),
-          httpOpts(kind.headers),
+          httpOpts(kind),
           kind.timeoutMs,
         ) as Pipeline<unknown>;
       }
@@ -428,7 +434,7 @@ function applyStage(
       return shellTransform(input, kind.text);
     case "http": {
       const url = normalizeUrl(expandEnv(kind.url));
-      const opts = httpOpts(kind.headers);
+      const opts = httpOpts(kind);
       if (kind.verb === "GET") {
         // Per-item timed GET — each upstream item triggers one request.
         // `parallel N` upstream sets the fan-out.
