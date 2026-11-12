@@ -4,6 +4,45 @@ Notable changes to crust. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project is
 pre-1.0, so minor versions may carry breaking changes.
 
+## [0.3.4] — 2026-11-12
+
+### Added
+
+- **`--redirect follow|error|manual` on every http verb stage.** fetch's
+  `redirect` init was unreachable from a pipeline: a `.pipes` suite had no
+  way to refuse a 3xx the way a native fixture's
+  `fetch(..., {redirect: "error"})` does, so a moved endpoint could pass a
+  suite by landing somewhere else, and a typo'd mode reached fetch
+  unvalidated. `follow` is the default and the behaviour is unchanged;
+  `error` refuses any 3xx — a plain verb or source `GET` fails the line
+  with `<VERB> <url>: redirect refused (--redirect error)`, and a timed
+  stage (load mode) yields a `{status: 0, redirectRefused: true, …}`
+  record, so a load run reports the refusal instead of a bare
+  connection-shaped 0; `manual` yields the 3xx `Response` as-is, so
+  `GET :3000/old --redirect manual | expect 301` asserts a redirect
+  exists. Both the space (`--redirect error`) and equals
+  (`--redirect=error`) forms parse; any other value is a parse error,
+  never a value passed to fetch, and the unknown-flag message now lists
+  the flag.
+- **`input.redirect` on `test-fixture` fixtures.** The fixture-side twin of
+  the stage flag: the same three modes reach fetch through the fixture's
+  `input` like any other `RequestInit` field, now validated — an unknown
+  value fails the fixture naming the field instead of surfacing as fetch's
+  own complaint, and a refused 3xx names the field and points at the
+  `manual`/`follow` alternatives. A `.pipes` suite and a `.crust.ts`
+  fixture now have identical redirect behaviour.
+- **VS Code MCP documentation.** The MCP section (USAGE.md) and the
+  `crust-mcp` skill now cover VS Code's different registration schema —
+  `servers` with `"type": "stdio"` in `.vscode/mcp.json`, where the
+  `mcpServers` shape silently fails — plus its two verified traps:
+  `"command"` must be an absolute path (a GUI-launched VS Code does not
+  inherit the shell `PATH`), and the MCP host ships in the
+  Chat/Copilot Chat extension (Code - OSS / VSCodium needs Cline, Roo Code
+  or Continue). It also notes why no MCP-side change is needed per
+  feature: the one-shot tools pass line and fixture text to a fresh crust
+  child untouched, so anything the lexer accepts is an MCP tool call the
+  moment the installed binary has it.
+
 ## [0.3.3] — 2026-11-03
 
 ### Changed
