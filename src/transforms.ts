@@ -73,17 +73,18 @@ export class HttpTimeoutError extends Error {
   }
 }
 
-// Bun names a fetch that refused to follow a redirect (redirect: "error")
-// `TypeError: UnexpectedRedirect fetching "…"`; Node calls the same situation
-// a ResponseRedirectError ("Redirect was stopped"). Both arrive as TypeError,
-// so the check is name + a stable message fragment — and callers only apply
-// it when their own init asked for "error", so a caller-supplied signal abort
-// can never be relabeled as a redirect refusal.
+// Bun 1.4+ names a fetch that refused to follow a redirect (redirect:
+// "error") a TypeError; Bun 1.3.x — the release workflow's build runtime,
+// i.e. what the shipped binaries carry — raises the same situation as a
+// plain Error (name "Error"). Node calls it a ResponseRedirectError
+// ("Redirect was stopped"). The message, however, is identical across all
+// three: it opens with a FIXED fragment before any URL ("UnexpectedRedirect
+// fetching \"…\"" — a URL cannot fake a match that precedes it; Node's
+// variant embeds no URL at all). Callers only apply the check when their
+// own init asked for "error", so an abort or a timeout from a
+// caller-supplied signal can never be relabelled as a refusal.
 export function isRedirectError(err: unknown): boolean {
-  return (
-    err instanceof TypeError &&
-    /UnexpectedRedirect|Redirect was stopped/.test((err as Error).message)
-  );
+  return err instanceof Error && /UnexpectedRedirect|Redirect was stopped/.test(err.message);
 }
 
 /** Thrown only when --redirect error refused a 3xx response. */
