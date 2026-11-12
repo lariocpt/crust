@@ -50,8 +50,16 @@ export function resolveSource(pkg = readPkg()) {
 }
 
 // `crust-linux-x64`, `crust-darwin-arm64`, … — the names the release workflow uploads.
-export function assetName(platform = process.platform, arch = process.arch) {
-  return `crust-${platform}-${arch}`;
+/**
+ * @param {string} [platform]
+ * @param {string} [arch]
+ * @param {string|null} [variant] e.g. "mongo" (from package.json crust.variant)
+ */
+export function assetName(platform = process.platform, arch = process.arch, variant = null) {
+  // The mongo variant ships as a separate asset (crust-linux-x64-mongo): same
+  // version, different binary. Clean builds have no variant and keep the
+  // original name forever.
+  return `crust-${platform}-${arch}${variant ? `-${variant}` : ""}`;
 }
 
 function ghRepo(pkg) {
@@ -173,7 +181,7 @@ async function resolveFromGithub(pkg) {
   const repo = ghRepo(pkg);
   const tag = `v${pkg.version}`;
   const base = `https://github.com/${repo}/releases/download/${tag}`;
-  const asset = assetName();
+  const asset = assetName(process.platform, process.arch, pkg.crust?.variant || null);
 
   // The checksums file is the source of truth for what this release actually contains, so an
   // unsupported platform fails here with the real list rather than as a 404 on the binary.
@@ -257,7 +265,10 @@ export async function ensureBinary({ log = () => {}, warn = () => {} } = {}) {
 
   // The cache key carries the platform because a home directory can be shared across machines
   // of different architectures; two hosts must not race for one path holding one arch's ELF.
-  const dir = path.join(CACHE_ROOT, `${r.version}-${process.platform}-${process.arch}`);
+  // The variant is in the key too: clean and mongo binaries share a version but are not
+  // interchangeable, and one ~/.cache must not let them overwrite each other.
+  const variant = pkg.crust?.variant ? `-${pkg.crust.variant}` : "";
+  const dir = path.join(CACHE_ROOT, `${r.version}-${process.platform}-${process.arch}${variant}`);
   const bin = path.join(dir, "crust");
   mkdirSync(dir, { recursive: true });
 

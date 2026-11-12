@@ -5,20 +5,21 @@
 // user's own typed code). A cursor is drained with toArray() so each document
 // becomes its own item; a write command yields its result object as one item.
 //
-// The driver is NOT bundled — the crust bundle stays zero-dependency.
-// Resolution (all measured 2026-11-12 against a compiled --bytecode binary):
-// a bare dynamic import resolves from the binary's virtual /$bunfs/root, NOT
-// the process cwd, and importing the package by absolute path fails on the
-// driver's own deps ("Cannot find package 'bson'"). What works is the same
-// mechanism the fixture plane uses (G13): import a REAL file inside the user's
-// project — its own bare imports resolve from its real location with full
-// package context. So the fallback writes a one-line shim
-// (`export * from "mongodb"`) into the project root, imports it, and removes
-// it. A missing driver is a loud, actionable error, never a mystery.
+// Two shipped binaries, one source tree:
+// - the CLEAN binary stays zero-dependency and does NOT carry the driver;
+//   using `mongo` there is a loud redirect to the mongo variant, never a
+//   mystery. (Measured 2026-11-12, Bun 1.4.3/1.4.4-canary: a compiled binary
+//   cannot resolve bare npm specifiers from files OUTSIDE the bundle — the
+//   old G13 shim trick fails for mongodb because of its own `bson` dep — so
+//   runtime loading from the user's project is not a path that works.)
+// - the MONGO variant (src/index-mongo.ts) statically bundles the driver at
+//   build time and registers it through setBundledMongo(); it just works.
+// Running from source resolves the driver normally via node_modules.
 
-import { existsSync } from "node:fs";
-import { rm } from "node:fs/promises";
-import { dirname, join } from "node:path";
+/** What `mongo` prints in a binary that has no driver (the clean build). */
+export const MONGO_VARIANT_HINT =
+  "mongo: this crust binary has no mongo support — install the mongo variant: " +
+  "npm i -g @lariocpt/crust-mongo (or curl -fsSL https://raw.githubusercontent.com/lariocpt/crust/main/install.sh | bash -s -- crust-mongo)";
 
 /** The screen `mongo --help` prints at parse time (same contract as sqlUsage). */
 export const mongoUsage =
@@ -62,34 +63,45 @@ interface MongoClientLike {
 
 let cachedDb: MongoDbLike | null = null;
 
-/** Walk up from the process cwd for an installed driver, import it for real. */
-async function importFromCwd(): Promise<{ MongoClient: new (uri: string) => MongoClientLike }> {
-  let dir = process.cwd();
-  while (true) {
-    const pkg = join(dir, "node_modules", "mongodb");
-    if (existsSync(pkg)) {
-      // The shim is what makes this work from a COMPILED binary: importing
-      // the package directory or a deep file from inside the bundle fails
-      // (bunfs-root resolution); importing a real file in the project works,
-      // and the shim's own `from "mongodb"` resolves with full package
-      // context. Same content every time, so concurrent runs cannot fight
-      // over meaning; the file is removed as soon as the import resolves.
-      const shim = join(dir, ".crust-mongo-shim.mjs");
-      try {
-        await Bun.write(shim, 'export * from "mongodb";\n');
-        return await import(shim);
-      } finally {
-        await rm(shim, { force: true }).catch(() => {});
-      }
-    }
-    const parent = dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
+/**
+ * Set by src/mongo-bundled.ts — compiled ONLY into the -mongo variant, where
+ * the driver is statically bundled and handed over here before index.ts runs.
+ */
+let bundledMongo: { MongoClient: new (uri: string) => MongoClientLike } | null = null;
+export function setBundledMongo(
+  m: { MongoClient: new (uri: string) => MongoClientLike } | null,
+): void {
+  bundledMongo = m;
+  cachedDb = null;
+}
+
+/**
+ * A compiled Bun binary reports its virtual bundle entry as argv[1]
+ * (/$bunfs/root/<name>); source runs report the real script path. Measured
+ * 2026-11-12, Bun 1.4.3 — import.meta.url is NOT the signal: it keeps
+ * reporting the original source path even inside the binary.
+ */
+function isCompiled(): boolean {
+  return (process.argv[1] ?? "").includes("$bunfs");
+}
+
+async function resolveDriver(): Promise<{ MongoClient: new (uri: string) => MongoClientLike }> {
+  if (bundledMongo) return bundledMongo;
+  if (isCompiled()) {
+    // Clean binary: the driver cannot be loaded at runtime from outside the
+    // bundle (measured — see header). Point at the variant that ships it.
+    throw new Error(MONGO_VARIANT_HINT);
   }
-  throw new Error(
-    "mongo: needs the mongodb driver — bun add mongodb (or npm i mongodb) " +
-      "in the project you run crust from",
-  );
+  // Source mode: the specifier goes through a variable on purpose — a literal
+  // would make tsc demand @types/mongodb for the zero-dependency clean build.
+  const driverSpec = "mongodb";
+  try {
+    return await import(driverSpec);
+  } catch {
+    throw new Error(
+      "mongo: needs the mongodb driver — bun add mongodb in the crust source tree (or install the mongo variant)",
+    );
+  }
 }
 
 async function getDb(): Promise<MongoDbLike> {
@@ -98,17 +110,7 @@ async function getDb(): Promise<MongoDbLike> {
   if (!url) {
     throw new Error("mongo: no connection (set $MONGODB_URI)");
   }
-  let mongodb: { MongoClient: new (uri: string) => MongoClientLike };
-  try {
-    // The specifier goes through a variable on purpose: a literal would make
-    // tsc demand @types/mongodb in the zero-dependency bundle. This path
-    // serves source-mode runs whose tree can see the driver; the shipped
-    // binary falls to the shim below (bunfs-root resolution).
-    const driverSpec = "mongodb";
-    mongodb = await import(driverSpec);
-  } catch {
-    mongodb = await importFromCwd();
-  }
+  const mongodb = await resolveDriver();
   const client = new mongodb.MongoClient(url);
   await client.connect();
   // unref so a one-shot `crust -c 'mongo …'` exits after the run instead of

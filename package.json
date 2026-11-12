@@ -44,6 +44,7 @@
     "@types/bun": "latest",
     "husky": "^9.1.7",
     "lint-staged": "^17.0.5",
+    "mongodb": "^7.9.0",
     "typescript": "^5.6.0"
   },
   "lint-staged": {

@@ -133,7 +133,7 @@ export const ONE_SHOT_TOOLS: ToolDef[] = [
   {
     name: "crust_run_line",
     description:
-      "Run one crust line (or several separated by newlines) in a fresh `crust -c` child and capture its streams. The full grammar is available: pipelines, HTTP verbs, sql, procs(), load, asserts. cwd and env apply to THIS call only — a child never keeps session state between calls; pass $-style env vars explicitly. Nonzero exit (a failed assert, a 404 expect, a shell stage failing) is an error result carrying the child's exit code and output.",
+      "Run one crust line (or several separated by newlines) in a fresh `crust -c` child and capture its streams. The full grammar is available: pipelines, HTTP verbs, sql, mongo (mongo-bundled binaries only), procs(), load, asserts. cwd and env apply to THIS call only — a child never keeps session state between calls; pass $-style env vars explicitly. Nonzero exit (a failed assert, a 404 expect, a shell stage failing) is an error result carrying the child's exit code and output.",
     inputSchema: {
       type: "object",
       properties: {

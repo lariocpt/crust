@@ -15,11 +15,14 @@
 #   --dir <path>      CRUST_INSTALL_DIR   install directory (default: ~/.local/bin)
 #   --repo <o/r>      CRUST_GITHUB_REPO   source repository (default: lariocpt/crust)
 #                     CRUST_DOWNLOAD_BASE base URL holding the assets, for a mirror or a test
+#   crust-mongo       positional: install the mongo-bundled variant instead of the clean
+#                     binary (asset crust-<os>-<arch>-mongo). `bash -s -- crust-mongo`
 set -euo pipefail
 
 REPO="${CRUST_GITHUB_REPO:-lariocpt/crust}"
 VERSION="${CRUST_VERSION:-latest}"
 INSTALL_DIR="${CRUST_INSTALL_DIR:-$HOME/.local/bin}"
+VARIANT=""
 
 say()  { printf '\033[36m==>\033[0m %s\n' "$1"; }
 warn() { printf '\033[33m[warn]\033[0m %s\n' "$1" >&2; }
@@ -33,7 +36,9 @@ while [ $# -gt 0 ]; do
     --version=*) VERSION="${1#*=}"; shift ;;
     --dir=*)     INSTALL_DIR="${1#*=}"; shift ;;
     --repo=*)    REPO="${1#*=}"; shift ;;
-    -h|--help) sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    crust)       shift ;;
+    crust-mongo) VARIANT="mongo"; shift ;;
+    -h|--help) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown option: $1 (try --help)" ;;
   esac
 done
@@ -75,7 +80,7 @@ else
 fi
 
 
-ASSET="crust-${OS}-${ARCH}"
+ASSET="crust-${OS}-${ARCH}${VARIANT:+-$VARIANT}"
 
 if [ -n "${CRUST_DOWNLOAD_BASE:-}" ]; then
   BASE="${CRUST_DOWNLOAD_BASE%/}"

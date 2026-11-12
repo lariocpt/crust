@@ -11,15 +11,19 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { registerBuiltinFns } from "../src/builtinFns";
-import { __resetMongoClientForTests } from "../src/builtinFns/mongo";
+import {
+  __resetMongoClientForTests,
+  MONGO_VARIANT_HINT,
+  setBundledMongo,
+} from "../src/builtinFns/mongo";
 import { parse } from "../src/parser";
 import type { Context } from "../src/types";
 
 const ENTRY = `${import.meta.dir}/../src/index.ts`;
 
-// Match the builtin's own resolution: the driver is "present" when it can be
-// found walking up from the process cwd — that is what importFromCwd does,
-// and what decides whether the missing-driver case can even be observed.
+// The driver is "present" when node_modules can see it from the repo — it is
+// a devDependency now, so in-repo runs always have it; the guard keeps the
+// missing-driver case honest in stripped checkouts.
 let driverPresent = false;
 {
   let dir = process.cwd();
@@ -132,6 +136,59 @@ describe("mongo loud failures (no server needed)", () => {
     await expect(run(`mongo "db.users.find({})"`)).rejects.toThrow(
       /needs the mongodb driver — bun add mongodb/,
     );
+  });
+
+  test("a registered bundled driver is used instead of any import", async () => {
+    // The -mongo variant hands the statically bundled driver over through
+    // setBundledMongo; this fake proves the seam wins over resolution and
+    // that the shell-sugar proxy works on any driver-shaped object.
+    const calls: string[] = [];
+    class FakeClient {
+      constructor(uri: string) {
+        calls.push(`ctor:${uri}`);
+      }
+      async connect() {
+        calls.push("connect");
+      }
+      unref() {
+        calls.push("unref");
+      }
+      db(name?: string) {
+        calls.push(`db:${name ?? ""}`);
+        return {
+          collection(name: string) {
+            calls.push(`coll:${name}`);
+            return {
+              find: (q: unknown) => ({ toArray: async () => [{ ok: 1, q }] }),
+            };
+          },
+        };
+      }
+    }
+    setBundledMongo({
+      MongoClient: FakeClient as unknown as new (uri: string) => never,
+    });
+    try {
+      setEnv("mongodb://fake/ignored", "seamdb");
+      const out = await run(`mongo "db.widgets.find({a: 1})"`);
+      expect(out).toEqual([{ ok: 1, q: { a: 1 } }]);
+      expect(calls).toContain("ctor:mongodb://fake/ignored");
+      expect(calls).toContain("db:seamdb");
+      expect(calls).toContain("coll:widgets");
+      expect(calls).toContain("unref");
+    } finally {
+      setBundledMongo(null);
+      __resetMongoClientForTests();
+    }
+  });
+
+  test("the clean-binary redirect names the mongo variant package", () => {
+    // The compiled clean binary cannot load the driver at runtime (measured);
+    // its mongo error must point at the installable variant. The $bunfs branch
+    // itself only fires inside a compiled binary — the release workflow
+    // verifies that end to end; here the contract is the message itself.
+    expect(MONGO_VARIANT_HINT).toContain("@lariocpt/crust-mongo");
+    expect(MONGO_VARIANT_HINT).toContain("crust-mongo");
   });
 });
 

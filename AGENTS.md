@@ -51,15 +51,29 @@ every example. If you change the grammar, those go red before users do.
 
 - **The shipped artifact is a compiled Bun binary** (`bun build --compile`),
   and the crust bundle itself stays zero-dependency. USER files (fixtures,
-  `init.ts`) are dynamically imported and do standard node_modules
-  resolution walking UP from their own location — third-party npm works
-  under the binary (measured 2026-10-18, G13 probes P1b/P2/P4, Bun v1.4.3:
-  a fixture's `import leftPad from "left-pad"` loads and `lp hi` → `000hi`,
-  exit 0; a missing package fails loud with `import failed: Cannot find
-  package '…' imported from <file>`). So install third-party deps next to
-  the user file (its project dir, or `~/.config/crust/` for init.ts) —
-  keep the bundle clean, and never document a resolution behavior you
+  `init.ts`) are dynamically imported from disk, so their own imports resolve
+  from their own location — but **a compiled binary cannot resolve bare npm
+  specifiers from files outside the bundle** (measured 2026-11-12, Bun
+  1.3.14/1.4.3/1.4.4-canary: a project-root shim doing `export * from
+  "mongodb"` fails on the driver's own `bson` dep; runtime `NODE_PATH` fails;
+  absolute-path imports fail the same way). The older G13 note here claimed
+  third-party npm worked under the binary via a fixture's `import leftPad
+  from "left-pad"` — that does not reproduce for packages with dependencies
+  (a dep-free package may still resolve; do not rely on it). Consequence:
+  anything that needs third-party npm at runtime must be **statically bundled
+  at build time** — which is exactly what the mongo variant is. Keep the
+  clean bundle clean, and never document a resolution behavior you
   haven't run through the binary.
+- **Two binaries ship per platform**: the clean entry is `src/index.ts`; the
+  mongo variant is `src/index-mongo.ts`, which statically imports the driver
+  (a devDependency, ~+4 MB) and hands it to the builtin via `setBundledMongo`
+  before the CLI runs. The clean binary must never reference `mongodb` —
+  tsc/type-level only. The release workflow builds both and verifies the
+  variant contract through real compiled binaries (clean → redirect message,
+  mongo → real driver); that `/$bunfs` code path exists ONLY in a binary —
+  `import.meta.url` lies in compiled mode (reports the source path), the
+  reliable compiled-detection signal is `process.argv[1]` containing
+  `$bunfs`.
 - Keep the fixture runner semantics backward compatible: 0-arg functions
   resolve, 1-arg functions in `input` receive the setup context, 1+-arg
   functions in `output` are matchers `(actual, ctx)`, async matchers are

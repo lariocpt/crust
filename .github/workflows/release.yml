@@ -101,6 +101,13 @@ jobs:
             # so the platform suffix is stripped at install time, not here.
             bun build --compile --minify --bytecode --target="bun-$target" \
               --outfile "out/crust-$target" src/index.ts
+            # The mongo variant: same source tree, driver statically bundled (build-time
+            # resolution is the ONLY path that works in a compiled binary — measured
+            # 2026-11-12). mongodb is a devDependency; the clean bundle above never
+            # references it, so the clean binary stays zero-dependency.
+            echo "==> crust-$target-mongo"
+            bun build --compile --minify --bytecode --target="bun-$target" \
+              --outfile "out/crust-$target-mongo" src/index-mongo.ts
           done
           chmod 0755 out/crust-*
           ls -lh out/
@@ -120,6 +127,23 @@ jobs:
           echo "reported commit: $gotCommit"
           [ "$gotCommit" = "${{ steps.stamp.outputs.commit }}" ] \
             || { echo "FAIL: binary reports commit '$gotCommit', expected '${{ steps.stamp.outputs.commit }}'"; exit 1; }
+
+      # The variant contract, end to end through real compiled binaries — this is the
+      # ONLY place the /$bunfs/ code path can be exercised (source mode never hits it):
+      # the clean binary must redirect to the mongo package, the mongo binary must
+      # carry the driver (so it fails on the connection, never on the redirect).
+      - name: Verify mongo variants
+        run: |
+          set -euo pipefail
+          export MONGODB_URI="mongodb://127.0.0.1:1/x" CRUST_CONFIG=/dev/null
+          clean=$(./out/crust-linux-x64 -c 'mongo "db.x.find({})"' 2>&1 || true)
+          echo "$clean" | grep -q "@lariocpt/crust-mongo" \
+            || { echo "FAIL: clean binary did not redirect to the mongo variant: $clean"; exit 1; }
+          bundled=$(./out/crust-linux-x64-mongo -c 'mongo "db.x.find({})"' 2>&1 || true)
+          echo "$bundled" | grep -q "@lariocpt/crust-mongo" \
+            && { echo "FAIL: mongo binary is missing its bundled driver: $bundled"; exit 1; }
+          ./out/crust-linux-x64-mongo --version | grep -q "crust ${{ steps.version.outputs.version }}" \
+            || { echo "FAIL: mongo binary reports an unstamped version"; exit 1; }
 
       # sha256sum's own format, so `sha256sum -c SHA256SUMS` works for anyone who downloads
       # the whole set — and both installers parse the same file.
@@ -198,6 +222,31 @@ jobs:
           ' npm/package.json > npmstage/package.json
           cat npmstage/package.json
 
+      # The mongo launcher is the SAME launcher code with two manifest differences:
+      # the package name, and crust.variant=mongo, which makes it resolve the
+      # crust-<platform>-<arch>-mongo asset. One bin name (`crust`) in both packages:
+      # they are alternatives, not additions — installing both globally conflicts by design.
+      - name: Stage mongo package
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          rm -rf npmstage-mongo && cp -r npm npmstage-mongo
+          cp -r skills npmstage-mongo/skills
+          jq --arg v "$VERSION" --arg repo "${{ github.repository }}" '
+            .name = "@lariocpt/crust-mongo"
+            | .version = $v
+            | .description = "crust with the MongoDB driver bundled — the mongo variant of the crust binary launcher"
+            | .crust.source = "github"
+            | .crust.repo = $repo
+            | .crust.variant = "mongo"
+            | .keywords = ((.keywords // []) + ["mongo", "mongodb"])
+            | .os = ["linux", "darwin"]
+            | .cpu = ["x64", "arm64"]
+            | del(.publishConfig)
+          ' npm/package.json > npmstage-mongo/package.json
+          cat npmstage-mongo/package.json
+
       - name: Publish to npmjs.org
         working-directory: npmstage
         env:
@@ -217,6 +266,19 @@ jobs:
             npm publish --access public
           fi
 
+      - name: Publish mongo package to npmjs.org
+        working-directory: npmstage-mongo
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION="$(node -p "require('./package.json').version")"
+          if npm view "@lariocpt/crust-mongo@$VERSION" version --registry https://registry.npmjs.org >/dev/null 2>&1; then
+            echo "@lariocpt/crust-mongo@$VERSION is already on npmjs.org — skipping"
+          else
+            npm publish --access public
+          fi
+
       # The repo's Packages tab only mirrors npm.pkg.github.com — the npmjs
       # publish above never shows up there. Same staged package, second
       # registry: the launcher already points at the GitHub Releases plane
@@ -225,6 +287,14 @@ jobs:
       # the fresh runner keeps only for this job.
       - name: Publish to GitHub Packages
         working-directory: npmstage
+        env:
+          NODE_AUTH_TOKEN: ${{ github.token }}
+        run: |
+          npm config set //npm.pkg.github.com/:_authToken "$NODE_AUTH_TOKEN"
+          npm publish --registry https://npm.pkg.github.com
+
+      - name: Publish mongo package to GitHub Packages
+        working-directory: npmstage-mongo
         env:
           NODE_AUTH_TOKEN: ${{ github.token }}
         run: |
