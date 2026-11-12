@@ -23,6 +23,30 @@ Then register it with the agent host — e.g. OpenCode / Claude Code style:
 { "mcpServers": { "crust": { "command": "crust", "args": ["mcp"] } } }
 ```
 
+VS Code uses a DIFFERENT schema in `.vscode/mcp.json` (workspace) or the
+user-level MCP settings — the `mcpServers` shape above silently fails there
+("command is required" or the server just never appears):
+
+```json
+{
+  "servers": {
+    "crust": { "type": "stdio", "command": "/home/user/.local/bin/crust", "args": ["mcp"] }
+  }
+}
+```
+
+Two traps, both verified: (1) `"command"` must be the ABSOLUTE path — a
+GUI-launched VS Code does not inherit the shell's PATH, so bare `"crust"`
+dies `spawn crust ENOENT` if the launcher lives outside the default
+lookup dirs; (2) VS Code's MCP support ships inside the Chat/Copilot Chat
+extension — Code - OSS / VSCodium has no MCP host without an extension
+(Cline, Roo Code or Continue each carry their own MCP settings).
+
+Grammar lands automatically: the one-shot tools pass line/fixture text to a
+fresh crust child untouched, so anything the lexer accepts (`--redirect`,
+new builtins) is an MCP tool call the moment the installed binary has it —
+no MCP-side change per feature.
+
 Verify by hand — the transport is just lines on stdin:
 
 ```bash

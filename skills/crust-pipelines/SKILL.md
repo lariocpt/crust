@@ -25,6 +25,7 @@ whose stages are all ordinary commands is handed to `sh -c` untouched.
 | `GET :3000/path` | HTTP. First stage: one `Response`. Mid-pipeline: per-item timed `{status, ms, url}` |
 | `POST/PUT/PATCH/DELETE url` | per-item request; upstream item = body (objects auto-JSON) |
 | `GET url --timeout 2s` | per-request timeout on any http stage (`ms`/`s`/`m`); timed paths yield `{status: 0, timedOut: true}`, plain verbs fail the pipeline; unknown `--flags` are errors |
+| `GET url --redirect error\|manual\|follow` | 3xx handling (fetch's `redirect` init): `error` refuses a redirect — plain verbs fail the line, timed paths yield `{status: 0, redirectRefused: true}`; `manual` yields the 3xx so `expect 301` asserts it; `follow` is the default. Fixtures carry it as `input.redirect` |
 | `(x => x * 2)` | TypeScript lambda, per item, async ok — MAPS, never drops (falsy results are emitted as-is) |
 | `filter (l => l.ok)` | keeps items whose predicate is truthy; falsy (`0`, `""`, `null`…) drop; async ok; empty result passes |
 | `assert (r => r.ok)` | falsy FAILS the pipeline; empty upstream also fails |
