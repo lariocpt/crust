@@ -44,6 +44,13 @@ writes the same text report stdout shows; the file never changes the exit code.
 - Status-check placement: `expect N` when the check ends the line;
   `assert (r => r.status === N)` when more stages follow (expect only
   throws at drain).
+- Redirect control: `--redirect error|manual|follow` on any http line —
+  `error` refuses a 3xx (a moved endpoint cannot pass by landing elsewhere;
+  the line fails with `redirect refused (--redirect error)`), `manual`
+  yields the 3xx so `GET … --redirect manual | expect 301` asserts a
+  redirect exists, `follow` is the default. This is the pipe-side twin of a
+  fixture's `input.redirect` — when a pipe cannot express a case, the
+  fixture can, and it has always had this control.
 - Exit codes: 0 all pass · 1 any fail · 2 no files/bad args.
 
 ## .crust.ts fixtures (test-fixture)
@@ -73,6 +80,13 @@ Run: `test-fixture 'tests/*.crust.ts' -j8 [-n N] [-t ms] [-b] [-o report.xml]`.
 `-o`'s extension picks the format — `.xml` is JUnit for CI: testcase per
 run (stress iterations individually), percentiles in `<system-out>`; `.json` is
 the raw report, `.md` markdown, anything else the text report.
+
+`input.redirect: "error" | "manual" | "follow"` reaches fetch like any other
+`RequestInit` field — the fixture-side twin of the http stage's `--redirect`
+flag. `"error"` fails the fixture with the field named when the upstream
+answers 3xx (a moved endpoint cannot pass by landing elsewhere); `"manual"`
+records the 3xx so `output: { status: 301 }` asserts a redirect exists. Any
+other value is a loud fixture error, not a fetch mystery.
 
 `output.schema`: give it an inline JSON Schema and the response body must
 conform — violations fail with per-field pointer paths. Inline means

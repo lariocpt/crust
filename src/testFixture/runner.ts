@@ -1,5 +1,6 @@
 import { diffAsync, expandTarget as expandTargetShared } from "../fixtures";
 import { validateSchema } from "../mockServer/validateRequest";
+import { isRedirectError } from "../transforms";
 import type { Fixture, FixtureResult, RunOpts, RunReport, StressBucket } from "./types";
 
 export async function runFixtures(opts: RunOpts): Promise<RunReport> {
@@ -382,6 +383,13 @@ function nearestKey(key: string): string {
   return near ? ` — did you mean "${near[0]}"?` : "";
 }
 
+// fetch's redirect modes, spelled the same way in every place crust exposes
+// the option (http stage --redirect, fixture input.redirect).
+const REDIRECT_MODES = ["follow", "error", "manual"] as const;
+function isRedirectMode(v: unknown): v is (typeof REDIRECT_MODES)[number] {
+  return typeof v === "string" && (REDIRECT_MODES as readonly string[]).includes(v);
+}
+
 async function performRequest(
   input: Record<string, unknown>,
   timeoutMs?: number,
@@ -398,6 +406,14 @@ async function performRequest(
     (init as Record<string, unknown>)[k] = v;
   }
   if (init.method === undefined) init.method = "GET";
+  // input.copy-into-init means a fixture can set `redirect` like any other
+  // RequestInit field — but a typo there used to reach fetch as-is, where the
+  // complaint ("redirect must be…") named neither the fixture nor the field.
+  if (init.redirect !== undefined && !isRedirectMode(init.redirect)) {
+    throw new Error(
+      `fixture input.redirect: expected follow, error or manual — got ${JSON.stringify(init.redirect)}`,
+    );
+  }
   // A fixture's own `signal` (copied above) wins; --timeout only fills the gap.
   let timeoutSignal: AbortSignal | undefined;
   if (timeoutMs != null && init.signal == null) {
@@ -416,6 +432,14 @@ async function performRequest(
     // name the deadline so the fixture error is actionable.
     if (timeoutSignal?.aborted) {
       throw new Error(`timed out after ${timeoutMs}ms`);
+    }
+    // Bun's raw message ("UnexpectedRedirect fetching …") is a stack trace
+    // with the URL; a fixture report is better with the field named.
+    if (init.redirect === "error" && isRedirectError(err)) {
+      throw new Error(
+        'redirect refused (input.redirect: "error") — the upstream answered with a 3xx; ' +
+          'use "manual" to inspect it, or "follow" to accept it',
+      );
     }
     throw err;
   }

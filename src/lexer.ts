@@ -382,12 +382,13 @@ function classifyStage(text: string): StageKind {
 
   const httpMatch = t.match(/^(GET|POST|PUT|PATCH|DELETE)\s+(.+)$/);
   if (httpMatch) {
-    // Tail is `<url> [-H "Key: value"]... [--timeout <dur>]` — split
-    // quote-aware so header values may contain spaces and colons.
+    // Tail is `<url> [-H "Key: value"]... [--timeout <dur>] [--redirect <mode>]`
+    // — split quote-aware so header values may contain spaces and colons.
     const parts = splitArgs(httpMatch[2]!);
     const url = parts[0] ?? "";
     const headers: string[] = [];
     let timeoutMs: number | undefined;
+    let redirect: "follow" | "error" | "manual" | undefined;
     for (let i = 1; i < parts.length; i++) {
       const p = parts[i]!;
       if (p === "-H") {
@@ -404,6 +405,15 @@ function classifyStage(text: string): StageKind {
         timeoutMs = parseDuration(raw); // throws on malformed values
         continue;
       }
+      if (p === "--redirect" || p.startsWith("--redirect=")) {
+        const raw = p.startsWith("--redirect=") ? p.slice("--redirect=".length) : parts[++i];
+        if (raw === undefined) throw new Error("http: --redirect requires follow, error or manual");
+        if (raw !== "follow" && raw !== "error" && raw !== "manual") {
+          throw new Error(`http: --redirect expects follow, error or manual — got "${raw}"`);
+        }
+        redirect = raw;
+        continue;
+      }
       // An http stage can't fall back to shell (the verb regex already
       // committed), so a typo'd flag must be loud, not silently dropped.
       //
@@ -412,7 +422,7 @@ function classifyStage(text: string): StageKind {
       // untimed and passed), and a curl-muscle-memory `-h "authorization: …"`
       // dropped the auth header, turning into a 401 blamed on the server.
       if (p.startsWith("-")) {
-        throw new Error(`http: unknown flag "${p}" — supported: -H, --timeout`);
+        throw new Error(`http: unknown flag "${p}" — supported: -H, --timeout, --redirect`);
       }
     }
     return {
@@ -421,6 +431,7 @@ function classifyStage(text: string): StageKind {
       url,
       headers,
       timeoutMs,
+      redirect,
     };
   }
 

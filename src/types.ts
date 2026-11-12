@@ -15,6 +15,8 @@ export type StageKind =
       headers: string[];
       /** per-request timeout from --timeout <dur>; unset = no timeout */
       timeoutMs?: number;
+      /** from --redirect <mode>; unset = fetch default (follow) */
+      redirect?: "follow" | "error" | "manual";
     }
   | { kind: "function"; name: string; args: string[] }
   | { kind: "time"; label: string }

@@ -289,7 +289,7 @@ The shell parser classifies each `|`-separated stage by looking at its first tok
 | Matches `capture NAME [(fn)]` | Capture stage — writes `process.env.NAME` for later lines |
 | Matches `expect NNN` or `expect Nxx` | Expect stage — status equality or class (`2xx`…`5xx`) |
 | Matches `stats [--every N] [--out f.json]` | Stats stage (unknown flags fall through to shell) |
-| Starts with `GET` / `POST` / `PUT` / `PATCH` / `DELETE` | HTTP stage (`-H` headers, `--timeout <dur>`, `$VAR` expansion, `:port` shorthand; unknown `--flags` are errors) |
+| Starts with `GET` / `POST` / `PUT` / `PATCH` / `DELETE` | HTTP stage (`-H` headers, `--timeout <dur>`, `--redirect <mode>`, `$VAR` expansion, `:port` shorthand; unknown `--flags` are errors) |
 | First token is a builtin name | Builtin (no piping; in-process dispatch) |
 | First token is a `crust.fn`-registered function | Registered function (per-item transform) |
 | Anything else | Shell stage — handed to `sh -c "<text>"` |
@@ -361,6 +361,7 @@ tail app.log                      # last 10 lines, then done — Pipeline<string
 tail -n 100 app.log               # custom line count
 tail -F app.log                   # follow mode: stream new lines forever
 GET https://api.example.com/  # → Pipeline<Response> (single item)
+GET :3000/health --redirect manual   # 3xx yielded as-is — expect 301 can assert it
 GET :3000/health                  # localhost shorthand
 GET localhost:3000/health         # bare host[:port] — http:// is assumed
 GET example.com/status            # …as is a bare hostname
@@ -368,7 +369,8 @@ DELETE :3000/things/42            # bodyless verbs open a pipeline too
 # POST/PUT/PATCH cannot: they have nothing to send until an item arrives, so
 # they need one piped in — `{"name": "Court"} | POST :3000/things`.
 # Unknown flags are an ERROR, single-dash included: `-t 2s` is not `--timeout 2s`,
-# and a curl-style lowercase `-h` is not `-H`. Only -H and --timeout are accepted.
+# and a curl-style lowercase `-h` is not `-H`. Only -H, --timeout and
+# --redirect are accepted.
 read fixtures/*.json              # whole-file contents, ONE item per file
 lines app.log                     # one item per LINE — what you usually want
 lines **/*.log                    # across every match, sorted
@@ -627,6 +629,19 @@ caller-supplied `signal` always wins. This is per-REQUEST, unlike
 `test-fixture`/`test-pipes` `--timeout` (integer ms, per fixture/line).
 Typo'd `--flags` on http stages are loud errors (they used to be silently
 ignored).
+
+**`--redirect <mode>`** controls 3xx handling the way fetch's `redirect`
+init does — `follow` (the default, unchanged behaviour), `error` (refuse any
+3xx: on plain verb stages and source `GET` the line fails with
+`<VERB> <url>: redirect refused (--redirect error)`, so a moved endpoint can
+never pass a suite by landing somewhere else; on timed stages it yields a
+`{status: 0, redirectRefused: true, …}` record, so a load run reports it
+instead of a bare connection-shaped 0), and `manual` (the 3xx `Response` is
+yielded as-is, so `expect 301` asserts a redirect exists). This is the same
+control a native fixture gets from `input.redirect` — a `.pipes` suite can
+now refuse redirects exactly the way a `.crust.ts` fixture always could.
+Unknown modes (`--redirect bogus`) are parse errors, not values passed to
+fetch.
 
 HTTP transforms auto-set `content-type: application/json` for object items. String items are sent as text. `Buffer`/`Uint8Array` go raw.
 
@@ -968,6 +983,11 @@ The pieces:
   `{ echo a; echo b; } | cat` and `[ -f f ] && echo ok` are shell stages, not
   literal attempts.
 - **`-H "Key: value"`** — repeatable header flags on every http verb stage.
+- **`--redirect follow|error|manual`** — 3xx handling on every http verb
+  stage (fetch's `redirect` init). `error` refuses a redirect so a moved
+  endpoint can't pass by landing elsewhere; `manual` yields the 3xx so
+  `expect 301` can assert it. Fixtures carry the same option as
+  `input.redirect`.
 - **`read <path|glob>`** — whole-file contents, one item per matched file
   (sorted; zero matches errors). Gotcha: this shadows POSIX `read <var>` at
   the prompt.
@@ -1302,6 +1322,12 @@ test-fixture --target 'fixtures/**/*.crust.ts' --out report.xml   # JUnit for CI
 
 - `--timeout <ms>` — fail any fixture whose request runs longer. A fixture's
   own `input.signal` wins; `--timeout` only fills the gap.
+- **`input.redirect`** — the fixture's own `redirect` field (`follow`,
+  `error`, `manual`) reaches fetch like any other `RequestInit` field, and is
+  the fixture-side twin of the http stage's `--redirect`. `error` fails the
+  fixture with the field named (a moved endpoint cannot pass by landing
+  elsewhere); `manual` records the 3xx so `output.status: 301` asserts it.
+  Any other value is a loud fixture error, not a fetch mystery.
 - `--bail` — stop **starting** new fixtures after the first fail/error;
   in-flight fixtures finish and are reported.
 
@@ -2157,6 +2183,26 @@ Register it with the host (OpenCode / Claude Code style config):
 # { "mcpServers": { "crust": { "command": "crust", "args": ["mcp"] } } }
 ```
 
+VS Code uses a different schema (`.vscode/mcp.json` per workspace, or the
+user-level MCP settings) — the `mcpServers` shape above silently fails there.
+The VS Code form, and its two verified traps:
+
+```bash
+# { "servers": { "crust": { "type": "stdio", "command": "/ABS/PATH/to/crust", "args": ["mcp"] } } }
+```
+
+1. `"command"` must be an **absolute path** — a GUI-launched VS Code does not
+   inherit the shell's `PATH`, so bare `"crust"` dies `spawn crust ENOENT`
+   when the launcher lives outside the default lookup dirs.
+2. VS Code's MCP support ships inside the Chat/Copilot Chat extension —
+   Code - OSS / VSCodium has no MCP host without an extension (Cline,
+   Roo Code or Continue each carry their own MCP settings).
+
+Grammar lands automatically: the one-shot tools pass line/fixture text to a
+fresh crust child untouched, so anything the lexer accepts (`--redirect`,
+new builtins) is an MCP tool call the moment the installed binary has it —
+no MCP-side change per feature.
+
 Verify by hand — the transport is just lines on stdin, so `printf | crust mcp`
 is a real smoke test (initialize, then `tools/list`):
 
@@ -2573,10 +2619,12 @@ Honest about what doesn't work yet:
   (`date +%s | capture TS`, then `GET :3000/?t=$TS`) — crust stages
   expand `$VAR` from the session env, so the value has to live *in* a
   variable, not in the line.
-- **No redirects on crust stages.** `<` / `>` belong to the shell stage, whose
-  text goes to `sh` as-is; anywhere else the line is refused — including when the
-  redirect is the very thing that hid the stage from the lexer (`range(1,3) > f`).
-  Save with `… | cat > f`, feed in from `lines <path>` / `read <path>`.
+- **No file redirects on crust stages.** `<` / `>` belong to the shell stage,
+  whose text goes to `sh` as-is; anywhere else the line is refused — including
+  when the redirect is the very thing that hid the stage from the lexer
+  (`range(1,3) > f`). Save with `… | cat > f`, feed in from `lines <path>` /
+  `read <path>`. (Not to be confused with the http stage's `--redirect` flag,
+  which controls 3xx handling and touches no files.)
 - **No syntax highlighting in the editor — a costed decision, not an oversight.**
   Measured 2026-10-29: a full `tokenize` + `classify` pass over a 2000-character
   line costs **0.1 ms**, and ANSI colour bytes do not move the cursor, so neither

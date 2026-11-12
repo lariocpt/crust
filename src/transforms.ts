@@ -73,6 +73,30 @@ export class HttpTimeoutError extends Error {
   }
 }
 
+// Bun names a fetch that refused to follow a redirect (redirect: "error")
+// `TypeError: UnexpectedRedirect fetching "…"`; Node calls the same situation
+// a ResponseRedirectError ("Redirect was stopped"). Both arrive as TypeError,
+// so the check is name + a stable message fragment — and callers only apply
+// it when their own init asked for "error", so a caller-supplied signal abort
+// can never be relabeled as a redirect refusal.
+export function isRedirectError(err: unknown): boolean {
+  return (
+    err instanceof TypeError &&
+    /UnexpectedRedirect|Redirect was stopped/.test((err as Error).message)
+  );
+}
+
+/** Thrown only when --redirect error refused a 3xx response. */
+export class HttpRedirectError extends Error {
+  constructor(method: string, url: string) {
+    super(
+      `${method} ${url}: redirect refused (--redirect error) — the upstream answered with a 3xx; ` +
+        `use --redirect manual to inspect it, or drop the flag to follow it`,
+    );
+    this.name = "HttpRedirectError";
+  }
+}
+
 // A Response can outlive its fetch: the --timeout signal keeps governing the
 // body stream, so a budget that fires while a DOWNSTREAM stage reads the body
 // would surface as a bare "The operation timed out." with no verb/url. Patch
@@ -143,6 +167,9 @@ async function httpRequest(
   } catch (err) {
     if (minted && isTimeoutError(err)) {
       throw new HttpTimeoutError(method, url, timeoutMs!);
+    }
+    if (init.redirect === "error" && isRedirectError(err)) {
+      throw new HttpRedirectError(method, url);
     }
     // Bun's message ("Unable to connect. Is the computer able to access the
     // url?") names nothing, so a failing pipeline gave no clue WHICH request
@@ -358,6 +385,8 @@ export interface TimedHit {
   url: string;
   /** present (true) only when the request hit its --timeout budget */
   timedOut?: true;
+  /** present (true) only when a --redirect error refused a 3xx */
+  redirectRefused?: true;
 }
 
 // Per-item GET against a fixed URL: the incoming item is only a trigger.
@@ -386,6 +415,9 @@ export function timedGet(
       // Distinguish a MINTED timeout from a refusal or a caller abort —
       // all are status 0 records, but only the budget firing is a timeout.
       if (minted && isTimeoutError(err)) hit.timedOut = true;
+      // Same for a redirect refusal: a status 0 with no marker would read as
+      // a connection problem, not as "the endpoint moved".
+      if (init.redirect === "error" && isRedirectError(err)) hit.redirectRefused = true;
       return hit;
     }
   };
@@ -413,6 +445,7 @@ export function timedHttpItem(
       // httpRequest throws HttpTimeoutError ONLY for its own minted budget —
       // typed check, not a message regex (URLs can contain anything).
       if (err instanceof HttpTimeoutError) hit.timedOut = true;
+      if (err instanceof HttpRedirectError) hit.redirectRefused = true;
       return hit;
     }
   };
