@@ -686,8 +686,10 @@ GET :3000/?t=$TS
   `examples/capture.crust` is this section's substitution pattern as a
   runnable file.
 - `stats` — consumes the stream and yields one summary: `count`, `wallMs`,
-  `rps`, a status histogram, and real `p50/p95/p99/meanMs` latency
-  percentiles from the timed-request records.
+  `rps`, a status histogram, real `p50/p95/p99/meanMs` latency percentiles
+  from the timed-request records, and the failure tallies `timedOut` and
+  `redirectRefused` — always present (0 on a clean run), so a gate can read
+  `s.redirectRefused === 0` without guessing whether the key exists.
 - `stats --every N` — additionally emits a **per-window delta summary** every
   N seconds (`{window: 1, …}`, `{window: 2, …}`) and finishes with one
   cumulative summary tagged `{final: true}`. Windows flush on the item path —
@@ -730,6 +732,7 @@ that used to exit 0:
 | A stage's lambda **threw** — including under `parallel N` | `1` |
 | `assert` was handed an **empty** `stats` summary (0 items measured) | `1` |
 | An http stage got an unknown flag, including single-dash (`-t`, `-h`) | `1` |
+| A timed request failed (`--timeout` budget, `--redirect error` refusal) | `0` — it is a **record**; gate it (below) |
 | A spawned shell stage exited nonzero (`\| tee bad/path`, `\| false`) | that code |
 | A fixture's `output` names an unknown key (`data` misspelled) | `1` |
 | Multi-line `-c`: any line fails | that line's code — fail-fast |
@@ -739,6 +742,24 @@ Before v0.2 a lambda that threw under `parallel` was silently dropped — an
 entire load run whose handler always threw reported success — and a failing
 shell stage mid-pipeline was discarded outright. A child that exits early
 after closing the pipe (`\| head -3`) is still exit 0, as it should be.
+
+**Timed failures are records, not exits.** In load mode a request that hits
+its `--timeout` budget or refuses a redirect with `--redirect error` does not
+kill the run — that is the load-mode contract (network errors behave the same
+way): the request yields a `{status: 0, timedOut: true}` /
+`{status: 0, redirectRefused: true}` record and `stats` tallies them into the
+summary. **Exit 0 alone is never request success in load mode** — gate the
+tallies explicitly, either per item or on the summary:
+
+```bash
+range(0, 99) | parallel 10 | GET :3000/old --redirect error | expect 200
+range(0, 99) | parallel 10 | GET :3000/old --redirect error | stats \
+  | assert (s => s.redirectRefused === 0) | assert (s => s.timedOut === 0)
+```
+
+The `expect 200` fails because the refusal record's status is 0; the summary
+asserts fail on the named tally, so a moved or hanging endpoint cannot pass a
+suite by being counted as a silent zero.
 
 **A gate that measured nothing is not a pass.** `stats` over an empty stream
 emits `{"count": 0, …, "empty": true}` and `assert` refuses it, because
