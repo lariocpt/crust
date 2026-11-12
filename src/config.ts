@@ -98,12 +98,25 @@ export async function loadConfig(ctx: Context, configPath?: string): Promise<voi
   // overwrite (and therefore win over) auto-discovered entries.
   await discoverGlobals(ctx);
 
+  // A MISSING config is silence (the file is optional). A config that EXISTS
+  // but fails is a loud warning, never a shrug: the swallowed
+  // ERR_MODULE_NOT_FOUND used to hide real failures — under a compiled binary,
+  // an init.ts that imports a package with its own dependencies fails
+  // resolution (measured 2026-11-12), and the session carried on as if the
+  // config were empty, every crust.fn silently unregistered. The distinction
+  // is WHO the loader could not find: "Cannot find module '<path>'" names the
+  // config itself (quoted; also covers /dev/null, which exists but is not a
+  // module), while a dependency failure reads "Cannot find package 'x'
+  // imported from <path>" — the config is the importer there, unquoted.
   try {
     await import(path);
   } catch (err) {
     const code = (err as { code?: string }).code;
-    if (code !== "ERR_MODULE_NOT_FOUND" && code !== "ENOENT") {
-      process.stderr.write(`crust: failed to load ${path}: ${(err as Error).message}\n`);
+    const msg = (err as Error).message ?? "";
+    const missingConfig =
+      (code === "ERR_MODULE_NOT_FOUND" || code === "ENOENT") && msg.includes(`'${path}'`);
+    if (!missingConfig) {
+      process.stderr.write(`crust: failed to load ${path}: ${msg}\n`);
     }
   }
 }

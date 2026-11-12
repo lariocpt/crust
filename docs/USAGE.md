@@ -1371,7 +1371,7 @@ test-fixture --target 'fixtures/**/*.crust.ts' --out report.xml   # JUnit for CI
 > shreds every other fixture still running. If you need a full reset, do it
 > once outside the runner, not per-fixture.
 
-**Module resolution:** files the runner loads — `.crust.ts` fixtures, `.setup.ts` modules, npm packages auto-dispatched as stages — resolve bare specifiers the ordinary Bun way, walking `node_modules` from the file's own location, **including under the AOT-compiled binary**. Measured 2026-10-30 with the release binary: a `x.setup.ts` doing `import shout from "npkg"` set `$GREETING` and the `test-pipes` line passed. What the binary does not carry is a dependency set of its own — crust ships zero runtime dependencies — so anything a fixture imports has to be installed where the fixture lives. Bun builtins (`Bun.SQL`, `Bun.file`) are still the lighter choice for a helper (no install, no version drift between fixture and runner), but that is a preference, not a resolution limit.
+**Module resolution:** files the runner loads — `.crust.ts` fixtures, `.setup.ts` modules, npm packages auto-dispatched as stages — resolve bare specifiers the ordinary Bun way, walking `node_modules` from the file's own location, **including under the AOT-compiled binary** — for packages that carry **no dependencies of their own**. Measured 2026-10-30 with the release binary: a `x.setup.ts` doing `import shout from "npkg"` set `$GREETING` and the `test-pipes` line passed. Re-measured 2026-11-12 with a package that has its own dependencies (`mongodb`, importing `bson`): under the compiled binary that import fails with `Cannot find package '…'` even when the package sits in `node_modules` beside the file — the binary's resolver cannot follow the dependency graph of an external package. So under the binary: dep-free npm imports work, packages with dependencies do not (they work when running crust from source). What the binary does not carry is a dependency set of its own — crust ships zero runtime dependencies — so anything a fixture imports has to be installed where the fixture lives. Bun builtins (`Bun.SQL`, `Bun.file`) are still the lighter choice for a helper (no install, no version drift between fixture and runner), and under the binary they are often the only choice.
 
 Example fixture:
 
@@ -2527,6 +2527,8 @@ The conventions:
 Cached at `~/.cache/crust/globals.json`; invalidated automatically when the global `package.json` changes.
 
 **2. `crust.fn(name, handler)` in `init.ts`** — for packages whose API doesn't fit the calling convention (anything with method-dispatch like chalk, anything that needs setup), and for ad-hoc helpers:
+
+> **Under the released binary, an `init.ts` import only resolves for packages with no dependencies of their own** (measured 2026-11-12: dep-free `left-pad` loads; `mongodb`, which imports `bson`, fails with `Cannot find package`). From source, any installed package works. A config that fails to load is now a loud `crust: failed to load …` warning — it used to be silent. Install the package next to the `init.ts` (`cd ~/.config/crust && bun add …`); for packages with dependencies, run crust from source or use the variant that bundles what you need (e.g. `@lariocpt/crust-mongo`).
 
 ```ts
 import chalk from "chalk";
