@@ -67,7 +67,7 @@ crust --build-info
 {
   "version": "0.3.1",
   "gitCommit": "9f2c1b8…",
-  "bun": "1.3.14",
+  "bun": "1.4.3",
   "platform": "linux-x64"
 }
 ```
