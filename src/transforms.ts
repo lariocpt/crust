@@ -600,6 +600,10 @@ interface StatsAcc {
   maxMs: number;
   status: Record<string, number>;
   count: number;
+  /** records whose request hit its --timeout budget (TimedHit.timedOut) */
+  timedOut: number;
+  /** records whose request refused a 3xx (TimedHit.redirectRefused) */
+  redirectRefused: number;
 }
 
 function newAcc(): StatsAcc {
@@ -610,6 +614,8 @@ function newAcc(): StatsAcc {
     maxMs: 0,
     status: {},
     count: 0,
+    timedOut: 0,
+    redirectRefused: 0,
   };
 }
 
@@ -640,6 +646,11 @@ function summarize(acc: StatsAcc, wallMs: number): Record<string, unknown> {
     wallMs: Math.round(wallMs),
     rps: wallMs > 0 ? Math.round((acc.count / wallMs) * 1000) : 0,
     status: acc.status,
+    // Failure tallies, always present (0 on a clean run) so a gate can read
+    // `s.redirectRefused === 0` without guessing whether the key exists, and
+    // a refusal never hides unmentioned inside `status: {"0": N}`.
+    timedOut: acc.timedOut,
+    redirectRefused: acc.redirectRefused,
     p50: Number(pct(50).toFixed(1)),
     p95: Number(pct(95).toFixed(1)),
     p99: Number(pct(99).toFixed(1)),
@@ -657,7 +668,10 @@ function summarize(acc: StatsAcc, wallMs: number): Record<string, unknown> {
 export function statsStage(
   everySec?: number,
   out?: string,
-): PipelineStage<{ status: number; ms?: number }, unknown> {
+): PipelineStage<
+  { status: number; ms?: number; timedOut?: true; redirectRefused?: true },
+  unknown
+> {
   if (out !== undefined && !out.endsWith(".json")) {
     throw new Error(`stats --out: only .json is supported — got ${out}`);
   }
@@ -703,6 +717,14 @@ export function statsStage(
           win.count++;
           total.status[st] = (total.status[st] ?? 0) + 1;
           win.status[st] = (win.status[st] ?? 0) + 1;
+          if (item.timedOut) {
+            total.timedOut++;
+            win.timedOut++;
+          }
+          if (item.redirectRefused) {
+            total.redirectRefused++;
+            win.redirectRefused++;
+          }
           if (typeof item.ms === "number") {
             observe(total, item.ms);
             observe(win, item.ms);

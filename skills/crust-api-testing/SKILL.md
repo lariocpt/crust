@@ -50,7 +50,11 @@ writes the same text report stdout shows; the file never changes the exit code.
   yields the 3xx so `GET … --redirect manual | expect 301` asserts a
   redirect exists, `follow` is the default. This is the pipe-side twin of a
   fixture's `input.redirect` — when a pipe cannot express a case, the
-  fixture can, and it has always had this control.
+  fixture can, and it has always had this control. In per-item/load position
+  a refusal is a `{status: 0, redirectRefused: true}` RECORD and the line
+  exits 0 — gate with `expect 200` or `stats | assert (s =>
+  s.redirectRefused === 0)`; exit 0 alone is never request success in load
+  mode.
 - Exit codes: 0 all pass · 1 any fail · 2 no files/bad args.
 
 ## .crust.ts fixtures (test-fixture)

@@ -33,6 +33,12 @@ load 10s 20/s | (t => ({name: "user" + t.n})) | parallel 8 | POST :3000/users | 
   every request was refused prints `{"status":{"0":40}}` and still exits 0
   unless a gate is present — `expect 200` over a dead port exits 1. `stats`
   reports, it does not gate.
+- The summary carries failure tallies `timedOut` and `redirectRefused`
+  (always present, 0 on a clean run): a `--timeout` budget hit or a
+  `--redirect error` refusal is a `{status: 0, timedOut/redirectRefused:
+  true}` RECORD, not a failure exit. Gate them — `expect 200` (status 0
+  fails it) or `stats | assert (s => s.redirectRefused === 0)`; exit 0
+  alone is never request success in load mode.
 - Rate (`load`) and concurrency (`parallel N`) are independent knobs.
   Little's law sizes the pool: `N ≥ rate × p99-in-seconds`.
 - Durations `ms|s|m`; rates `N/s` or `N/m`, decimals allowed.

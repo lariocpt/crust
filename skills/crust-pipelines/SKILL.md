@@ -31,7 +31,7 @@ whose stages are all ordinary commands is handed to `sh -c` untouched.
 | `assert (r => r.ok)` | falsy FAILS the pipeline; empty upstream also fails |
 | `capture NAME (r => r.id)` | write value to `process.env.NAME` for later lines |
 | `expect 201` / `expect 2xx` | status assertion, counts mismatches, fails at drain |
-| `stats [--every N] [--out f.json]` | summary: count/rps/status histogram/p50/p95/p99 |
+| `stats [--every N] [--out f.json]` | summary: count/rps/status histogram/p50/p95/p99 + failure tallies `timedOut`/`redirectRefused` (records, not exits — gate them) |
 | `parallel N` | modifier: fan-out for the NEXT stage (http, lambda, or fn — anything else errors) |
 | `sql "SELECT …" ?-params` | registered fn — `?` is the bind placeholder; rows stream one item each (needs `$DATABASE_URL`) |
 | `range(1,1) \| sql "… WHERE id = ?"` | mid-pipeline, the upstream item BINDS as the first parameter when the line declares none (an explicit param wins); rows stream one item each in both positions |

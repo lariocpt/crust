@@ -49,17 +49,31 @@ let server: ReturnType<typeof Bun.serve>;
 let base: string;
 let dir: string;
 let cwd: string;
+// Odd requests redirect, even ones answer 200 — a mixed run in one stats
+// pass, so a tally bug that drops or double-counts cannot hide.
+let altCount = 0;
 
 beforeAll(async () => {
   server = Bun.serve({
     port: 0,
-    fetch(req) {
+    async fetch(req) {
       const url = new URL(req.url);
       if (url.pathname === "/moved") {
         return new Response("moved", { status: 301, headers: { location: "/landed" } });
       }
       if (url.pathname === "/landed") {
         return Response.json({ path: "/landed" });
+      }
+      if (url.pathname === "/slow") {
+        await new Promise((r) => setTimeout(r, 300));
+        return new Response("{}", { status: 200 });
+      }
+      if (url.pathname === "/alternating") {
+        altCount++;
+        if (altCount % 2 === 1) {
+          return new Response("moved", { status: 301, headers: { location: "/landed" } });
+        }
+        return Response.json({ n: altCount });
       }
       return new Response("{}", { status: 200 });
     },
@@ -220,6 +234,89 @@ describe("test-fixture: input.redirect", () => {
     expect(report.results[0]!.error?.message).toContain(
       "fixture input.redirect: expected follow, error or manual",
     );
+  });
+});
+
+describe("stats: failure tallies (redirectRefused / timedOut)", () => {
+  interface Summary {
+    count: number;
+    status: Record<string, number>;
+    timedOut: number;
+    redirectRefused: number;
+  }
+
+  async function summary(line: string): Promise<Summary> {
+    const out = await parse(line)().collect();
+    return out[out.length - 1] as unknown as Summary;
+  }
+
+  test("GET in transform position: refusals are tallied, not hidden in status 0", async () => {
+    const s = await summary(`range(1,3) | GET ${base}/moved --redirect error | stats`);
+    expect(s.count).toBe(3);
+    expect(s.redirectRefused).toBe(3);
+    expect(s.timedOut).toBe(0);
+    expect(s.status["0"]).toBe(3);
+  });
+
+  test("parallel + verb: refusals are tallied", async () => {
+    const s = await summary(`range(1,4) | parallel 2 | GET ${base}/moved --redirect error | stats`);
+    expect(s.redirectRefused).toBe(4);
+    expect(s.timedOut).toBe(0);
+  });
+
+  test("mixed run: each refusal counted exactly once", async () => {
+    // /alternating redirects on odd requests, answers 200 on even ones.
+    const s = await summary(`range(1,4) | GET ${base}/alternating --redirect error | stats`);
+    expect(s.count).toBe(4);
+    expect(s.redirectRefused).toBe(2);
+    expect(s.status["0"]).toBe(2);
+    expect(s.status["200"]).toBe(2);
+  });
+
+  test("timeouts are tallied the same way", async () => {
+    const s = await summary(`range(1,2) | GET ${base}/slow --timeout 50ms | stats`);
+    expect(s.timedOut).toBe(2);
+    expect(s.redirectRefused).toBe(0);
+  });
+
+  test("a clean run carries the keys as zeros (stable shape for gates)", async () => {
+    const s = await summary(`range(1,2) | GET ${base}/landed | stats`);
+    expect(s.redirectRefused).toBe(0);
+    expect(s.timedOut).toBe(0);
+    expect(s.count).toBe(2);
+  });
+
+  test("--every windows: tallies survive flushes — no drops, no double-counts", async () => {
+    // Synthetic all-refusal records (the pipeline.test.ts window pattern):
+    // every window's tally must equal its own count, and the final
+    // cumulative tally must equal the sum across windows.
+    const items = await parse(
+      `load 1500ms 4/s | (t => ({status: 0, ms: 1, redirectRefused: true})) | stats --every 1`,
+    )().collect();
+    const windows = items.filter(
+      (i) => (i as { window?: number }).window,
+    ) as unknown as (Summary & {
+      window: number;
+    })[];
+    const final = items[items.length - 1] as unknown as Summary & { final?: boolean };
+    expect(final.final).toBe(true);
+    expect(windows.length).toBeGreaterThanOrEqual(1);
+    for (const w of windows) {
+      expect(w.redirectRefused).toBe(w.count);
+      expect(w.timedOut).toBe(0);
+    }
+    expect(final.redirectRefused).toBe(windows.reduce((n, w) => n + w.redirectRefused, 0));
+    expect(final.count).toBe(windows.reduce((n, w) => n + w.count, 0));
+  });
+
+  test("--out artifact carries the tallies", async () => {
+    const file = join(dir, "tallies.json");
+    await parse(
+      `range(1,3) | GET ${base}/moved --redirect error | stats --out ${file}`,
+    )().collect();
+    const doc = (await Bun.file(file).json()) as { summary: Summary };
+    expect(doc.summary.redirectRefused).toBe(3);
+    expect(doc.summary.timedOut).toBe(0);
   });
 });
 
