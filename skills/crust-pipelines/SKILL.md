@@ -9,6 +9,10 @@ crust is a Bun-powered pipeline runner where every command is a typed stream
 (`Pipeline<T>`). Stages compose under `|`. Plain shell still works — a line
 whose stages are all ordinary commands is handed to `sh -c` untouched.
 
+Choose the lightest native stage that preserves correctness, observability,
+and safety — not merely the shortest syntax (full statement: the
+crust-api-testing skill's shared principle).
+
 ## How a stage is classified (first token decides)
 
 | You type | You get |
@@ -38,6 +42,31 @@ whose stages are all ordinary commands is handed to `sh -c` untouched.
 | anything else | plain shell via `sh -c` |
 
 `:3000/path` expands to `http://localhost:3000/path` everywhere.
+
+## HTTP result shapes — same syntax, different payloads
+
+Similar HTTP syntax does NOT guarantee identical result shapes. Know which
+shape a stage receives before reaching for `.json()` or gating results
+(verified against crust v0.3.5):
+
+| Context | What the stage emits | Authoring implication |
+|---|---|---|
+| First-stage ordinary verb (`GET :3000/x`) | a `Response` | body parsing is available: `(r => r.json())` |
+| Mid-pipeline ordinary verb (per-item, untimed) | a `Response` per item | same — bodies still parseable |
+| Timed per-item path (`parallel N \| GET …`) | `{status, ms, url}` records; **bodies drained**; network errors are `status: 0` records; `--timeout`/`--redirect error` outcomes are `{status: 0, timedOut/redirectRefused: true}` records | `.json()` does NOT exist on these; gate status and the failure tallies explicitly |
+
+## Completion is not success — three separate outcomes
+
+1. **Execution completed** — the pipeline ran without a fatal stage error (exit 0).
+2. **Request correctness passed** — explicit gates (`expect`, `assert`) accepted the request outcomes.
+3. **Performance passed** — explicit latency/throughput thresholds passed.
+
+`stats` reports measurements; it is not itself a success gate. In timed/load
+paths, timeouts, network failures, and redirect refusals are per-item
+RECORDS (`status: 0` + a tally field), not exits — exit 0 alone is never
+evidence that requests succeeded. Use an explicit expected-status gate
+(`expect 200`/`expect 2xx`), and where stats is in play also check
+`s.timedOut === 0` / `s.redirectRefused === 0`.
 
 ## Env expansion — parse time, opt-in per position
 
@@ -159,3 +188,20 @@ Any stage throw → `crust: <message>` on stderr, line exits 1. `crust -c`,
 the same fail-fast loop and STOP at the first non-zero — put warmup and
 cleanup on their own lines. Blank lines and `#` comments are skipped, so a
 `#!/usr/bin/env crust` shebang works in `.crust` files.
+
+**Cleanup on a later line is happy-path cleanup, not guaranteed teardown.**
+Under fail-fast, an earlier failure means that line never runs. When
+failure-path cleanup is a requirement (containers, temp rows, mock servers),
+use the verified lifecycle hook: `crust.onExit = async (code) => {…}` in
+`init.ts` — it runs from the centralized shutdown path on every exit,
+including the fail-fast failure path of `-c`, script, and stdin runs
+(source-verified on v0.3.5), and receives the exit code. If a needed
+guarantee is still missing (e.g. `kill -9`), document the limitation rather
+than implying line placement solves it.
+
+## Version and evidence
+
+Behavior here was verified against **crust v0.3.5** — result shapes and
+failure-record semantics by source and through the compiled binary; keep
+approved targets, credentials, and execution restrictions in repository
+policy, not in this skill.

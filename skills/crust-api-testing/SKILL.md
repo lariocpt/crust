@@ -5,7 +5,19 @@ description: Test HTTP APIs with crust — .pipes suites (one fixture pipeline p
 
 # crust API testing
 
-Three layers, one binary. Pick the lightest that fits:
+## The shared principle: the lightest CORRECT layer
+
+Choose the lightest native layer that preserves correctness, observability,
+and safety — not merely the shortest syntax.
+
+- Use `.pipes` for straightforward requests, assertions, and supported request chaining.
+- Use `.crust.ts` when setup, custom matchers, or required safety controls cannot be expressed in pipes.
+- Use `gen-fixtures` for supported contract-derived cases, followed by review.
+- Use native load pipelines for paced traffic, measurements, and explicit success gates.
+- Do not force a case into pipes when doing so removes a required guarantee.
+- Consult repository-specific execution and credential policies before running examples.
+
+Three layers, one binary:
 
 | Layer | File | Best for |
 |---|---|---|
@@ -145,10 +157,62 @@ whose create body cannot be filled — are dropped and NAMED on stdout
 (`gen-fixtures: 2 case(s) skipped for POST /things …`, `skipping flow for
 /things …`). A silently smaller suite would look like coverage.
 
+## Generated cases are candidates, not certified coverage
+
+A generator can derive request mutations from a schema. It cannot universally
+infer backend-specific status codes, error envelopes, authorization
+concealment policies, business preconditions, or cleanup behavior.
+
+For negative tests:
+
+- Begin with an otherwise valid request.
+- Mutate one intended condition.
+- Ensure authentication and resource preconditions allow the request to
+  reach the intended validation layer (a request that dies at auth never
+  proves the validation code).
+- Assert the documented status.
+- Where the contract provides structured error evidence, verify the relevant
+  field, location, or error code.
+- Avoid exact human-readable message matching unless wording is contractual.
+
+A generic error status is insufficient evidence when the request could have
+failed for an unrelated reason. And the generated **400 validation matrix is
+a generator assumption, not a universal API convention** — some contracts
+specify `422` (or another status) for validation failures; when the contract
+disagrees, say so in review and adjust expectations to the CONTRACT, never
+the other way around. Document unsupported assumptions and skipped cases
+rather than silently reducing coverage or normalizing the contract to fit
+generation.
+
 ## Workflow for a new API
 
-1. `gen-fixtures` against the spec → run matrix + flows → fix what fails.
-2. Hand-write `.pipes` for business flows the spec can't express (SQL
-   checks, multi-resource invariants).
-3. Reach for `.crust.ts` only when a case needs real code (crypto, files,
-   custom matchers).
+1. Identify the authoritative contract and record its version or revision.
+2. Review generation assumptions against that contract: validation status
+   codes; authentication and authorization behavior; error envelopes;
+   resource identifiers; response schemas; CRUD lifecycle support.
+3. Generate into a dedicated output directory (`--out`, default `tests/gen`).
+   Generation DELETES and recreates that directory; never target manually
+   authored sources.
+4. Review generated cases, expected responses, setup requirements, and
+   skipped cases (they are NAMED on stdout) before execution.
+5. Obtain the required target, identity, resource, write, cleanup, and load
+   approvals from repository policy — the skill never grants any of them.
+6. Execute only the approved scope.
+7. Classify failures before changing expectations or implementation:
+   backend defect · contract defect · unsupported generator assumption ·
+   environment/setup failure · incorrect test.
+8. Add manually authored native fixtures or pipelines for unsupported cases.
+   Do not hand-edit generated files (the next regeneration erases the edit).
+9. Record remaining coverage gaps explicitly.
+
+> Never change an expected result solely because the backend returned
+> something different. A passing test must reflect a reviewed contract.
+
+## Version and evidence
+
+Behavior described here was verified against **crust v0.3.5** (source-read
+and run through the compiled binary where it matters: `--redirect` record
+shapes, `output.schema` $ref refusal, gen-fixtures skip reporting). Newer
+crust versions may extend behavior; re-verify before documenting it. Keep
+approved targets, credentials, transport exceptions, resource ownership, and
+execution restrictions in repository policy, not in this skill.
