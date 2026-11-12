@@ -52,8 +52,10 @@ shape a stage receives before reaching for `.json()` or gating results
 | Context | What the stage emits | Authoring implication |
 |---|---|---|
 | First-stage ordinary verb (`GET :3000/x`) | a `Response` | body parsing is available: `(r => r.json())` |
-| Mid-pipeline ordinary verb (per-item, untimed) | a `Response` per item | same — bodies still parseable |
-| Timed per-item path (`parallel N \| GET …`) | `{status, ms, url}` records; **bodies drained**; network errors are `status: 0` records; `--timeout`/`--redirect error` outcomes are `{status: 0, timedOut/redirectRefused: true}` records | `.json()` does NOT exist on these; gate status and the failure tallies explicitly |
+| Mid-pipeline ordinary verb, non-GET (per-item, untimed) | a `Response` per item | same — bodies still parseable |
+| Timed per-item path (mid-pipeline `GET` — with or without `parallel` — or `parallel N \| <any other verb>`) | `{status, ms, url}` records; **bodies drained**; network errors are `status: 0` records; `--timeout`/`--redirect error` outcomes are `{status: 0, timedOut/redirectRefused: true}` records | `.json()` does NOT exist on these; gate status and the failure tallies explicitly |
+
+Canonical, version-pinned table: https://lariocpt.github.io/crust-website/docs/http-result-shapes/.
 
 ## Completion is not success — three separate outcomes
 

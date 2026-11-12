@@ -12,6 +12,7 @@ Mock it, test it, load it, tail it: the whole test stack baked into one binary. 
 - [The Pipeline model](#the-pipeline-model)
 - [Shell-line syntax](#shell-line-syntax)
 - [CI gates: thresholds, baselines, exit codes](#ci-gates-thresholds-baselines-exit-codes)
+- [HTTP result shapes](#http-result-shapes)
 - [Shorthand fixture grammar](#shorthand-fixture-grammar)
 - [TypeScript API](#typescript-api)
 - [Builtins](#builtins)
@@ -990,6 +991,57 @@ runs with `A` set for that command only.
 environment, and `export A=1 B=2` assigns several. What it no longer does is
 ignore a word it did not understand — `export A=1 -p` used to set `A`, print
 nothing, and exit 0.
+
+---
+
+## HTTP result shapes
+
+Similar HTTP syntax does NOT guarantee identical result shapes. Which payload
+an HTTP stage emits depends on its position and on whether `parallel` puts it
+in load mode. This is the canonical table; the skills and the website point
+here. (Verified against crust v0.3.5.)
+
+| Execution context | What you get | What you can do with it |
+|---|---|---|
+| First-stage `GET`/`DELETE` (`GET :3000/x`) | one `Response` | bodies are yours: `(r => r.json())`, `.text()`, `.arrayBuffer()` |
+| Mid-pipeline non-GET verb, no `parallel` (`{…} \| POST :3000/x`) | one `Response` per item | same — bodies still parseable |
+| Mid-pipeline `GET` — with **or** without `parallel` | `{status, ms, url}` timing records | **no body access** — `.json()` does not exist on these records |
+| `parallel N \| <any verb>` | `{status, ms, url}` timing records | same — gate `status` and the failure tallies, never a body |
+
+The mid-pipeline `GET` row is the trap: `GET` mid-pipeline is **always** the
+timed path, even at `parallel 1` or with no `parallel` at all — each upstream
+item triggers one request and the result is a record, not a `Response`. Only
+`POST`/`PUT`/`PATCH`/`DELETE` stay untimed (yielding `Response`s) until
+`parallel` promotes them to load mode.
+
+On the timed path:
+
+- **Bodies are drained** after each request (so keep-alive sockets recycle and
+  the measured `ms` includes the body). The body is gone — records carry only
+  `{status, ms, url}`.
+- **Network errors are `{status: 0}` records**, not line failures. A run whose
+  every request was refused still exits 0 unless a gate (`expect`, `assert`)
+  says otherwise.
+- A **`--timeout` budget hit** is a `{status: 0, timedOut: true}` record; a
+  **`--redirect error` refusal** is a `{status: 0, redirectRefused: true}`
+  record. Both are also tallied by `stats` (`timedOut`/`redirectRefused`,
+  always present, 0 on a clean run) — records, not exits; gate them.
+
+On the untimed paths there are no records to carry flags: a network error, a
+`--timeout` budget hit, or a `--redirect error` refusal **throws and fails the
+line** with a named error.
+
+```crust
+GET :3000/users | (r => r.json())
+{"name": "Court"} | POST :3000/users | (r => r.json())
+range(0, 9) | GET :3000/health | stats
+range(0, 9) | parallel 5 | GET :3000/health | expect 200 | stats
+```
+
+The third line looks like it fetches ten bodies to summarize; it doesn't — the
+mid-pipeline `GET` already reduced each request to a timing record before
+`stats` saw it. Never parse a body from a timing record; if you need the body,
+use an untimed verb position and parse there.
 
 ---
 

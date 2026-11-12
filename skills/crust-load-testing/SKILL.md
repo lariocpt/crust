@@ -56,6 +56,8 @@ load 10s 20/s | (t => ({name: "user" + t.n})) | parallel 8 | POST :3000/users | 
   Little's law sizes the pool: `N ≥ rate × p99-in-seconds`.
 - Durations `ms|s|m`; rates `N/s` or `N/m`, decimals allowed.
 
+Canonical, version-pinned result-shape table: https://lariocpt.github.io/crust-website/docs/http-result-shapes/.
+
 ## Honesty guarantees (read before quoting numbers)
 
 - A gate that measured NOTHING fails: `stats` over an empty stream is tagged
