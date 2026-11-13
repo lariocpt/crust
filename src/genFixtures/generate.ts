@@ -79,6 +79,19 @@
  *     schema-valid create body (business date rules etc.); `skip` drops the
  *     flow (e.g. a required FK no static value can satisfy). Read at
  *     generation time.
+ *   - `expectations?: { validationStatus?: number; concealment?: "404" | "403";
+ *     operations?: Record<"METHOD /path", { validationStatus?: number;
+ *     errorStatus?: number }> }` — reviewed expectation overrides for backends
+ *     whose contract disagrees with the 400 convention. `validationStatus`
+ *     sets the validation-matrix status (global, or per operation via
+ *     `operations`); `concealment` (global) / `errorStatus` (per operation)
+ *     set the status of the unknown-id / outsider case family when the spec
+ *     documents neither. A documented status ALWAYS wins over a configured
+ *     one — configuration fills gaps, it never contradicts the contract —
+ *     and configured cases carry `configured:<module>` provenance in the
+ *     manifest. Validated hard at generation time: unknown keys, statuses
+ *     outside 400–599, or unknown operation keys refuse the generation
+ *     (exit 2) rather than being ignored.
  */
 import { createHash } from "node:crypto";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
@@ -183,10 +196,161 @@ export interface FlowOverride {
   skip?: boolean;
 }
 
+// F6: reviewed expectation configuration, read from the same setup module as
+// flowOverrides. A contract that answers 422 (or conceals authorization with
+// 404/403) otherwise gets no matrix or no case family at all, and the honest
+// alternative to hand-editing generated files is configuration a human
+// reviewed. Precedence is fixed: a DOCUMENTED status always wins; per-operation
+// beats global; configuration only fills where the contract is silent.
+export interface ExpectationOverride {
+  /** Validation-matrix status for this operation (instead of the global one). */
+  validationStatus?: number;
+  /** Unknown-id / outsider case status for this operation (instead of the global concealment). */
+  errorStatus?: number;
+}
+
+export interface ExpectationsConfig {
+  /** Global validation-matrix status (e.g. 422 for a contract that never says 400). */
+  validationStatus?: number;
+  /** Authorization concealment for the unknown-id / outsider family. */
+  concealment?: "404" | "403";
+  /** Per-operation overrides keyed exactly `"METHOD /path"` — the manifest's operation key style. */
+  operations?: Record<string, ExpectationOverride>;
+}
+
+// The validated form: statuses are integers, concealment is normalised to a
+// number, and `module` is the --setup specifier as given — the target of the
+// `configured:<module>` provenance, identified the same way the manifest
+// identifies the spec (by the path it was passed, never by its values).
+interface ExpectationOverrides {
+  module: string;
+  validationStatus?: number;
+  concealment?: number;
+  operations: Record<string, ExpectationOverride>;
+}
+
+/**
+ * Setup-module configuration crust refuses to generate with. A bad expectation
+ * config is a caller error exactly like a bad flag, so the CLI maps it to the
+ * same exit 2 — and it throws BEFORE any output is written, so a refused
+ * generation never touches the --out dir.
+ */
+export class ConfigError extends Error {}
+
+// Statuses crust will configure: client-error responses only. 2xx/3xx would
+// make a negative case assert success; 5xx is not an expectation a fixture
+// can hold a server to.
+function checkConfigStatus(what: string, value: unknown): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 400 || value >= 600) {
+    throw new ConfigError(
+      `${what} must be an integer between 400 and 599 (got ${JSON.stringify(value)}) — ` +
+        "only client-error statuses can be configured",
+    );
+  }
+  return value;
+}
+
+function checkConfigOverrideKeys(what: string, value: unknown, allowed: string[]): void {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new ConfigError(`${what} must be an object (got ${JSON.stringify(value)})`);
+  }
+  for (const key of Object.keys(value as Record<string, unknown>)) {
+    if (!allowed.includes(key)) {
+      throw new ConfigError(
+        `${what}: unknown key "${key}" — allowed keys are ${allowed.map((k) => `"${k}"`).join(", ")}`,
+      );
+    }
+  }
+}
+
+function validateExpectations(
+  raw: unknown,
+  specOperations: Set<string>,
+  module: string,
+): ExpectationOverrides | null {
+  if (raw === undefined || raw === null) return null;
+  checkConfigOverrideKeys("expectations", raw, ["validationStatus", "concealment", "operations"]);
+  const src = raw as ExpectationsConfig;
+  const out: ExpectationOverrides = { module, operations: {} };
+  if (src.validationStatus !== undefined) {
+    out.validationStatus = checkConfigStatus("expectations.validationStatus", src.validationStatus);
+  }
+  if (src.concealment !== undefined) {
+    // Accept the string spellings the config contract documents and the bare
+    // numbers a user may write without quotes; anything else is refused.
+    const c: unknown = src.concealment;
+    const norm = c === 404 || c === "404" ? 404 : c === 403 || c === "403" ? 403 : undefined;
+    if (norm === undefined) {
+      throw new ConfigError(
+        `expectations.concealment must be "404" or "403" (got ${JSON.stringify(src.concealment)})`,
+      );
+    }
+    out.concealment = norm;
+  }
+  if (src.operations !== undefined) {
+    if (
+      typeof src.operations !== "object" ||
+      src.operations === null ||
+      Array.isArray(src.operations)
+    ) {
+      throw new ConfigError(
+        `expectations.operations must be an object keyed "METHOD /path" (got ${JSON.stringify(src.operations)})`,
+      );
+    }
+    for (const [key, value] of Object.entries(src.operations)) {
+      if (!specOperations.has(key)) {
+        throw new ConfigError(
+          `expectations.operations: unknown operation "${key}" — the spec has no such ` +
+            'operation. Keys are "METHOD /path" exactly as the spec writes them, ' +
+            'method uppercase (e.g. "POST /api/things") — a typo here would silently ' +
+            "configure nothing, so it is an error, not a warning",
+        );
+      }
+      checkConfigOverrideKeys(`expectations.operations["${key}"]`, value, [
+        "validationStatus",
+        "errorStatus",
+      ]);
+      const o: ExpectationOverride = {};
+      if (value.validationStatus !== undefined) {
+        o.validationStatus = checkConfigStatus(
+          `expectations.operations["${key}"].validationStatus`,
+          value.validationStatus,
+        );
+      }
+      if (value.errorStatus !== undefined) {
+        o.errorStatus = checkConfigStatus(
+          `expectations.operations["${key}"].errorStatus`,
+          value.errorStatus,
+        );
+      }
+      out.operations[key] = o;
+    }
+  }
+  return out;
+}
+
+// The methods gen-fixtures derives cases for — one list so the operation keys
+// the `expectations` config validates against and the keys the derivation walk
+// visits can never drift apart (a drift here would refuse valid configs).
+const GEN_METHODS = ["get", "post", "patch", "put", "delete"];
+
+function specOperationKeys(spec: { paths?: Record<string, unknown> }): Set<string> {
+  const keys = new Set<string>();
+  for (const [path, methods] of Object.entries(spec.paths ?? {})) {
+    for (const [method] of Object.entries(methods as Record<string, unknown>)) {
+      if (!GEN_METHODS.includes(method)) continue;
+      keys.add(`${method.toUpperCase()} ${path}`);
+    }
+  }
+  return keys;
+}
+
 interface ScopeConfig {
   scopeParam: string | null;
   scopeRoots: string[];
   flowOverrides: Record<string, FlowOverride>;
+  /** Validated `expectations` export of the setup module; null when absent. */
+  expectations: ExpectationOverrides | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -700,8 +864,9 @@ interface GenCase {
    * documents that response for this operation — set at the gate that decides
    * the case exists, never re-derived in a second pass. `convention:<name>`
    * when crust assumed the status without documentation; no fixture case does
-   * that today (every family is gated on a documented response), and the
-   * setup-module override seam (F6) will add `configured:<module>`.
+   * that today (every family is gated on a documented response or a reviewed
+   * setup-module override). `configured:<module>` when the status came from
+   * the setup module's `expectations` block because the spec was silent.
    */
   expectationSource: string;
   expectValidationField?: string;
@@ -745,10 +910,11 @@ interface BodylessOp {
 }
 
 /**
- * An operation with a JSON request body whose spec documents no 400. The
- * validation matrix is gated on the documented status (crust never assumes
- * 400), so the matrix is absent — recorded in the manifest's `unsupported`
- * so the silence is reviewable rather than invisible.
+ * An operation with a JSON request body whose spec documents no 400 and whose
+ * setup module configures no validation status. The validation matrix is
+ * gated on the documented status (crust never assumes 400) or a reviewed
+ * configured one, so the matrix is absent — recorded in the manifest's
+ * `unsupported` so the silence is reviewable rather than invisible.
  */
 interface NoMatrixOp {
   template: string;
@@ -798,6 +964,21 @@ function deriveCases(
   // spec's own keys, so a reviewer can open the spec at exactly this node.
   const responsePointer = (code: number) =>
     `contract:paths.${path}.${method.toLowerCase()}.responses.${code}`;
+  // F6: the setup module's reviewed overrides for THIS operation (per-op beats
+  // global). They only ever FILL gaps — every family below still asks the spec
+  // first, and a documented status wins with `contract:` provenance even when
+  // a different status is configured.
+  const opKey = `${method.toUpperCase()} ${path}`;
+  const exp = scope.expectations;
+  const opOverride = exp?.operations[opKey];
+  const configuredValidation = opOverride?.validationStatus ?? exp?.validationStatus;
+  const configuredError = opOverride?.errorStatus ?? exp?.concealment;
+  const configuredSource = exp ? `configured:${exp.module}` : "";
+  // Provenance for a family status: `contract:` whenever the spec documents
+  // that exact status (even one the configuration also asked for), `configured:`
+  // only when the spec is silent on it.
+  const familySource = (status: number) =>
+    has(status) ? responsePointer(status) : configuredSource;
   // A documented 401 only implies "requires auth" when it's the middleware's
   // 401 — public endpoints like login document 401 for bad credentials.
   const desc401 = String(responses["401"]?.description ?? "");
@@ -829,36 +1010,53 @@ function deriveCases(
     });
   }
 
-  if (scoped && has(403)) {
-    cases.push({
-      name: `${method.toUpperCase()} ${path} as non-member -> 403`,
-      auth: "outsider",
-      method,
-      path,
-      body: authzBody,
-      expectStatus: 403,
-      expectationSource: responsePointer(403),
-    });
+  if (scoped) {
+    // Outsider family: a documented 403 wins outright; otherwise a configured
+    // concealment status fills the gap (an API that answers 404 to outsiders
+    // to hide existence still needs the case — the contract being silent is
+    // not the same as the behavior not existing).
+    const status = has(403) ? 403 : configuredError;
+    if (status !== undefined) {
+      cases.push({
+        name: `${method.toUpperCase()} ${path} as non-member -> ${status}`,
+        auth: "outsider",
+        method,
+        path,
+        body: authzBody,
+        expectStatus: status,
+        expectationSource: familySource(status),
+      });
+    }
   }
 
-  if (!scoped && otherParams.length > 0 && has(404)) {
-    cases.push({
-      name: `${method.toUpperCase()} ${path} with unknown ${otherParams[0]} -> 404`,
-      auth: requiresAuth ? "member" : "none",
-      method,
-      path,
-      body: authzBody,
-      expectStatus: 404,
-      expectationSource: responsePointer(404),
-    });
+  if (!scoped && otherParams.length > 0) {
+    // Unknown-id family: same rule — documented 404 wins; a configured
+    // concealment status (e.g. an API that answers 403 before revealing
+    // existence) generates the case where the spec documents neither.
+    const status = has(404) ? 404 : configuredError;
+    if (status !== undefined) {
+      cases.push({
+        name: `${method.toUpperCase()} ${path} with unknown ${otherParams[0]} -> ${status}`,
+        auth: requiresAuth ? "member" : "none",
+        method,
+        path,
+        body: authzBody,
+        expectStatus: status,
+        expectationSource: familySource(status),
+      });
+    }
   }
 
   // Validation matrix — needs a caller who clears the auth/role gates, so
   // auth-gated ops run as "member" (the setup module's headersFor("member")
-  // must resolve to a caller inside the shared scope).
-  if (bodySchema && has(400)) {
+  // must resolve to a caller inside the shared scope). The gate is
+  // "documented 400 OR configured validation status": a contract that answers
+  // 422 gets the same matrix at 422, and a documented 400 stays 400 no matter
+  // what is configured (contract beats config).
+  const matrixStatus = has(400) ? 400 : configuredValidation;
+  if (bodySchema && matrixStatus !== undefined) {
     const validAuth = requiresAuth ? "member" : "none";
-    const matrixSource = responsePointer(400);
+    const matrixSource = has(400) ? responsePointer(400) : configuredSource;
     // Same composed view as baseBody, on purpose: the field list drives `missing required '<field>'`
     // cases, so a name the spec requires through an `allOf` branch would otherwise get no case at
     // all — and a property declared only in a branch would get a `wrong type` case built from
@@ -869,12 +1067,12 @@ function deriveCases(
     for (const field of required) {
       const { [field]: _omitted, ...withoutField } = base;
       cases.push({
-        name: `${method.toUpperCase()} ${path} missing required '${field}' -> 400`,
+        name: `${method.toUpperCase()} ${path} missing required '${field}' -> ${matrixStatus}`,
         auth: validAuth,
         method,
         path,
         body: withoutField,
-        expectStatus: 400,
+        expectStatus: matrixStatus,
         expectationSource: matrixSource,
         expectValidationField: field,
       });
@@ -888,12 +1086,12 @@ function deriveCases(
       // validator to resolve and an empty document is the honest argument.
       if (validateSchema(wrongValue, props[field], {} as OpenApiSpec, "").length > 0) {
         cases.push({
-          name: `${method.toUpperCase()} ${path} wrong type for '${field}' -> 400`,
+          name: `${method.toUpperCase()} ${path} wrong type for '${field}' -> ${matrixStatus}`,
           auth: validAuth,
           method,
           path,
           body: { ...base, [field]: wrongValue },
-          expectStatus: 400,
+          expectStatus: matrixStatus,
           expectationSource: matrixSource,
           expectValidationField: field,
         });
@@ -905,12 +1103,12 @@ function deriveCases(
       const fs = effectiveSchema(rawFs);
       if (fs?.enum?.length) {
         cases.push({
-          name: `${method.toUpperCase()} ${path} invalid enum for '${field}' -> 400`,
+          name: `${method.toUpperCase()} ${path} invalid enum for '${field}' -> ${matrixStatus}`,
           auth: validAuth,
           method,
           path,
           body: { ...base, [field]: "__not_a_real_enum_value__" },
-          expectStatus: 400,
+          expectStatus: matrixStatus,
           expectationSource: matrixSource,
           expectValidationField: field,
         });
@@ -925,12 +1123,12 @@ function deriveCases(
       if (!fs) continue;
       const push = (suffix: string, wrongValue: unknown) =>
         cases.push({
-          name: `${method.toUpperCase()} ${path} ${suffix} '${field}' -> 400`,
+          name: `${method.toUpperCase()} ${path} ${suffix} '${field}' -> ${matrixStatus}`,
           auth: validAuth,
           method,
           path,
           body: { ...base, [field]: wrongValue },
-          expectStatus: 400,
+          expectStatus: matrixStatus,
           expectationSource: matrixSource,
           expectValidationField: field,
         });
@@ -970,12 +1168,12 @@ function deriveCases(
     // fieldErrors varies by server, so this asserts status + code only.
     if (bodySchema.additionalProperties === false) {
       cases.push({
-        name: `${method.toUpperCase()} ${path} unexpected extra property -> 400`,
+        name: `${method.toUpperCase()} ${path} unexpected extra property -> ${matrixStatus}`,
         auth: validAuth,
         method,
         path,
         body: { ...base, crustUnexpectedProp: "gen-extra" },
-        expectStatus: 400,
+        expectStatus: matrixStatus,
         expectationSource: matrixSource,
         expectValidationCode: true,
       });
@@ -1011,9 +1209,11 @@ function deriveCases(
       }
     }
   } else if (bodySchema) {
-    // A JSON body whose op documents no 400: the matrix is absent because
-    // crust never assumes the status where the contract is silent. Disclosed
-    // in the manifest rather than silently missing.
+    // A JSON body whose op documents no 400 AND carries no configured
+    // validation status: the matrix is absent because crust never assumes the
+    // status where both the contract and the reviewed configuration are
+    // silent. Disclosed in the manifest rather than silently missing. (A
+    // configured status takes the branch above, so it never lands here.)
     noMatrix.push({ template: `${method.toUpperCase()} ${path}` });
   }
 
@@ -1054,7 +1254,7 @@ export interface GenManifestCase {
   /** What the case mutates (or "baseline" when nothing is mutated). */
   mutation: string;
   expectStatus: number;
-  /** `contract:<spec pointer>` | `convention:<name>` (F6 adds `configured:<module>`). */
+  /** `contract:<spec pointer>` | `convention:<name>` | `configured:<setup-module specifier>`. */
   expectationSource: string;
   prerequisites: string[];
 }
@@ -1667,6 +1867,15 @@ export async function generateFixtures(opts: GenerateOpts): Promise<GenerateResu
     scopeRoots: setupMod.scopeRoots ?? [],
     flowOverrides:
       (setupMod as { flowOverrides?: Record<string, FlowOverride> }).flowOverrides ?? {},
+    // Validated here, before the --out dir is touched: a bad expectations
+    // block refuses the generation (the CLI maps ConfigError to exit 2) and
+    // never writes a partial tree. Operation keys are checked against the
+    // spec's own operations so a typo'd key is loud, not inert.
+    expectations: validateExpectations(
+      (setupMod as { expectations?: unknown }).expectations,
+      specOperationKeys(spec),
+      opts.setup,
+    ),
   };
 
   const log = opts.log ?? ((line: string) => process.stdout.write(`${line}\n`));
@@ -1676,7 +1885,7 @@ export async function generateFixtures(opts: GenerateOpts): Promise<GenerateResu
   const byTag = new Map<string, GenCase[]>();
   for (const [path, methods] of Object.entries(spec.paths ?? {})) {
     for (const [method, op] of Object.entries(methods as Record<string, Operation>)) {
-      if (!["get", "post", "patch", "put", "delete"].includes(method)) continue;
+      if (!GEN_METHODS.includes(method)) continue;
       const tag = op.tags?.[0] ?? "untagged";
       const arr = byTag.get(tag) ?? [];
       arr.push(...deriveCases(path, method, op, scope, unsound, bodyless, noMatrix));

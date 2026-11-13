@@ -35,6 +35,20 @@ export const scopeParam = "buildingId";
  */
 export const scopeRoots = ["/api/buildings"];
 
+/**
+ * Optional: reviewed expectation overrides for when the backend's contract
+ * disagrees with the 400 convention. A DOCUMENTED status always wins — this
+ * only fills gaps the contract leaves silent, and the manifest records
+ * `configured:<module>` provenance for what it fills. Bad config (unknown
+ * keys, statuses outside 400–599, typo'd "METHOD /path" keys) refuses
+ * generation with exit 2. See docs/USAGE.md §gen-fixtures for the schema.
+ */
+// export const expectations = {
+//   validationStatus: 422, // this backend answers 422, never 400
+//   concealment: "404", // unknown ids and outsiders both get 404
+//   operations: { "POST /api/reports": { validationStatus: 400 } }, // per-op beats global
+// };
+
 interface Ctx {
   buildingId: string;
   memberToken: string;
