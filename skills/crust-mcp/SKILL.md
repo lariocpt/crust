@@ -123,7 +123,7 @@ filter (l => l.proc === "api") | (l => l.line) | grep -i timeout
   read findings with `crust_mock_server_violations`.
 - `crust_load_run` composes the documented pipeline (`load … | parallel … |
   … | stats | assert`); gates go in `assert` — one predicate, or an array of
-  them, one assert stage per gate. An `expect` inside `target` runs BEFORE
+  them (0.3.6), one assert stage per gate. An `expect` inside `target` runs BEFORE
   stats and suppresses the summary when it fails; a post-stats `assert`
   failure is `isError` with the stats still included. A run that measured
   nothing is refused (`empty`), never a green gate.

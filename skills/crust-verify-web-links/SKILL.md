@@ -1,6 +1,6 @@
 ---
 name: crust-verify-web-links
-description: Crawl a site from its sitemap and verify every link, #anchor, redirect chain, OG image and meta tag against .crust.ts fixtures. `--base-url` auto-discovers the sitemap (robots.txt → /sitemap.xml → /sitemap-index.xml), `--site-map-url` takes a local sitemap so you can check build output, `--fixtures` diffs meta. Use when link or SEO health must gate a deploy, when a built site should be checked before publishing, or when OG/meta regressions need catching.
+description: Crawl a site from its sitemap and verify every link, #anchor, redirect chain, OG image and meta tag against .crust.ts fixtures. `--base-url` auto-discovers the sitemap (robots.txt → /sitemap.xml → /sitemap-index.xml), `--site-map-url` takes a local sitemap so you can check build output, `--fixtures` diffs meta. Every failure names its source page and element (structured `sources`/`meta`), and every failing run ends with an aligned fix-list. Use when link or SEO health must gate a deploy, when a built site should be checked before publishing, or when OG/meta regressions need catching.
 ---
 
 # crust verify-web-links
@@ -37,14 +37,16 @@ find this on, and which element":
 - `meta` — structured `{key, expected, actual}` for `meta-mismatch`
   (`meta-fixture-no-page` carries `key: "fixture"`).
 - **Fix-list**: every failing text run ends with a separate aligned section —
-  one line per (page, element, broken-thing) triple, nothing else:
+  one line per (page, element, broken-thing) triple, nothing else (excerpt of
+  the real output; the full failing report is in USAGE and on the website):
 
   ```text
-  fix list
-  page                           element        broken link / diff
-  http://localhost:47831/page-a  a              http://localhost:47831/broken
-  http://localhost:47831/page-b  img            http://localhost:47831/broken
-  http://localhost:47831/page-x  meta:og:title  got "Real Title" (expected "Wrong Title")
+    fix list
+    page                           element        broken link / diff
+    http://localhost:47831/page-a  a              http://localhost:47831/broken
+    http://localhost:47831/page-a  a              http://localhost:47831/page-x#ghost
+    http://localhost:47831/page-b  img            http://localhost:47831/broken
+    http://localhost:47831/page-x  meta:og:title  got "Page X — Real Title" (expected "Page X — Wrong Title")
   ```
 
   A clean run prints no fix-list section. `--json` carries the structured
