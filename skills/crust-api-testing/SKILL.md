@@ -1,6 +1,6 @@
 ---
 name: crust-api-testing
-description: Test HTTP APIs with crust — .pipes suites (one fixture pipeline per line, request chaining via capture, inline SQL verification), .crust.ts fixtures with setup/matchers, and gen-fixtures which derives negative-case matrices and CRUD flow suites from an OpenAPI spec. Use for API integration tests, contract tests from a spec, auth/authz negative cases, or DB-verified endpoint tests.
+description: Test HTTP APIs with crust — .pipes suites (one fixture pipeline per line, request chaining via capture, inline SQL verification), .crust.ts fixtures with setup/matchers, gen-fixtures which derives negative-case matrices and CRUD flow suites from an OpenAPI spec, and the evidence-tier taxonomy (snapshot vs DB-verified vs demo). Use for API integration tests, contract tests from a spec, auth/authz negative cases, or DB-verified endpoint tests.
 ---
 
 # crust API testing
@@ -291,7 +291,9 @@ https://lariocpt.github.io/crust-website/docs/contract-review/):
 
 Behavior described here was verified against **crust v0.3.5** (source-read
 and run through the compiled binary where it matters: `--redirect` record
-shapes, `output.schema` $ref refusal, gen-fixtures skip reporting). Newer
+shapes, `output.schema` $ref refusal, gen-fixtures skip reporting). New in
+**v0.3.6**: the `gen-manifest.json` review artifact, the setup-module
+`expectations` block, and the evidence-tier taxonomy. Newer
 crust versions may extend behavior; re-verify before documenting it. Keep
 approved targets, credentials, transport exceptions, resource ownership, and
 execution restrictions in repository policy, not in this skill.

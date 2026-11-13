@@ -277,7 +277,7 @@ export const ONE_SHOT_TOOLS: ToolDef[] = [
       type: "object",
       properties: {
         spec: { type: "string", description: "OpenAPI/Swagger spec, path or URL" },
-        out: { type: "string", description: "output directory (default fixtures/generated)" },
+        out: { type: "string", description: "output directory (default tests/gen)" },
         setup: {
           type: "string",
           description:
@@ -325,7 +325,11 @@ export const ONE_SHOT_TOOLS: ToolDef[] = [
         no_recurse: { type: "boolean" },
         no_anchors: { type: "boolean" },
         include_external: { type: "boolean" },
-        strict: { type: "boolean", description: "treat warnings (redirects, OG) as failures" },
+        strict: {
+          type: "boolean",
+          description:
+            "--strict: exit 1 unless every discovered link was checked (a completeness gate — a --max-pages cut-off or unchecked fragment — not a warnings escalation)",
+        },
         cwd: { type: "string" },
         timeout_ms: { type: "number", description: "child watchdog (default 600000)" },
       },
