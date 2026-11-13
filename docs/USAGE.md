@@ -2201,7 +2201,7 @@ verify-web-links --base-url https://example.com --fixtures meta/*.crust.ts
 verify-web-links --site-map-url ./public/sitemap.xml --no-recurse
 ```
 
-Flags: `--site-map-url <url-or-path>` or `--base-url <url>` (one required, mutually exclusive); `--fixtures <glob>` (optional `.crust.ts` meta fixtures); `--concurrency N` (default `4`); `--timeout ms` (default `10000`); `--user-agent <s>`; `--max-depth N` (default `5`); `--no-recurse` / `--no-anchors` / `--no-redirect-warnings` to opt out of those checks; `--include-external` to status-check off-origin links (never recursed); `--exclude <substring>` (repeatable) to skip URLs containing the substring — for subtrees that redirect by design, like a WooCommerce `/checkout/` or `/wp-admin/`; `--max-pages N` to stop after N URLs (the report counts what was left unchecked — a safety valve for crawls that explode into e.g. WooCommerce filter URLs; default `0` = unlimited); `--no-progress` to silence the 5-second progress heartbeat on stderr; `--json` for a machine-readable report; `--strict` to fail (exit 1) unless **every discovered link was checked** — see below.
+Flags: `--site-map-url <url-or-path>` or `--base-url <url>` (one required, mutually exclusive); `--fixtures <glob>` (optional `.crust.ts` meta fixtures); `--concurrency N` (default `4`); `--timeout ms` (default `10000`); `--user-agent <s>`; `--max-depth N` (default `5`); `--no-recurse` / `--no-anchors` / `--no-redirect-warnings` to opt out of those checks; `--include-external` to status-check off-origin links (never recursed); `--exclude <substring>` (repeatable) to skip URLs containing the substring — for subtrees that redirect by design, like a WooCommerce `/checkout/` or `/wp-admin/`; `--max-pages N` to stop after N URLs (the report counts what was left unchecked — a safety valve for crawls that explode into e.g. WooCommerce filter URLs; default `0` = unlimited); `--no-progress` to silence the 5-second progress heartbeat on stderr; `--json` for a machine-readable report on stdout (a failing run also writes the fix-list to stderr, so a redirected artifact still leaves the log readable); `--strict` to fail (exit 1) unless **every discovered link was checked** — see below.
 
 By default, all four verification behaviors are on: 2xx status, recurse into internal pages, validate `#fragment` targets against element ids on the destination page, and flag any 3xx redirect chain (often a sign of stale internal links). Each `og:image` URL is fetched and its content-type asserted to start with `image/`.
 
@@ -2219,10 +2219,15 @@ By default, all four verification behaviors are on: 2xx status, recurse into int
   being omitted.
 - `meta` — structured `{key, expected, actual}` for `meta-mismatch` findings
   (`meta-fixture-no-page` carries `key: "fixture"`).
-- **Fix-list** — every failing text run ends with a separate aligned section:
-  one line per (page, element, broken-thing) triple, nothing else. A clean run
-  prints no fix-list section; in `--json` the structured fields *are* the
-  fix-list.
+- **Fix-list** — every failing run ends with the aligned triple section: one
+  line per (page, element, broken-thing) triple, nothing else. A text run
+  prints it at the end of stdout. Under `--json` the report owns stdout, so
+  the **same table** (same columns, same rows) is written to **stderr** —
+  added in 0.3.7, because the CI shape is `--json > report.json`, and a failing
+  run that redirected its artifact used to leave the log saying nothing but
+  "exited with 1". A clean run prints no fix-list on either channel. Exit codes
+  are unchanged, and the structured `sources`/`meta` fields still carry the
+  same facts for machines.
 
 ```text
 verify-web-links: 3 page(s), 1 asset(s), 3 failure(s)

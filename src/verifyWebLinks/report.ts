@@ -54,6 +54,26 @@ export function fixListRows(failures: Failure[]): [string, string, string][] {
   return rows.sort((a, b) => cmp(a[0], b[0]) || cmp(a[1], b[1]) || cmp(a[2], b[2]));
 }
 
+/**
+ * The fix-list as its aligned column lines — header first, then one row per
+ * (page, element, broken-thing) triple. Empty when there is nothing to fix.
+ *
+ * This is THE formatting contract, shared by the text report and the `--json`
+ * stderr mirror, so the table a human reads is the same table whichever
+ * channel it arrived on.
+ */
+export function fixListColumns(failures: Failure[]): string[] {
+  const rows = fixListRows(failures);
+  if (rows.length === 0) return [];
+  const pageW = Math.max(4, ...rows.map((r) => r[0].length));
+  const elemW = Math.max(7, ...rows.map((r) => r[1].length));
+  const out = [`  ${"page".padEnd(pageW)}  ${"element".padEnd(elemW)}  broken link / diff`];
+  for (const [p, e, b] of rows) {
+    out.push(`  ${p.padEnd(pageW)}  ${e.padEnd(elemW)}  ${b}`);
+  }
+  return out;
+}
+
 function cmp(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
@@ -92,16 +112,11 @@ export function renderText(report: VerifyReport): string {
     }
     // The fix-list closes every failing run: aligned triples, one per
     // (page, element, broken-thing). A clean run never prints this section.
-    const rows = fixListRows(report.failures);
-    if (rows.length > 0) {
-      const pageW = Math.max(4, ...rows.map((r) => r[0].length));
-      const elemW = Math.max(7, ...rows.map((r) => r[1].length));
+    const cols = fixListColumns(report.failures);
+    if (cols.length > 0) {
       lines.push("");
       lines.push("  fix list");
-      lines.push(`  ${"page".padEnd(pageW)}  ${"element".padEnd(elemW)}  broken link / diff`);
-      for (const [p, e, b] of rows) {
-        lines.push(`  ${p.padEnd(pageW)}  ${e.padEnd(elemW)}  ${b}`);
-      }
+      lines.push(...cols);
     }
   }
   lines.push("");

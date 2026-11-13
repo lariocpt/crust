@@ -49,8 +49,9 @@ find this on, and which element":
     http://localhost:47831/page-x  meta:og:title  got "Page X — Real Title" (expected "Page X — Wrong Title")
   ```
 
-  A clean run prints no fix-list section. `--json` carries the structured
-  `sources`/`meta` fields instead — the data *is* the fix-list there.
+  A clean run prints no fix-list section on either channel. Under `--json` the
+  report owns stdout, so the same table is written to **stderr** (0.3.7) — the
+  structured `sources`/`meta` fields carry the same facts for machines.
 
 The `detail` prose is unchanged from v0.3.5: the structured fields are purely
 additive.
@@ -104,6 +105,9 @@ Redirect the whole invocation instead, then judge the report:
 ```bash
 crust -c 'verify-web-links --base-url https://example.com --json --no-progress' > report.json
 ```
+
+The redirect is the artifact; the fix-list arrives on stderr, so the CI log
+still names the broken page and element without a second command.
 
 ```crust
 read report.json | (s => JSON.parse(s)) | assert (r => r.totals.failures === 0)
