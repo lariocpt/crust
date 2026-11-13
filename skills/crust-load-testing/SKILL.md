@@ -27,12 +27,25 @@ load 10s 50/s, 30s 200/s | parallel 100 | GET :3000/health | stats --every 5
 load 10s 20/s | (t => ({name: "user" + t.n})) | parallel 8 | POST :3000/users | expect 2xx | stats
 ```
 
+> **Report availability:** `expect` throws at drain, so an `expect` placed
+> BEFORE `stats` that fails prevents the summary from ever being emitted
+> (the first two shapes above are illustrative of syntax, not of CI
+> reporting). When the summary/report must survive a status failure, put
+> `stats` (and `stats --out report.json`) before the gates and gate status
+> on the summary instead — see CI gates below.
+
 - `parallel` puts ANY http verb in load mode: output is `{status, ms, url}`
   timing records, bodies drained, network errors become `status: 0` records
   (they show in the histogram instead of killing the run). So a run whose
   every request was refused prints `{"status":{"0":40}}` and still exits 0
   unless a gate is present — `expect 200` over a dead port exits 1. `stats`
   reports, it does not gate.
+- **Completion ≠ success — three separate outcomes:** the run *completed*
+  (exit 0, no fatal stage error), *request correctness passed* (explicit
+  gates accepted the outcomes), *performance passed* (latency/throughput
+  thresholds held). A gate that only checks latency can be satisfied by fast
+  error responses — a 500 in 2ms is under any p95 budget. Latency-only
+  examples are NOT the definition of a passing load test; gate status too.
 - The summary carries failure tallies `timedOut` and `redirectRefused`
   (always present, 0 on a clean run): a `--timeout` budget hit or a
   `--redirect error` refusal is a `{status: 0, timedOut/redirectRefused:
@@ -42,6 +55,8 @@ load 10s 20/s | (t => ({name: "user" + t.n})) | parallel 8 | POST :3000/users | 
 - Rate (`load`) and concurrency (`parallel N`) are independent knobs.
   Little's law sizes the pool: `N ≥ rate × p99-in-seconds`.
 - Durations `ms|s|m`; rates `N/s` or `N/m`, decimals allowed.
+
+Canonical, version-pinned result-shape table: https://lariocpt.github.io/crust-website/docs/http-result-shapes/.
 
 ## Honesty guarantees (read before quoting numbers)
 
@@ -67,12 +82,24 @@ load 10s 20/s | (t => ({name: "user" + t.n})) | parallel 8 | POST :3000/users | 
 
 ## CI gates — thresholds are assert composition
 
+The primary shape gates **status first, then performance**, with `stats`
+(and the report) upstream of every gate so the summary survives a failing
+gate. When failure artifacts must survive request-status failures, collect
+statistics and write the report BEFORE applying aggregate gates:
+
 ```crust
-load 30s 100/s | parallel 50 | GET :3000/health | stats | assert (s => s.p95 < 200) | assert (s => s.rps > 80)
+load 30s 100/s | parallel 50 | GET :3000/health | stats --out load/last.json | assert (s => Object.keys(s.status).every(k => k.startsWith("2"))) | assert (s => s.timedOut === 0) | assert (s => s.redirectRefused === 0) | assert (s => s.p95 < 200) | assert (s => s.rps > 80)
 ```
 
 One assert per threshold: the failure names the predicate and prints the
-actual summary, and the line exits 1 (`crust -c` stops there).
+actual summary, and the line exits 1 (`crust -c` stops there). The gates
+above cover all four things a load gate must mean: every response was 2xx
+(a fast 500 is not a pass), no timeout or redirect-refusal records, the
+latency budget held, and the achieved rate held. An empty run is refused by
+`assert` itself (`empty: true`), so "measured nothing" never passes.
+`rps` is the ACHIEVED rate — if the target was not sustained, stderr already
+said so (`emitted … dropped … achieved …`); a drop report means the number
+below the rate gate is the honest one.
 
 Baseline gate — `--out` writes a versioned artifact
 (`{crustStats: 1, startedAt, urls, summary, windows?}`), an async assert
@@ -121,3 +148,14 @@ const out = await load([{ durMs: 10_000, rps: 100 }])
 
 `timedHttpItem(method, url, opts?)` is the any-verb per-item timer when you
 need POST bodies from upstream items.
+
+## Version and evidence
+
+Behavior here was verified against **crust v0.3.5** — summary schema
+(`{count, wallMs, rps, status, timedOut, redirectRefused, p50, p95, p99,
+meanMs}`, `empty: true` on a zero-request run) and the `--out`-before-gates
+write order are source-verified; throughput claims (5000+ ticks/s) are
+single-process measurements on the author's hardware — environment-dependent,
+not a promise. Pick the lightest correct layer for the job (see the
+crust-api-testing skill's shared principle), and keep approved targets and
+execution restrictions in repository policy, not in this skill.

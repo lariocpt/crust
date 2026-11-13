@@ -4,6 +4,129 @@ Notable changes to crust. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project is
 pre-1.0, so minor versions may carry breaking changes.
 
+## [0.3.6] — 2026-11-13
+
+### Added
+
+- **`gen-manifest.json` — generation provenance.** Every successful
+  `gen-fixtures` run now ends by writing `gen-manifest.json` into `--out`:
+  every generated case with its expectation's provenance
+  (`contract:<spec pointer>` when the spec documents the status,
+  `convention:<name>` if a status were ever assumed by rule,
+  `configured:<setup-module>` when a reviewed override supplied it), its
+  mutation and prerequisites (NAMES only — `auth`, `scope:member`,
+  `resource:<param>` — never values), plus every skip and every unsupported
+  operation with the same reason stdout shows. The file is deterministic —
+  no timestamps, the spec identified by a sha256 of its content — so the
+  same spec + crust version regenerate it byte-identically, and it states
+  its own limit in every copy: it records GENERATION only, nothing in it was
+  executed or verified. It lives inside `--out`, so the directory wipe takes
+  it with it and a failed generation never leaves one behind. Review it
+  before running anything the generator produced.
+- **`expectations` — reviewed status overrides via the setup module.**
+  Contracts that disagree with the 400 convention (422 validation backends,
+  per-operation error statuses, 404-vs-403 concealment) can now configure
+  correct generated expectations without hand-editing generated files:
+  `export const expectations = { validationStatus?, concealment?,
+  operations?: { "METHOD /path": { validationStatus?, errorStatus? } } }`
+  in the gen-setup module. Precedence is documented contract > per-op
+  config > global config > absent — a documented status always wins.
+  Configured cases carry `configured:<setup-module>` provenance in the
+  manifest (the manifest schema stays v1; the `configured:` namespace is
+  additive). Bad config — unknown keys, statuses outside 400–599, operation
+  keys the spec does not have — refuses the generation loudly with exit 2
+  and writes nothing; exit 2 now also covers a refused setup-module config.
+  What stays crust convention: the validation *envelope*
+  (`{ error, code: "validation", fieldErrors }`) is not configurable — only
+  the status is. No permissive multi-status expectations exist.
+- **verify-web-links failures name their source; failing runs end with a
+  fix-list.** Every failure is one per failing *target* and now carries
+  structured `sources: [{fromUrl, kind, href}]` — every link that pointed
+  at the failing target, `kind` the element (`a`, `img`, `script`, `link`,
+  `iframe`, `og-image`, or `sitemap` when the URL arrived as a sitemap
+  `<loc>` with no page linking it) — and `meta-mismatch` findings carry
+  structured `meta: {key, expected, actual}`. The text report prints an
+  indented `from <page> (<kind>)` line per source instead of burying the
+  attribution in prose, and every failing text run now ends with a minimal
+  aligned fix-list: one (page, element, broken-thing) triple per line,
+  nothing else (meta rows use `meta:<key>` + the got/expected diff). A
+  clean run prints no fix-list section. `--json` is purely additive — no
+  field removed or re-typed — and no new flags were introduced; exit codes
+  are exactly as before.
+- **MCP: `crust_load_run` `assert` accepts a string OR an array of
+  predicates.** Each array entry composes its own `assert` stage after
+  `stats`, matching the documented one-predicate-per-gate pattern — a
+  failure names exactly the predicate that failed. The tool's examples are
+  now the report-preserving, status-first pattern: `target` is plain stages
+  (an `expect` inside `target` runs BEFORE stats and suppresses the summary
+  when it fails), and the `assert` example gates the status histogram
+  before latency.
+- **MCP tool-class taxonomy and teardown tiers.** The `initialize`
+  handshake's `instructions` now classify every tool before the first call:
+  static check (`crust_check_line` — parses, runs nothing) · execution
+  (`crust_run_line` and the test/gen tools — arbitrary stages, real side
+  effects; target approval, credentials, writes and cleanup stay the
+  caller's responsibility) · network/load generation (`crust_load_run`,
+  `crust_verify_web_links` — bounded, approved non-production targets only)
+  · long-lived resources (mock server, procs, logs — held by the server
+  process, die when it exits). Teardown is stated in three tiers and no
+  tool crosses them: LOCAL processes are killed whole (process group,
+  grandchildren included); mock SESSIONS close (port released — `--state`
+  files/DBs are application data and stay on disk); APPLICATION data and
+  remote/backend resources are never touched by teardown. The stdio
+  transport contract (one frame per line, fresh crust child per one-shot
+  call, host-side vs crust-side error attribution) is documented in USAGE,
+  the crust-mcp skill, and the website.
+- **Canonical HTTP result-shapes reference.** USAGE gained the authoritative
+  table (first-stage `GET`/`DELETE` and mid-pipeline non-GET verbs yield
+  `Response`s; mid-pipeline `GET` is ALWAYS the timed path yielding
+  `{status, ms, url}` records; `parallel` promotes any verb), mirrored on
+  the website at `/docs/http-result-shapes/`; the three big skills point at
+  it instead of restating divergent versions.
+- **Report-preserving, status-first load gates.** The primary documented CI
+  pattern is now the one that survives failure: `stats --out report.json`
+  before any gate, status histogram gated before latency or rate — with the
+  `expect`-before-`stats` report-loss warning and the
+  requested-vs-achieved-rate explanation stated plainly (`stats` reports;
+  only `assert` gates).
+- **Cleanup guarantees pinned by tests.** `crust.onExit` fires from the
+  centralized shutdown on every exit path including fail-fast failure of
+  `-c`, script, and stdin runs (with the failing line's code); a throwing
+  hook logs `crust: onExit error:` and preserves the original code. The
+  bypasses are explicit and test-pinned (`tests/onexit.test.ts`): any direct
+  `process.exit()` — including inside an `onSignal` handler —, SIGINT/
+  SIGTERM with no `onSignal` handler, and `kill -9`. Docs now say exactly
+  this instead of implying line placement guarantees teardown.
+- **Contract-review checklist.** `docs/CONTRACT-REVIEW.md` (published on the
+  website at `/docs/contract-review/`): the full human gate for gen-fixtures
+  output — review record, expected statuses, negative-case isolation, flow
+  assumptions, execution approval, outcome classification. The
+  `crust-api-testing` skill carries the condensed version and points at the
+  full checklist.
+- **Fixture evidence taxonomy.** Skill, USAGE, and website now teach what
+  EVIDENCE a test actually produces — Tier 1 snapshot/contract verification
+  (setup prepares request context, not state; do not call it "seeded" when
+  nothing is seeded), Tier 2 DB-verified flow (seed → verify the seed →
+  call → query → compare against the live result, with run-owned data,
+  explicit identity matching, and cleanup defined before writes), Tier 3
+  demo/quickstart (disposable local resource; app safeguards stay in their
+  own approved fixture) — with the naming rule and the
+  attestations-are-declarations rule stated at every tier.
+
+### Changed
+
+- **The release toolchain's bun pin moved 1.3.14 → 1.4.3.** Bun's
+  error-message text drifts between versions (1.3.14 quotes the importer
+  path in `ERR_MODULE_NOT_FOUND`), and crust's error-message-dependent
+  logic is pinned against one version; CI and local now run the same pin.
+- **Duplicate links to one failing target now aggregate to ONE failure with
+  N sources.** In 0.3.5, `missing-anchor` and `og-image-broken` failures
+  were per-link, so the same broken anchor reached from five pages produced
+  five failures. With source attribution they collapse into one failure per
+  target carrying all five sources — `totals.failures` for that case can
+  DROP versus 0.3.5. That is a fix, not a regression: one broken URL is one
+  finding no matter how many pages link it.
+
 ## [0.3.5] — 2026-11-12
 
 ### Added

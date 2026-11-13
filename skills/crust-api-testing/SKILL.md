@@ -1,11 +1,23 @@
 ---
 name: crust-api-testing
-description: Test HTTP APIs with crust — .pipes suites (one fixture pipeline per line, request chaining via capture, inline SQL verification), .crust.ts fixtures with setup/matchers, and gen-fixtures which derives negative-case matrices and CRUD flow suites from an OpenAPI spec. Use for API integration tests, contract tests from a spec, auth/authz negative cases, or DB-verified endpoint tests.
+description: Test HTTP APIs with crust — .pipes suites (one fixture pipeline per line, request chaining via capture, inline SQL verification), .crust.ts fixtures with setup/matchers, gen-fixtures which derives negative-case matrices and CRUD flow suites from an OpenAPI spec, and the evidence-tier taxonomy (snapshot vs DB-verified vs demo). Use for API integration tests, contract tests from a spec, auth/authz negative cases, or DB-verified endpoint tests.
 ---
 
 # crust API testing
 
-Three layers, one binary. Pick the lightest that fits:
+## The shared principle: the lightest CORRECT layer
+
+Choose the lightest native layer that preserves correctness, observability,
+and safety — not merely the shortest syntax.
+
+- Use `.pipes` for straightforward requests, assertions, and supported request chaining.
+- Use `.crust.ts` when setup, custom matchers, or required safety controls cannot be expressed in pipes.
+- Use `gen-fixtures` for supported contract-derived cases, followed by review.
+- Use native load pipelines for paced traffic, measurements, and explicit success gates.
+- Do not force a case into pipes when doing so removes a required guarantee.
+- Consult repository-specific execution and credential policies before running examples.
+
+Three layers, one binary:
 
 | Layer | File | Best for |
 |---|---|---|
@@ -55,6 +67,9 @@ writes the same text report stdout shows; the file never changes the exit code.
   exits 0 — gate with `expect 200` or `stats | assert (s =>
   s.redirectRefused === 0)`; exit 0 alone is never request success in load
   mode.
+- Result shapes per execution context (`Response` vs timed `{status, ms, url}`
+  records, body draining, `.json()` availability): canonical table at
+  https://lariocpt.github.io/crust-website/docs/http-result-shapes/.
 - Exit codes: 0 all pass · 1 any fail · 2 no files/bad args.
 
 ## .crust.ts fixtures (test-fixture)
@@ -104,6 +119,36 @@ module-scope promise-cached factory. Fixture files may import ONLY relative
 modules and Bun builtins (the binary can't resolve npm at runtime) —
 `Bun.SQL`, `Bun.file`, `Bun.jwt`.
 
+## What evidence does your test produce?
+
+**Tier 1 — snapshot / contract verification.** Response vs a declared case +
+supplied snapshot; setup prepares REQUEST CONTEXT (url, headers, expected),
+not state. Never call it "seeded"/"integration" when nothing is seeded or
+verified at the data layer — it proves contract shape + declared oracle.
+
+**Tier 2 — DB-verified flow.** seed → verify the seed → call the API → query
+the DB → compare against the LIVE query result. Native shape:
+
+```crust
+{"email": "u-$RUN_ID@t.dev"} | POST $BASE/api/users -H "authorization: Bearer $TOKEN" | assert (r => r.status === 201) | (r => r.json()) | capture UID (u => u.id)
+sql "SELECT email FROM users WHERE id = '$UID'" | assert (r => r.email === "u-$RUN_ID@t.dev")
+```
+
+Carries: run-owned data (`$RUN_ID` unique per run, set by setup — never
+shared mutable state); explicit identity matching (query the id you
+captured, never an unrelated record); failure-path cleanup defined BEFORE
+writes — a later line is happy-path only; guaranteed teardown is `crust.onExit`.
+
+**Tier 3 — demo / quickstart.** Disposable local resource, ordinary CRUD —
+the built-in mock server is the native fit — isolates "how little glue does
+crust need" from app safeguards (graph resolution, provisioning denial,
+identity-sensitive stores) — separate approved fixture, never folded in.
+
+Cross-cutting: label the tier so a green run cannot imply DB-level proof it
+never produced; approval/redirect/transport safeguards stay regardless of
+tier; setup attestations (flags asserting IAM/graph/provisioning policy) are
+DECLARATIONS, not backend verification.
+
 ## gen-fixtures — spec-driven cases
 
 ```
@@ -130,6 +175,10 @@ Setup-module contract (imported lazily): `shared()` promise-cached context,
 `flowOverrides: { "<template>": { body?: {...}, skip?: true } }` for creates
 whose values a spec can't express (business date rules → `body` merge;
 required foreign keys → `skip`).
+When the contract disagrees with the 400 convention (422 backends, 404/403
+concealment), the optional `expectations` block configures correct statuses —
+a documented status always wins over a configured one;
+`docs/USAGE.md §gen-fixtures` has the schema and precedence.
 
 The `--out` dir is DELETED and recreated every run — never hand-edit
 generated files.
@@ -145,10 +194,106 @@ whose create body cannot be filled — are dropped and NAMED on stdout
 (`gen-fixtures: 2 case(s) skipped for POST /things …`, `skipping flow for
 /things …`). A silently smaller suite would look like coverage.
 
+Every generation's LAST write is `<out>/gen-manifest.json`: each case with
+its expectation's provenance (`contract:<spec pointer>` when the spec
+documents the status), each skip, each unsupported op — review it BEFORE
+running. Deterministic (same spec + version → byte-identical); it records
+generation, never execution.
+https://lariocpt.github.io/crust-website/docs/recipes/gen-fixtures/
+
+## Generated cases are candidates, not certified coverage
+
+A generator can derive request mutations from a schema. It cannot universally
+infer backend-specific status codes, error envelopes, authorization
+concealment policies, business preconditions, or cleanup behavior.
+
+For negative tests:
+
+- Begin with an otherwise valid request.
+- Mutate one intended condition.
+- Ensure authentication and resource preconditions allow the request to
+  reach the intended validation layer (a request that dies at auth never
+  proves the validation code).
+- Assert the documented status.
+- Where the contract provides structured error evidence, verify the relevant
+  field, location, or error code.
+- Avoid exact human-readable message matching unless wording is contractual.
+
+A generic error status is insufficient evidence when the request could have
+failed for an unrelated reason. And the generated **400 validation matrix is
+a generator assumption, not a universal API convention** — some contracts
+specify `422` (or another status) for validation failures; when the contract
+disagrees, say so in review and adjust expectations to the CONTRACT, never
+the other way around. Document unsupported assumptions and skipped cases
+rather than silently reducing coverage or normalizing the contract to fit
+generation.
+
+## Contract review before generation
+
+Review the contract BEFORE generating and record the review beside the
+generated output. Record fields (one per line):
+
+```
+API/service:
+Contract path:
+Contract revision:
+Backend revision, if available:
+Crust version:
+Reviewer:
+Review date:
+Generated output directory:
+Intended execution scope:
+Unresolved discrepancies:
+```
+
+Highest-risk checks (full checklist:
+https://lariocpt.github.io/crust-website/docs/contract-review/):
+
+- Expected statuses come from the reviewed contract — validation cases do
+  NOT default to 400 (a 422 contract must generate 422 expectations).
+- Authorization cases account for intentional 404 concealment; unknown-id
+  cases use syntactically valid identifiers.
+- One intended condition per negative case; unrelated fields stay valid so
+  the request reaches the intended validation layer.
+- Dedicated `--out` dir; regeneration cannot touch manual fixtures; never
+  hand-edit generated files.
+- Classify every failure (backend · contract · generator · environment ·
+  incorrect test) BEFORE changing any expectation.
+- Execution is approved separately — target, identity, resource scope,
+  writes, cleanup. This review grants no permission beyond the recorded
+  execution scope.
+
 ## Workflow for a new API
 
-1. `gen-fixtures` against the spec → run matrix + flows → fix what fails.
-2. Hand-write `.pipes` for business flows the spec can't express (SQL
-   checks, multi-resource invariants).
-3. Reach for `.crust.ts` only when a case needs real code (crypto, files,
-   custom matchers).
+1. Identify the authoritative contract and record its version or revision.
+2. Review generation assumptions against that contract: validation status
+   codes; authentication and authorization behavior; error envelopes;
+   resource identifiers; response schemas; CRUD lifecycle support.
+3. Generate into a dedicated output directory (`--out`, default `tests/gen`).
+   Generation DELETES and recreates that directory; never target manually
+   authored sources.
+4. Review generated cases, expected responses, setup requirements, and
+   skipped cases (they are NAMED on stdout) before execution.
+5. Obtain the required target, identity, resource, write, cleanup, and load
+   approvals from repository policy — the skill never grants any of them.
+6. Execute only the approved scope.
+7. Classify failures before changing expectations or implementation:
+   backend defect · contract defect · unsupported generator assumption ·
+   environment/setup failure · incorrect test.
+8. Add manually authored native fixtures or pipelines for unsupported cases.
+   Do not hand-edit generated files (the next regeneration erases the edit).
+9. Record remaining coverage gaps explicitly.
+
+> Never change an expected result solely because the backend returned
+> something different. A passing test must reflect a reviewed contract.
+
+## Version and evidence
+
+Behavior described here was verified against **crust v0.3.5** (source-read
+and run through the compiled binary where it matters: `--redirect` record
+shapes, `output.schema` $ref refusal, gen-fixtures skip reporting). New in
+**v0.3.6**: the `gen-manifest.json` review artifact, the setup-module
+`expectations` block, and the evidence-tier taxonomy. Newer
+crust versions may extend behavior; re-verify before documenting it. Keep
+approved targets, credentials, transport exceptions, resource ownership, and
+execution restrictions in repository policy, not in this skill.

@@ -272,15 +272,16 @@ export const ONE_SHOT_TOOLS: ToolDef[] = [
   {
     name: "crust_gen_fixtures",
     description:
-      "Generate a fixture suite from an OpenAPI spec with `gen-fixtures`: CRUD flow files plus a negative-case matrix (required-field drops, wrong types) as .crust.ts fixtures in an output dir. Point crust_test_fixture at the generated glob afterwards.",
+      "Generate a fixture suite from an OpenAPI spec with `gen-fixtures`: CRUD flow files plus a negative-case matrix (required-field drops, wrong types) as .crust.ts fixtures in an output dir. Also writes gen-manifest.json — per-case expectation provenance and skip reasons (0.3.6); review it before running: generation records intent, it does not verify the API. Point crust_test_fixture at the generated glob afterwards.",
     inputSchema: {
       type: "object",
       properties: {
         spec: { type: "string", description: "OpenAPI/Swagger spec, path or URL" },
-        out: { type: "string", description: "output directory (default fixtures/generated)" },
+        out: { type: "string", description: "output directory (default tests/gen)" },
         setup: {
           type: "string",
-          description: "setup module name the fixtures import (default ../setup.ts)",
+          description:
+            "setup module path (default ./tests/gen-setup.ts — a convention in YOUR repo; crust ships examples/gen-setup.ts as the template)",
         },
         no_flows: { type: "boolean", description: "skip the CRUD flow suite, negative cases only" },
         cwd: { type: "string" },
@@ -305,7 +306,7 @@ export const ONE_SHOT_TOOLS: ToolDef[] = [
   {
     name: "crust_verify_web_links",
     description:
-      "Crawl a site and verify every link, anchor, redirect chain and OG/meta tag with `verify-web-links` (machine-readable JSON output). --base-url discovers the sitemap (robots.txt → /sitemap.xml); site_map_url takes a local sitemap so build output can be checked before publishing. Broken links / meta regressions exit nonzero → error result with the violations. Crawling is long-running: raise timeout_ms for big sites.",
+      "Crawl a site and verify every link, anchor, redirect chain and OG/meta tag with `verify-web-links` (machine-readable JSON output). Failures name their source page and element kind via structured `sources`/`meta` fields (0.3.6). --base-url discovers the sitemap (robots.txt → /sitemap.xml); site_map_url takes a local sitemap so build output can be checked before publishing. Broken links / meta regressions exit nonzero → error result with the violations. Crawling is long-running: raise timeout_ms for big sites.",
     inputSchema: {
       type: "object",
       properties: {
@@ -324,7 +325,11 @@ export const ONE_SHOT_TOOLS: ToolDef[] = [
         no_recurse: { type: "boolean" },
         no_anchors: { type: "boolean" },
         include_external: { type: "boolean" },
-        strict: { type: "boolean", description: "treat warnings (redirects, OG) as failures" },
+        strict: {
+          type: "boolean",
+          description:
+            "--strict: exit 1 unless every discovered link was checked (a completeness gate — a --max-pages cut-off or unchecked fragment — not a warnings escalation)",
+        },
         cwd: { type: "string" },
         timeout_ms: { type: "number", description: "child watchdog (default 600000)" },
       },
@@ -381,13 +386,14 @@ export const ONE_SHOT_TOOLS: ToolDef[] = [
   {
     name: "crust_load_run",
     description:
-      'A paced load run CI can gate on, built as the documented pipeline: `load <dur> <rate>/s | parallel <n> | <target> | stats | assert`. Thresholds are assert composition, so a failure names the predicate and exits nonzero; a run that measured nothing is tagged `empty` and refused. Multi-phase ramps: phases: "10s 50/s, 5m 200/s" (mutually exclusive with duration+rate). Returns the stats output; assert failures are error results with the stats still included.',
+      'A paced load run CI can gate on, composed as the documented pipeline: `load <dur> <rate>/s | parallel <n> | <target> | stats | assert`. Gates belong AFTER stats — the tool composes them there: a post-stats assert failure is an error result WITH the stats still included. An `expect` inside target runs BEFORE stats: when it fails, no stats exist to report. A run that measured nothing is tagged `empty` and refused. Multi-phase ramps: phases: "10s 50/s, 5m 200/s" (mutually exclusive with duration+rate).',
     inputSchema: {
       type: "object",
       properties: {
         target: {
           type: "string",
-          description: 'stages under load, e.g. "GET http://localhost:3000/health | expect 200"',
+          description:
+            'stages under load, e.g. "GET http://localhost:3000/health" — keep gates out of here: an `expect` before stats suppresses the summary when it fails',
         },
         duration: { type: "string", description: 'phase duration, e.g. "30s" or "5m"' },
         rate: { type: "number", description: "requests per second for the duration" },
@@ -399,8 +405,9 @@ export const ONE_SHOT_TOOLS: ToolDef[] = [
         stats_every: { type: "number", description: "rolling window seconds for stats lines" },
         stats_out: { type: "string", description: "write the final stats JSON to this path" },
         assert: {
-          type: "string",
-          description: 'gate predicate, e.g. "s => s.p95 < 250" (parens optional)',
+          oneOf: [{ type: "string" }, { type: "array", items: { type: "string" } }],
+          description:
+            'gate predicate(s), one per gate, composed as one assert stage per entry after stats — a failure names the failing predicate. Status-first example: "s => Object.keys(s.status).every(k => k.startsWith("2")) && s.p95 < 250", or ["s => Object.keys(s.status).every(k => k.startsWith("2"))", "s => s.p95 < 250"] (parens optional)',
         },
         cwd: { type: "string" },
         env: { type: "object", additionalProperties: { type: "string" } },
@@ -461,9 +468,21 @@ export const ONE_SHOT_TOOLS: ToolDef[] = [
       const statsOut = optStr(args, "stats_out");
       if (statsOut) stats += ` --out ${statsOut}`;
       let line = `${head} | parallel ${parallel} | ${reqStr(args, "target").trim()} | ${stats}`;
-      const assertText = optStr(args, "assert");
-      if (assertText !== undefined) {
-        const pred = assertText.trim();
+      // `assert` takes ONE predicate or an ARRAY of them — each entry composes
+      // its own assert stage after stats, matching the documented one-gate-per-
+      // assert pattern where a failure names exactly the predicate that failed.
+      const assertVal = args.assert;
+      let preds: string[] = [];
+      if (assertVal !== undefined && assertVal !== null) {
+        preds = Array.isArray(assertVal)
+          ? (optStrArray(args, "assert") ?? [])
+          : [optStr(args, "assert") as string];
+        if (preds.length === 0) {
+          throw new ToolError('invalid "assert": array needs at least one predicate');
+        }
+      }
+      for (const raw of preds) {
+        const pred = raw.trim();
         line += ` | assert ${pred.startsWith("(") ? pred : `(${pred})`}`;
       }
       // Grace computed from the schedule itself — a watchdog shorter than the

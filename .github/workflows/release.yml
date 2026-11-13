@@ -37,7 +37,7 @@ jobs:
           # Pinned: a Bun regression in --compile --bytecode cross-compilation would
           # otherwise silently break every future release. CI stays on latest as the
           # canary that tells us when it is safe to move this.
-          bun-version: "1.3.14"
+          bun-version: "1.4.3"
       - run: bun install --frozen-lockfile --ignore-scripts
       - run: bun test
       - run: bunx tsc --noEmit
@@ -57,7 +57,7 @@ jobs:
           # Pinned: a Bun regression in --compile --bytecode cross-compilation would
           # otherwise silently break every future release. CI stays on latest as the
           # canary that tells us when it is safe to move this.
-          bun-version: "1.3.14"
+          bun-version: "1.4.3"
 
       - name: Resolve version from tag
         id: version

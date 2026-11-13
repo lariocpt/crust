@@ -24,6 +24,40 @@ export function incompleteReasons(t: VerifyTotals): string[] {
   return reasons;
 }
 
+/**
+ * The minimal fix-list: one line per (page, element, broken-thing) triple,
+ * nothing else — the reason stays in the full report above it. Link findings
+ * contribute one row per source (element = the LinkKind that linked it,
+ * broken = the failing URL); meta findings contribute `meta:<key>` rows with
+ * the value diff. `--json` carries the structured `sources`/`meta` fields
+ * instead — the data IS the fix-list there.
+ */
+export function fixListRows(failures: Failure[]): [string, string, string][] {
+  const rows: [string, string, string][] = [];
+  for (const f of failures) {
+    if (f.kind === "meta-mismatch" && f.meta) {
+      rows.push([
+        f.url,
+        `meta:${f.meta.key}`,
+        `got ${JSON.stringify(f.meta.actual)} (expected ${JSON.stringify(f.meta.expected)})`,
+      ]);
+      continue;
+    }
+    if (f.kind === "meta-fixture-no-page") {
+      rows.push([f.url, "meta:fixture", "not crawled"]);
+      continue;
+    }
+    for (const s of f.sources ?? []) {
+      rows.push([s.fromUrl, s.kind, f.url]);
+    }
+  }
+  return rows.sort((a, b) => cmp(a[0], b[0]) || cmp(a[1], b[1]) || cmp(a[2], b[2]));
+}
+
+function cmp(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
 export function renderText(report: VerifyReport): string {
   const lines: string[] = [];
   const { pages, assets, failures, sniffedPages } = report.totals;
@@ -49,6 +83,24 @@ export function renderText(report: VerifyReport): string {
       lines.push(`  [${kind}] ${arr.length}`);
       for (const f of arr) {
         lines.push(`    ${f.url}  — ${f.detail}`);
+        // Where the failing thing was found — explicit lines, never buried in
+        // the prose detail. `sitemap` means the URL came from a sitemap <loc>.
+        for (const s of f.sources ?? []) {
+          lines.push(`      from ${s.fromUrl} (${s.kind})`);
+        }
+      }
+    }
+    // The fix-list closes every failing run: aligned triples, one per
+    // (page, element, broken-thing). A clean run never prints this section.
+    const rows = fixListRows(report.failures);
+    if (rows.length > 0) {
+      const pageW = Math.max(4, ...rows.map((r) => r[0].length));
+      const elemW = Math.max(7, ...rows.map((r) => r[1].length));
+      lines.push("");
+      lines.push("  fix list");
+      lines.push(`  ${"page".padEnd(pageW)}  ${"element".padEnd(elemW)}  broken link / diff`);
+      for (const [p, e, b] of rows) {
+        lines.push(`  ${p.padEnd(pageW)}  ${e.padEnd(elemW)}  ${b}`);
       }
     }
   }

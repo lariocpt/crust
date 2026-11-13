@@ -1,8 +1,10 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import pkg from "../package.json" with { type: "json" };
 import {
   derefSchemas,
   envNameFor,
@@ -2899,5 +2901,665 @@ describe("a request body on GET generates no request that carries one (F52)", ()
     expect(text).toContain("POST /widgets missing required 'name' -> 400");
     expect(text).toContain('body: "');
     expect(log.find((l) => l.includes("GET or HEAD"))).toBeUndefined();
+  });
+});
+
+describe("gen-manifest.json — the generation record", () => {
+  interface ManifestCase {
+    operation: string;
+    case: string;
+    mutation: string;
+    expectStatus: number;
+    expectationSource: string;
+    prerequisites: string[];
+  }
+  interface Manifest {
+    crustGenManifest: number;
+    crustVersion: string;
+    spec: { path: string; sha256: string };
+    note: string;
+    cases: ManifestCase[];
+    skipped: { operation: string; reason: string }[];
+    unsupported: { operation: string; assumption: string }[];
+  }
+  async function readManifest(path: string) {
+    const text = await Bun.file(path).text();
+    return { text, manifest: JSON.parse(text) as Manifest };
+  }
+
+  test("manifest exists, parses, and covers every generated case", async () => {
+    const out = join(dir, "man-cover");
+    const result = await generateFixtures({
+      swagger: join(dir, "spec.json"),
+      out,
+      setup: join(dir, "setup.ts"),
+      log: () => {},
+    });
+    expect(result.manifestPath).toBe(join(out, "gen-manifest.json"));
+    expect(existsSync(result.manifestPath)).toBe(true);
+    const { manifest } = await readManifest(result.manifestPath);
+    expect(manifest.crustGenManifest).toBe(1);
+    expect(manifest.crustVersion).toBe(pkg.version);
+    expect(manifest.note).toBe("Records generation only. Nothing here was executed or verified.");
+    // Every generated case is in the artifact — the count is the pin.
+    expect(manifest.cases.length).toBe(result.totalCases);
+    // The spec is identified by a content hash, not a timestamp: same bytes, same hash.
+    const bytes = await Bun.file(join(dir, "spec.json")).arrayBuffer();
+    const hash = createHash("sha256").update(new Uint8Array(bytes)).digest("hex");
+    expect(manifest.spec).toEqual({ path: join(dir, "spec.json"), sha256: hash });
+    // No timestamps anywhere: the file is a pure function of spec + crust version.
+    expect(JSON.stringify(manifest)).not.toMatch(/\d{4}-\d{2}-\d{2}/);
+  });
+
+  test("provenance: every case names the spec node that documents its status", async () => {
+    const result = await generateFixtures({
+      swagger: join(dir, "spec.json"),
+      out: join(dir, "man-prov"),
+      setup: join(dir, "setup.ts"),
+      log: () => {},
+    });
+    const { manifest } = await readManifest(result.manifestPath);
+    // Every fixture case today is gated on a DOCUMENTED response, so every
+    // source is `contract:`. `convention:` is the namespace for an assumed
+    // status (no fixture case assumes one today); F6 adds `configured:`.
+    expect(manifest.cases.length).toBeGreaterThan(0);
+    for (const c of manifest.cases) {
+      expect(c.expectationSource.startsWith("contract:")).toBe(true);
+    }
+    const byName = new Map<string, ManifestCase>();
+    for (const c of manifest.cases) byName.set(c.case, c);
+    const matrix = byName.get("POST /api/login missing required 'email' -> 400");
+    expect(matrix?.expectationSource).toBe("contract:paths./api/login.post.responses.400");
+    expect(matrix?.mutation).toBe("missing required 'email'");
+    expect(matrix?.prerequisites).toEqual([]);
+    expect(
+      byName.get("POST /api/things/{thingId}/widgets without credentials -> 401")
+        ?.expectationSource,
+    ).toBe("contract:paths./api/things/{thingId}/widgets.post.responses.401");
+    const outsider = byName.get("POST /api/things/{thingId}/widgets as non-member -> 403");
+    expect(outsider?.expectationSource).toBe(
+      "contract:paths./api/things/{thingId}/widgets.post.responses.403",
+    );
+    expect(outsider?.prerequisites).toEqual(["auth", "scope:outsider", "resource:thingId"]);
+    expect(
+      byName.get("GET /api/invites/{token} with unknown token -> 404")?.expectationSource,
+    ).toBe("contract:paths./api/invites/{token}.get.responses.404");
+  });
+
+  test("a documented 400 yields contract: provenance; an undocumented one yields no matrix and is disclosed", async () => {
+    const quiet = {
+      openapi: "3.0.0",
+      info: { title: "q", version: "1" },
+      paths: {
+        "/api/quiet": {
+          post: {
+            tags: ["quiet"],
+            requestBody: {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    required: ["x"],
+                    properties: { x: { type: "string" } },
+                  },
+                },
+              },
+            },
+            responses: { "201": { description: "created" } },
+          },
+        },
+      },
+    };
+    await writeFile(join(dir, "quiet-spec.json"), JSON.stringify(quiet));
+    const result = await generateFixtures({
+      swagger: join(dir, "quiet-spec.json"),
+      out: join(dir, "man-quiet"),
+      setup: join(dir, "setup.ts"),
+      flows: false,
+      log: () => {},
+    });
+    const { manifest } = await readManifest(result.manifestPath);
+    // The matrix gate holds: no cases were invented for the silent op…
+    expect(manifest.cases.filter((c) => c.operation === "POST /api/quiet")).toEqual([]);
+    // …and the absence is IN the artifact, naming what crust could not derive.
+    expect(manifest.unsupported).toEqual([
+      {
+        operation: "POST /api/quiet",
+        assumption: expect.stringContaining("documents no 400"),
+      },
+    ]);
+  });
+
+  test("determinism: two generations of the same spec are byte-identical", async () => {
+    const a = await generateFixtures({
+      swagger: join(dir, "spec.json"),
+      out: join(dir, "man-det-a"),
+      setup: join(dir, "setup.ts"),
+      log: () => {},
+    });
+    const b = await generateFixtures({
+      swagger: join(dir, "spec.json"),
+      out: join(dir, "man-det-b"),
+      setup: join(dir, "setup.ts"),
+      log: () => {},
+    });
+    expect(await Bun.file(a.manifestPath).text()).toBe(await Bun.file(b.manifestPath).text());
+  });
+
+  test("skipped flows land in the manifest with the reason stdout shows", async () => {
+    const logs: string[] = [];
+    const result = await generateFixtures({
+      swagger: join(dir, "spec.json"),
+      out: join(dir, "man-skips"),
+      setup: join(dir, "setup.ts"),
+      log: (l: string) => logs.push(l),
+    });
+    const { manifest } = await readManifest(result.manifestPath);
+    const stdout = logs.join("\n");
+    expect(stdout).toContain(
+      "skipping flow for /api/users/{userId}/posts — nested path params {userId}",
+    );
+    expect(stdout).toContain(
+      "skipping flow for /api/blobs — no id derivable from the POST 2xx response",
+    );
+    // Every manifest skip mirrors a stdout notice, reason verbatim.
+    for (const s of manifest.skipped) {
+      expect(stdout).toContain(`skipping flow for ${s.operation} — ${s.reason}`);
+    }
+    expect(manifest.skipped).toContainEqual({
+      operation: "/api/users/{userId}/posts",
+      reason: "nested path params {userId}",
+    });
+    expect(manifest.skipped).toContainEqual({
+      operation: "/api/blobs",
+      reason: "no id derivable from the POST 2xx response",
+    });
+  });
+
+  test("flowOverrides.skip is recorded in the manifest", async () => {
+    const spec = {
+      openapi: "3.1.0",
+      info: { title: "ov", version: "1" },
+      paths: {
+        "/api/tasks": {
+          post: {
+            tags: ["tasks"],
+            requestBody: {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    required: ["title"],
+                    properties: { title: { type: "string" } },
+                  },
+                },
+              },
+            },
+            responses: {
+              "201": {
+                description: "ok",
+                content: { "application/json": { example: { id: "x" } } },
+              },
+            },
+          },
+        },
+        "/api/tasks/{taskId}": {
+          get: { tags: ["tasks"], responses: { "200": { description: "ok" } } },
+        },
+      },
+    };
+    await writeFile(join(dir, "ov-man-spec.json"), JSON.stringify(spec));
+    await writeFile(
+      join(dir, "ov-man-setup.ts"),
+      `${SETUP}\nexport const flowOverrides = { "/api/tasks": { skip: true } };\n`,
+    );
+    const logs: string[] = [];
+    const result = await generateFixtures({
+      swagger: join(dir, "ov-man-spec.json"),
+      out: join(dir, "man-ov"),
+      setup: join(dir, "ov-man-setup.ts"),
+      log: (l: string) => logs.push(l),
+    });
+    const { manifest } = await readManifest(result.manifestPath);
+    expect(manifest.skipped).toContainEqual({
+      operation: "/api/tasks",
+      reason: "flowOverrides.skip in the setup module",
+    });
+    expect(logs.join("\n")).toContain(
+      "skipping flow for /api/tasks — flowOverrides.skip in the setup module",
+    );
+  });
+
+  test("cases dropped for an unfillable body are recorded in the manifest", async () => {
+    const spec = {
+      openapi: "3.0.0",
+      info: { title: "u", version: "1" },
+      paths: {
+        "/things": {
+          post: {
+            tags: ["things"],
+            requestBody: {
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    required: ["subnetId", "name"],
+                    properties: {
+                      subnetId: {
+                        type: "string",
+                        pattern: "^(subnet-[0-9a-f]{8}|subnet-[0-9a-f]{17})(?!z)$",
+                      },
+                      name: { type: "string" },
+                    },
+                  },
+                },
+              },
+            },
+            responses: { "200": { description: "ok" }, "400": { description: "bad" } },
+          },
+        },
+      },
+    };
+    await writeFile(join(dir, "unsound-man.json"), JSON.stringify(spec));
+    const logs: string[] = [];
+    const result = await generateFixtures({
+      swagger: join(dir, "unsound-man.json"),
+      out: join(dir, "man-unsound"),
+      setup: join(dir, "setup.ts"),
+      flows: false,
+      log: (l: string) => logs.push(l),
+    });
+    const { manifest } = await readManifest(result.manifestPath);
+    const stdout = logs.join("\n");
+    expect(stdout).toContain("case(s) skipped for POST /things");
+    const entry = manifest.skipped.find((s) => s.operation === "POST /things");
+    expect(entry).toBeDefined();
+    // The reason mirrors the stdout notice (minus the `gen-fixtures:` frame).
+    const reason = entry?.reason ?? "";
+    expect(reason).toMatch(/^\d+ case\(s\) skipped — /);
+    expect(stdout).toContain(`POST /things — ${reason.replace(/^\d+ case\(s\) skipped — /, "")}`);
+    // The dropped cases are NOT counted as generated: what survives all
+    // asserts the one field the base body cannot fill.
+    const kept = manifest.cases.filter((c) => c.operation === "POST /things");
+    expect(kept.length).toBeGreaterThan(0);
+    for (const c of kept) expect(c.case).toContain("'subnetId'");
+  });
+
+  test("the manifest lives inside --out and is rewritten, not appended", async () => {
+    const out = join(dir, "man-rewrite");
+    await generateFixtures({
+      swagger: join(dir, "spec.json"),
+      out,
+      setup: join(dir, "setup.ts"),
+      log: () => {},
+    });
+    const manifestPath = join(out, "gen-manifest.json");
+    expect(manifestPath.startsWith(`${out}/`)).toBe(true);
+    // The dir wipe takes the manifest with it: a stale file must not survive
+    // into the next generation — the regeneration rewrites it whole.
+    await writeFile(manifestPath, "NOT JSON — a stale artifact\n");
+    const again = await generateFixtures({
+      swagger: join(dir, "spec.json"),
+      out,
+      setup: join(dir, "setup.ts"),
+      log: () => {},
+    });
+    const fresh = await generateFixtures({
+      swagger: join(dir, "spec.json"),
+      out: join(dir, "man-rewrite-fresh"),
+      setup: join(dir, "setup.ts"),
+      log: () => {},
+    });
+    expect(await Bun.file(again.manifestPath).text()).toBe(
+      await Bun.file(fresh.manifestPath).text(),
+    );
+  });
+
+  test("a failed generation leaves no manifest", async () => {
+    const out = join(dir, "man-fail");
+    await expect(
+      generateFixtures({
+        swagger: join(dir, "no-such-spec.json"),
+        out,
+        setup: join(dir, "setup.ts"),
+        log: () => {},
+      }),
+    ).rejects.toThrow();
+    // The out dir is wiped only AFTER the spec and setup module validate, so a
+    // failed generation never creates the dir — and never a manifest in it.
+    expect(existsSync(join(out, "gen-manifest.json"))).toBe(false);
+    expect(existsSync(out)).toBe(false);
+  });
+
+  test("the manifest carries names, never values", async () => {
+    const result = await generateFixtures({
+      swagger: join(dir, "spec.json"),
+      out: join(dir, "man-names"),
+      setup: join(dir, "setup.ts"),
+      log: () => {},
+    });
+    const text = await Bun.file(result.manifestPath).text();
+    // The setup module's scenario value, its header names, and its base URL
+    // must not leak into the artifact — prerequisites are NAMES.
+    expect(text).not.toContain("11111111-1111-4111-8111-111111111111");
+    expect(text).not.toContain("x-role");
+    expect(text).not.toContain("localhost");
+  });
+
+  test("CLI closes with the manifest line", async () => {
+    const { runCli } = await import("../src/genFixtures/cli");
+    const written: string[] = [];
+    const realWrite = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((chunk: string) => {
+      written.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write;
+    try {
+      const code = await runCli([
+        "--swagger",
+        join(dir, "spec.json"),
+        "--out",
+        join(dir, "man-cli"),
+        "--setup",
+        join(dir, "setup.ts"),
+      ]);
+      expect(code).toBe(0);
+    } finally {
+      process.stdout.write = realWrite;
+    }
+    const out = written.join("");
+    const manifestPath = join(dir, "man-cli", "gen-manifest.json");
+    // The closing line is the LAST stdout line of a successful run.
+    expect(out.trimEnd().endsWith(`gen-fixtures: manifest written — ${manifestPath}`)).toBe(true);
+    expect(existsSync(manifestPath)).toBe(true);
+  });
+});
+
+describe("expectations — reviewed setup-module configuration (F6)", () => {
+  // A contract that answers 422 (or conceals authorization) otherwise gets no
+  // matrix / no case family at all. The setup module's `expectations` block
+  // fills those gaps; a DOCUMENTED status always wins, per-operation beats
+  // global, and bad config refuses generation instead of being ignored.
+  interface ManifestLite {
+    cases: { operation: string; case: string; expectStatus: number; expectationSource: string }[];
+    unsupported: { operation: string; assumption: string }[];
+  }
+  async function manifestOf(path: string): Promise<ManifestLite> {
+    return JSON.parse(await Bun.file(path).text()) as ManifestLite;
+  }
+  const body = (schema: unknown) => ({
+    requestBody: { content: { "application/json": { schema } } },
+  });
+  const str = { type: "string" };
+
+  test("a configured validationStatus generates the matrix at 422 with configured: provenance", async () => {
+    const spec = {
+      openapi: "3.0.0",
+      info: { title: "c422", version: "1" },
+      paths: {
+        "/api/orders": {
+          post: {
+            tags: ["orders"],
+            ...body({ type: "object", required: ["name"], properties: { name: str } }),
+            responses: { "201": { description: "created" } },
+          },
+        },
+      },
+    };
+    await writeFile(join(dir, "exp-422-spec.json"), JSON.stringify(spec));
+    const setupPath = join(dir, "exp-422-setup.ts");
+    await writeFile(
+      setupPath,
+      `${SETUP}\nexport const expectations = { validationStatus: 422 };\n`,
+    );
+    const result = await generateFixtures({
+      swagger: join(dir, "exp-422-spec.json"),
+      out: join(dir, "exp-422"),
+      setup: setupPath,
+      flows: false,
+      log: () => {},
+    });
+    const file = await Bun.file(result.files[0]!).text();
+    expect(file).toContain("missing required 'name' -> 422");
+    expect(file).toContain("status: 422");
+    // No permissive anything: every case expects exactly 422, and the 400
+    // convention never appears — the contract says 422, the suite says 422.
+    expect(file).not.toContain("-> 400");
+    const manifest = await manifestOf(result.manifestPath);
+    expect(manifest.cases.length).toBeGreaterThan(0);
+    for (const c of manifest.cases) {
+      expect(c.expectStatus).toBe(422);
+      expect(c.expectationSource).toBe(`configured:${setupPath}`);
+    }
+    // The op left unsupported[] — the gap is filled, so the disclosure is gone.
+    expect(manifest.unsupported).toEqual([]);
+  });
+
+  test("precedence: operation override beats global; a documented 400 beats any configuration", async () => {
+    const spec = {
+      openapi: "3.0.0",
+      info: { title: "prec", version: "1" },
+      paths: {
+        // Documents its 400: configuration cannot contradict it.
+        "/api/a": {
+          post: {
+            tags: ["ab"],
+            ...body({ type: "object", required: ["x"], properties: { x: str } }),
+            responses: { "200": { description: "ok" }, "400": { description: "bad" } },
+          },
+        },
+        // Silent: the operation-specific override (409) beats the global 422.
+        "/api/b": {
+          post: {
+            tags: ["ab"],
+            ...body({ type: "object", required: ["y"], properties: { y: str } }),
+            responses: { "200": { description: "ok" } },
+          },
+        },
+      },
+    };
+    await writeFile(join(dir, "exp-prec-spec.json"), JSON.stringify(spec));
+    const setupPath = join(dir, "exp-prec-setup.ts");
+    await writeFile(
+      setupPath,
+      `${SETUP}\nexport const expectations = { validationStatus: 422, operations: { "POST /api/b": { validationStatus: 409 } } };\n`,
+    );
+    const result = await generateFixtures({
+      swagger: join(dir, "exp-prec-spec.json"),
+      out: join(dir, "exp-prec"),
+      setup: setupPath,
+      flows: false,
+      log: () => {},
+    });
+    const manifest = await manifestOf(result.manifestPath);
+    const a = manifest.cases.filter((c) => c.operation === "POST /api/a");
+    expect(a.length).toBeGreaterThan(0);
+    for (const c of a) {
+      expect(c.expectStatus).toBe(400);
+      expect(c.expectationSource).toBe("contract:paths./api/a.post.responses.400");
+    }
+    const b = manifest.cases.filter((c) => c.operation === "POST /api/b");
+    expect(b.length).toBeGreaterThan(0);
+    for (const c of b) {
+      expect(c.expectStatus).toBe(409);
+      expect(c.expectationSource).toBe(`configured:${setupPath}`);
+    }
+    expect(manifest.unsupported).toEqual([]);
+  });
+
+  test("concealment fills the unknown-id and outsider families with configured: provenance", async () => {
+    const spec = {
+      openapi: "3.0.0",
+      info: { title: "conc", version: "1" },
+      paths: {
+        // Unknown-id family, spec documents neither 404 nor 403.
+        "/api/ghosts/{ghostId}": {
+          get: { tags: ["ghosts"], responses: { "200": { description: "ok" } } },
+        },
+        // Outsider family (thingId is the scope param), same silence.
+        "/api/vaults/{thingId}/notes": {
+          get: { tags: ["vaults"], responses: { "200": { description: "ok" } } },
+        },
+      },
+    };
+    await writeFile(join(dir, "exp-conc-spec.json"), JSON.stringify(spec));
+    const setupPath = join(dir, "exp-conc-setup.ts");
+    await writeFile(setupPath, `${SETUP}\nexport const expectations = { concealment: "404" };\n`);
+    const result = await generateFixtures({
+      swagger: join(dir, "exp-conc-spec.json"),
+      out: join(dir, "exp-conc"),
+      setup: setupPath,
+      flows: false,
+      log: () => {},
+    });
+    const manifest = await manifestOf(result.manifestPath);
+    const ghost = manifest.cases.find((c) => c.case.includes("with unknown ghostId"));
+    expect(ghost?.expectStatus).toBe(404);
+    expect(ghost?.expectationSource).toBe(`configured:${setupPath}`);
+    const outsider = manifest.cases.find((c) => c.case.includes("as non-member"));
+    expect(outsider?.expectStatus).toBe(404);
+    expect(outsider?.expectationSource).toBe(`configured:${setupPath}`);
+  });
+
+  test("a documented family status beats a configured concealment — config never contradicts the spec", async () => {
+    // The main SPEC documents 404 (invites), 403 (widgets) and 400 (login).
+    // Configuring different statuses must change NOTHING about those cases.
+    const setupPath = join(dir, "exp-wins-setup.ts");
+    await writeFile(
+      setupPath,
+      `${SETUP}\nexport const expectations = { validationStatus: 422, concealment: "403" };\n`,
+    );
+    const result = await generateFixtures({
+      swagger: join(dir, "spec.json"),
+      out: join(dir, "exp-wins"),
+      setup: setupPath,
+      log: () => {},
+    });
+    const manifest = await manifestOf(result.manifestPath);
+    const byCase = new Map(manifest.cases.map((c) => [c.case, c]));
+    const invite = byCase.get("GET /api/invites/{token} with unknown token -> 404");
+    expect(invite?.expectStatus).toBe(404);
+    expect(invite?.expectationSource).toBe("contract:paths./api/invites/{token}.get.responses.404");
+    const outsider = byCase.get("POST /api/things/{thingId}/widgets as non-member -> 403");
+    expect(outsider?.expectStatus).toBe(403);
+    expect(outsider?.expectationSource).toBe(
+      "contract:paths./api/things/{thingId}/widgets.post.responses.403",
+    );
+    const login = byCase.get("POST /api/login missing required 'email' -> 400");
+    expect(login?.expectStatus).toBe(400);
+    expect(login?.expectationSource).toBe("contract:paths./api/login.post.responses.400");
+  });
+
+  test("bad expectations refuse generation: loud message, exit 2, no output dir", async () => {
+    const bads: [string, string][] = [
+      ["typo'd operation key", `{ operations: { "POST /api/taslk": { validationStatus: 422 } } }`],
+      ["status out of range", `{ validationStatus: 250 }`],
+      ["non-integer status", `{ validationStatus: 42.5 }`],
+      ["unknown key", `{ validationStatuses: 422 }`],
+      ["unknown per-op key", `{ operations: { "POST /api/login": { errStatus: 422 } } }`],
+      ["bad concealment", `{ concealment: "418" }`],
+    ];
+    for (const [what, cfg] of bads) {
+      const setupPath = join(dir, `exp-bad-${bads.findIndex((b) => b[0] === what)}.ts`);
+      await writeFile(setupPath, `${SETUP}\nexport const expectations = ${cfg};\n`);
+      const out = join(dir, `exp-bad-out-${bads.findIndex((b) => b[0] === what)}`);
+      await expect(
+        generateFixtures({
+          swagger: join(dir, "spec.json"),
+          out,
+          setup: setupPath,
+          flows: false,
+          log: () => {},
+        }),
+      ).rejects.toThrow(/expectations/);
+      // Refused BEFORE writing: the out dir is never created.
+      expect(existsSync(out)).toBe(false);
+    }
+
+    // And through the CLI it is a caller error: exit 2, message names the fix.
+    const { runCli } = await import("../src/genFixtures/cli");
+    const setupPath = join(dir, "exp-bad-cli.ts");
+    await writeFile(
+      setupPath,
+      `${SETUP}\nexport const expectations = { operations: { "POST /api/taslk": { validationStatus: 422 } } };\n`,
+    );
+    const out = join(dir, "exp-bad-cli-out");
+    const chunks: string[] = [];
+    const real = process.stderr.write.bind(process.stderr);
+    (process.stderr as unknown as { write: unknown }).write = (c: unknown) => {
+      chunks.push(String(c));
+      return true;
+    };
+    let code = 0;
+    try {
+      code = await runCli([join(dir, "spec.json"), "-o", out, "-s", setupPath, "--no-flows"]);
+    } finally {
+      (process.stderr as unknown as { write: unknown }).write = real;
+    }
+    expect(code).toBe(2);
+    const err = chunks.join("");
+    expect(err).toContain('unknown operation "POST /api/taslk"');
+    expect(err).toContain("gen-fixtures:");
+    expect(existsSync(out)).toBe(false);
+  });
+
+  test("no expectations block (or an empty one) changes not one byte", async () => {
+    // Two mirrored trees so the generated import specifier ("../setup.ts" in
+    // both) is identical: the only difference is the setup module exporting
+    // an empty `expectations` block vs not exporting it at all.
+    await mkdir(join(dir, "exp-mirror-a"), { recursive: true });
+    await mkdir(join(dir, "exp-mirror-b"), { recursive: true });
+    await writeFile(join(dir, "exp-mirror-a", "setup.ts"), SETUP);
+    await writeFile(
+      join(dir, "exp-mirror-b", "setup.ts"),
+      `${SETUP}\nexport const expectations = {};\n`,
+    );
+    const plain = await generateFixtures({
+      swagger: join(dir, "spec.json"),
+      out: join(dir, "exp-mirror-a", "out"),
+      setup: join(dir, "exp-mirror-a", "setup.ts"),
+      log: () => {},
+    });
+    const empty = await generateFixtures({
+      swagger: join(dir, "spec.json"),
+      out: join(dir, "exp-mirror-b", "out"),
+      setup: join(dir, "exp-mirror-b", "setup.ts"),
+      log: () => {},
+    });
+    // Every fixture file AND the manifest byte-identical: the feature is
+    // inert without configuration.
+    expect(empty.files.length).toBe(plain.files.length);
+    for (const f of plain.files) {
+      const twin = join(join(dir, "exp-mirror-b", "out"), f.split("/").pop()!);
+      expect(await Bun.file(twin).text()).toBe(await Bun.file(f).text());
+    }
+    expect(await Bun.file(empty.manifestPath).text()).toBe(
+      await Bun.file(plain.manifestPath).text(),
+    );
+  });
+
+  test("determinism with config: two configured generations are byte-identical", async () => {
+    const setupPath = join(dir, "exp-det-setup.ts");
+    await writeFile(
+      setupPath,
+      `${SETUP}\nexport const expectations = { validationStatus: 422, concealment: "404", operations: { "POST /api/login": { errorStatus: 403 } } };\n`,
+    );
+    const a = await generateFixtures({
+      swagger: join(dir, "spec.json"),
+      out: join(dir, "exp-det-a"),
+      setup: setupPath,
+      log: () => {},
+    });
+    const b = await generateFixtures({
+      swagger: join(dir, "spec.json"),
+      out: join(dir, "exp-det-b"),
+      setup: setupPath,
+      log: () => {},
+    });
+    expect(await Bun.file(b.manifestPath).text()).toBe(await Bun.file(a.manifestPath).text());
+    expect(a.files.length).toBe(b.files.length);
+    for (let i = 0; i < a.files.length; i++) {
+      expect(await Bun.file(b.files[i]!).text()).toBe(await Bun.file(a.files[i]!).text());
+    }
   });
 });

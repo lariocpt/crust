@@ -169,6 +169,20 @@ beforeAll(() => {
       if (p === "/login") {
         return html(`<head><title>Login</title></head><body>Log in</body>`);
       }
+
+      // --- F7 attribution fixtures: one broken URL (${base}/f7-dead) linked
+      // from two pages with two different element kinds ---
+      if (p === "/sitemap-f7.xml") {
+        return xml(
+          `<urlset><url><loc>${base}/f7-a</loc></url><url><loc>${base}/f7-b</loc></url></urlset>`,
+        );
+      }
+      if (p === "/f7-a") {
+        return html(`<body><a href="/f7-dead">dead link</a></body>`);
+      }
+      if (p === "/f7-b") {
+        return html(`<body><img src="/f7-dead" alt="dead image"></body>`);
+      }
       return new Response("not found", { status: 404 });
     },
   });
@@ -551,5 +565,192 @@ describe("a page whose content-type does not say HTML", () => {
     const clean = await runCli(["--site-map-url", `${base}/sitemap-good.xml`, "--strict"]);
     expect(clean.code).toBe(0);
     expect(clean.stdout).toContain("0 failure(s)");
+  });
+});
+
+/**
+ * Parse the fix-list section out of a text report: the section starts at the
+ * `fix list` line, the next line is the column header, every remaining
+ * non-empty line must be exactly page + element + broken-thing. `page` and
+ * `element` never contain whitespace; the broken column is the rest of the
+ * line (meta diffs quote values that may contain spaces).
+ */
+function parseFixList(stdout: string): { present: boolean; rows: [string, string, string][] } {
+  const lines = stdout.split("\n");
+  const start = lines.findIndex((l) => l.trim() === "fix list");
+  if (start === -1) return { present: false, rows: [] };
+  const rows: [string, string, string][] = [];
+  for (const line of lines.slice(start + 2)) {
+    if (!line.trim()) continue;
+    const m = line.match(/^\s+(\S+)\s+(\S+)\s+(.+)$/);
+    if (!m) throw new Error(`fix-list row does not parse as a triple: ${JSON.stringify(line)}`);
+    rows.push([m[1]!, m[2]!, m[3]!]);
+  }
+  return { present: true, rows };
+}
+
+describe("F7: every failure names its source page and element", () => {
+  test("one broken URL linked from two pages → ONE failure, two structured sources", async () => {
+    // /f7-dead is linked from /f7-a as <a> and from /f7-b as <img>. One broken
+    // URL is one failure whether linked from one page or fifty: the sources are
+    // aggregated into the single failure, totals.failures does not inflate.
+    const r = await runCli(["--site-map-url", `${base}/sitemap-f7.xml`, "--json"]);
+    expect(r.code).toBe(1);
+    const parsed = JSON.parse(r.stdout);
+    expect(parsed.totals.failures).toBe(1);
+    expect(parsed.failures.length).toBe(1);
+    const f = parsed.failures[0];
+    expect(f.kind).toBe("broken-link");
+    expect(f.url).toBe(`${base}/f7-dead`);
+    expect(f.sources).toEqual([
+      { fromUrl: `${base}/f7-a`, kind: "a", href: "/f7-dead" },
+      { fromUrl: `${base}/f7-b`, kind: "img", href: "/f7-dead" },
+    ]);
+
+    // Text report: sources are explicit indented lines, not prose.
+    const t = await runCli(["--site-map-url", `${base}/sitemap-f7.xml`]);
+    expect(t.code).toBe(1);
+    expect(t.stdout).toContain(`from ${base}/f7-a (a)`);
+    expect(t.stdout).toContain(`from ${base}/f7-b (img)`);
+  });
+
+  test("a failure whose origin is the sitemap names the sitemap URL as fromUrl", async () => {
+    // /does-not-exist is a sitemap <loc> no page links to: the source is the
+    // sitemap itself, stated honestly instead of omitted.
+    const r = await runCli(["--site-map-url", `${base}/sitemap-broken.xml`, "--json"]);
+    expect(r.code).toBe(1);
+    const parsed = JSON.parse(r.stdout);
+    const f = parsed.failures.find((x: { url: string }) => x.url === `${base}/does-not-exist`);
+    expect(f).toBeDefined();
+    expect(f.sources).toEqual([
+      { fromUrl: `${base}/sitemap-broken.xml`, kind: "sitemap", href: `${base}/does-not-exist` },
+    ]);
+  });
+
+  test("meta-mismatch carries a structured meta field AND a fix-list row", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "crust-vwl-f7-meta-"));
+    try {
+      const fixture = join(dir, "about.fail.crust.ts");
+      await Bun.write(
+        fixture,
+        `export default { url: "${base}/about", meta: { "og:title": "Wrong Title" } };\n`,
+      );
+      const r = await runCli([
+        "--site-map-url",
+        `${base}/sitemap-meta.xml`,
+        "--fixtures",
+        fixture,
+        "--json",
+      ]);
+      expect(r.code).toBe(1);
+      const parsed = JSON.parse(r.stdout);
+      const f = parsed.failures.find((x: { kind: string }) => x.kind === "meta-mismatch");
+      expect(f).toBeDefined();
+      expect(f.meta).toEqual({ key: "og:title", expected: "Wrong Title", actual: "About Us" });
+      // The prose detail stays exactly as before — the structured field is additive.
+      expect(f.detail).toBe('meta.og:title: expected "Wrong Title", got "About Us"');
+
+      const t = await runCli(["--site-map-url", `${base}/sitemap-meta.xml`, "--fixtures", fixture]);
+      const { present, rows } = parseFixList(t.stdout);
+      expect(present).toBe(true);
+      expect(rows).toContainEqual([
+        `${base}/about`,
+        "meta:og:title",
+        'got "About Us" (expected "Wrong Title")',
+      ]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("meta-fixture-no-page gets a fix-list row and a structured meta field", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "crust-vwl-f7-nopage-"));
+    try {
+      const fixture = join(dir, "ghost.crust.ts");
+      await Bun.write(
+        fixture,
+        `export default { url: "${base}/never-crawled", meta: { "og:title": "Ghost" } };\n`,
+      );
+      const r = await runCli([
+        "--site-map-url",
+        `${base}/sitemap-good.xml`,
+        "--fixtures",
+        fixture,
+        "--json",
+      ]);
+      expect(r.code).toBe(1);
+      const parsed = JSON.parse(r.stdout);
+      const f = parsed.failures.find((x: { kind: string }) => x.kind === "meta-fixture-no-page");
+      expect(f).toBeDefined();
+      expect(f.meta).toEqual({ key: "fixture", expected: "page was crawled", actual: null });
+
+      const t = await runCli(["--site-map-url", `${base}/sitemap-good.xml`, "--fixtures", fixture]);
+      const { rows } = parseFixList(t.stdout);
+      expect(rows).toContainEqual([`${base}/never-crawled`, "meta:fixture", "not crawled"]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("fix-list closes every failing run; absent on a clean run; rows parse as triples", async () => {
+    // missing-anchor: the row names the page that linked the fragment, the
+    // element kind, and the broken fragment URL.
+    const r = await runCli(["--site-map-url", `${base}/sitemap-anchor.xml`]);
+    expect(r.code).toBe(1);
+    const { present, rows } = parseFixList(r.stdout);
+    expect(present).toBe(true);
+    expect(rows).toContainEqual([`${base}/anchor-bad`, "a", `${base}/about#nope`]);
+    // The fix-list is the END of the report: nothing follows its rows.
+    const tail = r.stdout
+      .trimEnd()
+      .split("\n")
+      .filter((l) => l.trim());
+    expect(tail[tail.length - 1]).toMatch(new RegExp(`^\\s+${base}/anchor-bad\\s+a\\s+`));
+
+    // A broken-link run: one row per (page, element) source of the same URL.
+    const f7 = await runCli(["--site-map-url", `${base}/sitemap-f7.xml`]);
+    const f7list = parseFixList(f7.stdout);
+    expect(f7list.rows).toContainEqual([`${base}/f7-a`, "a", `${base}/f7-dead`]);
+    expect(f7list.rows).toContainEqual([`${base}/f7-b`, "img", `${base}/f7-dead`]);
+
+    // Clean run: no fix-list section at all.
+    const clean = await runCli(["--site-map-url", `${base}/sitemap-good.xml`]);
+    expect(clean.code).toBe(0);
+    expect(clean.stdout).not.toContain("fix list");
+  });
+
+  test("--json stays additive: every pre-existing failure field keeps its type", async () => {
+    const r = await runCli(["--site-map-url", `${base}/sitemap-f7.xml`, "--json"]);
+    const parsed = JSON.parse(r.stdout);
+    // totals/results shapes untouched (F7 adds fields to failures only).
+    expect(Object.keys(parsed.totals).sort()).toEqual(
+      [
+        "anchorsSkipped",
+        "assets",
+        "complete",
+        "dropped",
+        "failures",
+        "pages",
+        "sniffedPages",
+        "unparsedPages",
+      ].sort(),
+    );
+    for (const f of parsed.failures) {
+      expect(typeof f.kind).toBe("string");
+      expect(typeof f.url).toBe("string");
+      expect(typeof f.detail).toBe("string");
+      if (f.sources !== undefined) {
+        for (const s of f.sources) {
+          expect(typeof s.fromUrl).toBe("string");
+          expect(typeof s.kind).toBe("string");
+          expect(typeof s.href).toBe("string");
+        }
+      }
+    }
+    // results entries keep their pre-F7 keys (links collapsed to linkCount).
+    const page = parsed.results[`${base}/f7-a`];
+    expect(page.status).toBe(200);
+    expect(page.linkCount).toBe(1);
+    expect(page.links).toBeUndefined();
   });
 });

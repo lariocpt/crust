@@ -10,6 +10,12 @@ export interface DiscoverOpts {
 export interface DiscoverResult {
   seeds: string[];
   origin: URL;
+  /**
+   * Which sitemap each seed came from (v0.3.6+), so a failure whose origin is
+   * the sitemap itself can name it: `fromUrl` is the sitemap URL (or the local
+   * sitemap path), stated honestly instead of omitted.
+   */
+  seedSources: { url: string; sitemap: string }[];
 }
 
 export async function discoverSeeds(opts: DiscoverOpts): Promise<DiscoverResult> {
@@ -17,7 +23,11 @@ export async function discoverSeeds(opts: DiscoverOpts): Promise<DiscoverResult>
     const body = await loadSitemapBody(opts.sitemapUrl, opts);
     const seeds = await parseSitemap(body, opts);
     if (seeds.length === 0) throw new Error(`sitemap at ${opts.sitemapUrl} contained no URLs`);
-    return { seeds, origin: new URL(seeds[0]!) };
+    return {
+      seeds,
+      origin: new URL(seeds[0]!),
+      seedSources: seeds.map((url) => ({ url, sitemap: opts.sitemapUrl! })),
+    };
   }
 
   if (!opts.baseUrl) {
@@ -26,7 +36,12 @@ export async function discoverSeeds(opts: DiscoverOpts): Promise<DiscoverResult>
   const base = new URL(opts.baseUrl);
 
   const fromRobots = await tryRobots(base, opts);
-  if (fromRobots.length > 0) return { seeds: fromRobots, origin: base };
+  if (fromRobots.length > 0)
+    return {
+      seeds: fromRobots.map((r) => r.url),
+      origin: base,
+      seedSources: fromRobots,
+    };
 
   // /sitemap.xml is the convention; /sitemap-index.xml is what Astro's
   // sitemap integration emits by default — probe both before giving up.
@@ -36,7 +51,12 @@ export async function discoverSeeds(opts: DiscoverOpts): Promise<DiscoverResult>
     try {
       const body = await loadSitemapBody(fallback, opts);
       const seeds = await parseSitemap(body, opts);
-      if (seeds.length > 0) return { seeds, origin: base };
+      if (seeds.length > 0)
+        return {
+          seeds,
+          origin: base,
+          seedSources: seeds.map((url) => ({ url, sitemap: fallback })),
+        };
     } catch {
       // try the next candidate
     }
@@ -46,7 +66,10 @@ export async function discoverSeeds(opts: DiscoverOpts): Promise<DiscoverResult>
   );
 }
 
-async function tryRobots(base: URL, opts: DiscoverOpts): Promise<string[]> {
+async function tryRobots(
+  base: URL,
+  opts: DiscoverOpts,
+): Promise<{ url: string; sitemap: string }[]> {
   const robotsUrl = new URL("/robots.txt", base).toString();
   let text: string;
   try {
@@ -61,11 +84,11 @@ async function tryRobots(base: URL, opts: DiscoverOpts): Promise<string[]> {
     .map((l) => l.trim())
     .filter((l) => /^sitemap:/i.test(l))
     .map((l) => l.slice(l.indexOf(":") + 1).trim());
-  const seeds: string[] = [];
+  const seeds: { url: string; sitemap: string }[] = [];
   for (const sm of sitemapLines) {
     try {
       const body = await loadSitemapBody(sm, opts);
-      seeds.push(...(await parseSitemap(body, opts)));
+      seeds.push(...(await parseSitemap(body, opts)).map((url) => ({ url, sitemap: sm })));
     } catch {
       // ignore individual sitemap failure when probing
     }

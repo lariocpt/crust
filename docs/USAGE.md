@@ -12,11 +12,13 @@ Mock it, test it, load it, tail it: the whole test stack baked into one binary. 
 - [The Pipeline model](#the-pipeline-model)
 - [Shell-line syntax](#shell-line-syntax)
 - [CI gates: thresholds, baselines, exit codes](#ci-gates-thresholds-baselines-exit-codes)
+- [HTTP result shapes](#http-result-shapes)
 - [Shorthand fixture grammar](#shorthand-fixture-grammar)
 - [TypeScript API](#typescript-api)
 - [Builtins](#builtins)
 - [test-fixture](#test-fixture)
 - [test-pipes](#test-pipes)
+- [What evidence does your test produce?](#what-evidence-does-your-test-produce)
 - [gen-fixtures](#gen-fixtures)
 - [mock-server](#mock-server)
 - [verify-web-links](#verify-web-links)
@@ -669,6 +671,14 @@ date +%s | capture TS
 GET :3000/?t=$TS
 ```
 
+> **Report availability:** `expect` throws at drain, so an `expect` placed
+> before `stats` that fails prevents the summary from ever being emitted
+> (the `expect 200 | stats` shape above illustrates syntax, not CI
+> reporting). When the summary or report must survive a status failure, put
+> `stats` (and `stats --out …`) before the gates and gate status on the
+> summary instead — the [CI gates](#ci-gates-thresholds-baselines-exit-codes)
+> section below is the primary pattern.
+
 - `parallel N` — sets the fan-out for the NEXT stage (it is a modifier, not a
   buffering stage). It applies to http verbs (load mode — see above), TS
   lambdas, and registered functions (`parallel 4 | sql "…"`); putting it
@@ -702,7 +712,11 @@ GET :3000/?t=$TS
   `rps`, a status histogram, real `p50/p95/p99/meanMs` latency percentiles
   from the timed-request records, and the failure tallies `timedOut` and
   `redirectRefused` — always present (0 on a clean run), so a gate can read
-  `s.redirectRefused === 0` without guessing whether the key exists.
+  `s.redirectRefused === 0` without guessing whether the key exists. It
+  **reports, it does not gate**: nothing `stats` emits fails the pipeline,
+  so a run whose every request was refused prints `{"status":{"0":N}}` and
+  still exits 0 unless a gate is present — the gates are the `assert` stages
+  after it.
 - `stats --every N` — additionally emits a **per-window delta summary** every
   N seconds (`{window: 1, …}`, `{window: 2, …}`) and finishes with one
   cumulative summary tagged `{final: true}`. Windows flush on the item path —
@@ -712,21 +726,24 @@ GET :3000/?t=$TS
   percentiles stay honest.
 - `stats --out results.json` — also writes the run to a versioned JSON
   artifact: `{crustStats: 1, startedAt, urls, summary, windows?}` where
-  `summary` is exactly the stdout summary object. The file is written
-  **before** the final summary is yielded, so a downstream threshold gate
-  that fails the pipeline still leaves the artifact behind for CI upload.
-  The path is env-expanded (`--out $RUN_DIR/health.json`); only `.json` is
-  supported.
+  `summary` is exactly the stdout summary object. The artifact is flushed
+  **after every window and before each yield** — write-then-rename
+  (`results.json.tmp`, then rename), so a torn write never leaves invalid
+  JSON — which is what lets the file survive a downstream gate: it is on
+  disk before the summary that trips a failing `assert` is emitted, and the
+  file is left behind for CI upload. The path is env-expanded
+  (`--out $RUN_DIR/health.json`); only `.json` is supported.
 
 ### CI gates: thresholds, baselines, exit codes
 
 `stats` yields plain objects, and `assert` awaits real JS predicates — so
-thresholds are just composition, no special syntax:
+thresholds are just composition, no special syntax. The primary CI pattern is
+**report-preserving and status-first**: collect the statistics — and write
+the report — before applying any aggregate gate, and gate the status
+histogram before judging latency or rate:
 
 ```bash
-load 30s 100/s | parallel 50 | GET :3000/health | stats \
-  | assert (s => s.p95 < 200) \
-  | assert (s => s.rps > 80)
+load 30s 100/s | parallel 50 | GET :3000/health | stats --out load/last.json | assert (s => Object.keys(s.status).every(k => k.startsWith("2"))) | assert (s => s.timedOut === 0) | assert (s => s.redirectRefused === 0) | assert (s => s.p95 < 200) | assert (s => s.rps > 80)
 ```
 
 Chain **one assert per threshold**: the failure message names the exact
@@ -734,6 +751,42 @@ predicate and prints the actual summary —
 `assert: item 1 failed (s => s.p95 < 200) — got {"count":3000,…,"p95":312.4,…}` —
 and the line exits 1, which `crust -c` propagates (it stops at the first
 failing line).
+
+Why that shape — the five properties the pattern buys you:
+
+- **`stats` reports, it does not gate.** The summary — the `timedOut` and
+  `redirectRefused` tallies included — only describes what happened; nothing
+  `stats` emits fails the pipeline, and a run whose every request was refused
+  prints `{"status":{"0":N}}` and exits 0 unless a gate is present. The
+  counters *report* outcomes; the `assert` stages after `stats` are the only
+  thing that fails a run.
+- **Latency-only gates are satisfiable by fast 500s.** A mid-pipeline `GET`
+  yields a timed `{status, ms, url}` record whether or not `parallel` is
+  written, and `stats` builds its percentiles from *every* timed record,
+  whatever its status — a 500 in 2ms is under any p95 budget. So the status
+  histogram is gated first: a fast error storm passes every latency gate and
+  must be stopped by the status one.
+- **The report survives a failing gate — `expect` before `stats` does
+  not.** With `--out`, the artifact is flushed after every window and before
+  each yield (write-then-rename), so it is on disk before the summary that
+  trips a failing `assert` is emitted — the file outlives the failure for CI
+  upload. The contrast: an `expect` placed *before* `stats` throws at drain,
+  before `stats` has consumed anything — a failing expect prevents the
+  summary (and any `--out` file) from ever existing. That is why the pattern
+  gates status on the summary instead (see the ordering trap at the end of
+  this section).
+- **"Measured nothing" never passes.** A zero-request run — a glob that
+  matched nothing, a filter that dropped everything, a server never reached —
+  yields a summary tagged `empty: true`, and `assert` refuses it outright;
+  `{count: 0, p95: 0}` used to satisfy `s => s.p95 < 200` and pass a CI gate.
+- **`rps` is the ACHIEVED rate, never the target.** `stats.rps` is measured
+  from the records that actually passed — crust cannot report a rate it did
+  not sustain. When the target was not sustained, the `load` source already
+  said so on stderr (`load: target 3000 ticks — emitted 2868, dropped 132
+  (downstream saturated; raise parallel N?), achieved 95.6/s`): stale slots
+  are skipped, never burst. A drop report means the number under the rate
+  gate is the honest one — raise `parallel N` or lower the rate before
+  quoting percentiles. A drop is never a pass.
 
 **What makes a line fail.** As of v0.2 the gate is honest in three more places
 that used to exit 0:
@@ -789,8 +842,10 @@ and the reported value is the bucket's upper bound — never faster than reality
 requests and made each `--every` window re-sort the cumulative array, which
 blocked the load client itself for up to 1.6s per window on a long soak.
 
-**Baselines.** `--out` writes the artifact; an async assert reads it back.
-The "worse than 2× baseline p95 is a failure" gate is one line:
+**Baselines.** The primary pattern with its p95 threshold swapped for a
+baseline read: `--out` writes the current artifact, and an async assert reads
+the recorded one back. "Worse than 2× the baseline p95 is a failure" is one
+line:
 
 ```bash
 load 10s 100/s | parallel 50 | GET :3000/health | stats --out load/last.json \
@@ -822,9 +877,13 @@ load 30s 100/s | parallel 50 | GET :3000/health | stats | assert (s => s.p95 < 2
 ```
 
 **Ordering trap:** in `… | expect 200 | stats | assert (…)`, a failing
-`expect` throws at drain — *before* `stats` emits — so you lose the summary.
-Either gate status inside the predicate (`s.status["200"] === s.count`) or
-accept that a hard expect failure hides the stats.
+`expect` throws at drain — *before* `stats` emits — so you lose the summary:
+no percentiles, no histogram, and no `--out` artifact either, because
+`stats` never ran. That is the trap the primary pattern above sidesteps —
+`stats --out` sits before every gate, so the summary and the report exist
+even when the status gate fails. Either gate status inside the predicate
+(`s.status["200"] === s.count`) or accept that a hard expect failure hides
+the stats.
 
 ### Timing a pipeline (`time "label"`)
 
@@ -990,6 +1049,57 @@ runs with `A` set for that command only.
 environment, and `export A=1 B=2` assigns several. What it no longer does is
 ignore a word it did not understand — `export A=1 -p` used to set `A`, print
 nothing, and exit 0.
+
+---
+
+## HTTP result shapes
+
+Similar HTTP syntax does NOT guarantee identical result shapes. Which payload
+an HTTP stage emits depends on its position and on whether `parallel` puts it
+in load mode. This is the canonical table; the skills and the website point
+here. (Verified against crust v0.3.5.)
+
+| Execution context | What you get | What you can do with it |
+|---|---|---|
+| First-stage `GET`/`DELETE` (`GET :3000/x`) | one `Response` | bodies are yours: `(r => r.json())`, `.text()`, `.arrayBuffer()` |
+| Mid-pipeline non-GET verb, no `parallel` (`{…} \| POST :3000/x`) | one `Response` per item | same — bodies still parseable |
+| Mid-pipeline `GET` — with **or** without `parallel` | `{status, ms, url}` timing records | **no body access** — `.json()` does not exist on these records |
+| `parallel N \| <any verb>` | `{status, ms, url}` timing records | same — gate `status` and the failure tallies, never a body |
+
+The mid-pipeline `GET` row is the trap: `GET` mid-pipeline is **always** the
+timed path, even at `parallel 1` or with no `parallel` at all — each upstream
+item triggers one request and the result is a record, not a `Response`. Only
+`POST`/`PUT`/`PATCH`/`DELETE` stay untimed (yielding `Response`s) until
+`parallel` promotes them to load mode.
+
+On the timed path:
+
+- **Bodies are drained** after each request (so keep-alive sockets recycle and
+  the measured `ms` includes the body). The body is gone — records carry only
+  `{status, ms, url}`.
+- **Network errors are `{status: 0}` records**, not line failures. A run whose
+  every request was refused still exits 0 unless a gate (`expect`, `assert`)
+  says otherwise.
+- A **`--timeout` budget hit** is a `{status: 0, timedOut: true}` record; a
+  **`--redirect error` refusal** is a `{status: 0, redirectRefused: true}`
+  record. Both are also tallied by `stats` (`timedOut`/`redirectRefused`,
+  always present, 0 on a clean run) — records, not exits; gate them.
+
+On the untimed paths there are no records to carry flags: a network error, a
+`--timeout` budget hit, or a `--redirect error` refusal **throws and fails the
+line** with a named error.
+
+```crust
+GET :3000/users | (r => r.json())
+{"name": "Court"} | POST :3000/users | (r => r.json())
+range(0, 9) | GET :3000/health | stats
+range(0, 9) | parallel 5 | GET :3000/health | expect 200 | stats
+```
+
+The third line looks like it fetches ten bodies to summarize; it doesn't — the
+mid-pipeline `GET` already reduced each request to a timing record before
+`stats` saw it. Never parse a body from a timing record; if you need the body,
+use an untimed verb position and parse there.
 
 ---
 
@@ -1459,6 +1569,57 @@ setup vars and captures never leak across files or into your interactive
 session. A `.pipes` file must behave the same on every machine. Exit codes:
 `0` all lines pass, `1` any fail, `2` no files matched / bad args.
 
+### What evidence does your test produce?
+
+Label the tier of evidence a fixture actually produces — in the test name
+or a comment — so a green run can never imply DB-level proof it never
+produced (taxonomy new in 0.3.6). Three tiers:
+
+**Tier 1 — snapshot / contract verification.** The response is compared
+against a declared case plus a supplied snapshot; `setup()` prepares
+REQUEST CONTEXT (url, headers, expected values), not state. Honest
+naming rule: do not call such a fixture "seeded" or "integration" when
+nothing is seeded or verified at the data layer — name the evidence the
+test actually produces. The check is valuable for what it proves (the
+contract shape against a declared oracle), not for what it doesn't.
+
+**Tier 2 — DB-verified flow.** The full chain: seed → verify the seed →
+call the API → query the DB → compare the response against the LIVE
+query result. The native shape is a `.pipes` suite chaining `capture`
+and `sql` (`$RUN_ID` is unique per run, set by the setup module):
+
+```crust
+{"email": "u-$RUN_ID@t.dev"} | POST $BASE/api/users -H "authorization: Bearer $TOKEN" | assert (r => r.status === 201) | (r => r.json()) | capture UID (u => u.id)
+sql "SELECT email FROM users WHERE id = '$UID'" | assert (r => r.email === "u-$RUN_ID@t.dev")
+```
+
+The first line seeds through the API and verifies the seed (status +
+captured identity); the second queries the live database by the id this
+run created and compares against the value the response carried. A
+`.crust.ts` fixture has the same shape: `setup()` seeds, an async
+matcher re-queries — the signup example above is exactly that. Three
+requirements the tier must carry: **run-owned data** (unique per run —
+never shared mutable state); **explicit identity matching** (query by
+the id you captured — never match an unrelated record); and
+**failure-path cleanup defined BEFORE writes are introduced** — a later
+cleanup line is happy-path only, because fail-fast skips it; guaranteed
+teardown is `crust.onExit` ([Lifecycle hooks](#lifecycle-hooks),
+test-pinned by `tests/onexit.test.ts`).
+
+**Tier 3 — demo / quickstart.** A disposable local resource with
+ordinary CRUD — the built-in [mock-server](#mock-server) is the native
+fit — isolates "how little glue does crust need" from
+application-specific safeguards (graph resolution, provisioning denial,
+identity-sensitive stores). Application safeguards belong in a separate
+approved fixture, never silently folded into a demo.
+
+Cross-cutting, at every tier: label the tier so a green run cannot
+imply DB-level proof it never produced; approval, redirect, and
+transport safeguards stay in place regardless of tier; and an
+attestation in setup code (a flag asserting IAM/graph/provisioning
+policy) is a DECLARATION, not verification of the backend's actual
+configuration — say so in the fixture.
+
 ### gen-fixtures
 
 Derives a **negative-case fixture matrix** from an OpenAPI 3.x spec (Swagger
@@ -1486,11 +1647,35 @@ behaviour change for non-biome repos); a non-default indent is disclosed on
 stdout, naming the config; and a config that is not valid JSON is reported
 and treated as absent, since a broken formatter must never fail a generation.
 
+Generated cases are candidates until a human has reviewed them against the
+contract: work through the [contract-review checklist](CONTRACT-REVIEW.md)
+before running anything the generator produced.
+
 ```bash
 gen-fixtures --swagger ./openapi.json --out tests/gen --setup ./tests/gen-setup.ts
 test-fixture --target 'tests/gen/*.gen.crust.ts' --threads 8
 test-pipes --target tests/gen/flows/flows.gen.pipes   # generated CRUD flows
 ```
+
+**`gen-manifest.json` — the review artifact (new in 0.3.6).** The last write of every
+successful generation is `gen-manifest.json` inside `--out`: every generated
+case with its expectation's PROVENANCE — `contract:paths.<path>.<method>.responses.<code>`
+when the spec documents that status for the operation (every case family
+today is gated on a documented response; crust never assumes a status the
+contract is silent on), `convention:<name>` if a status were ever assumed by
+rule rather than read from the spec, `configured:<setup-module>` when a
+reviewed `expectations` override in the setup module supplied a status the
+spec leaves silent (a documented status always wins over a configured one) —
+plus every skip (dropped cases, skipped
+flows, `flowOverrides.skip`) with the same reason stdout shows, and every
+unsupported operation with what crust could not derive. Prerequisites are
+NAMES (`auth`, `scope:member`, `resource:<param>`), never values from your
+setup module. The file is deterministic — no timestamps; the spec is
+identified by a sha256 of its content — so the same spec + crust version
+regenerate it byte-identically, and it states its own limit in every copy:
+it records generation only, nothing in it was executed or verified. It lives
+inside `--out`, so the directory wipe takes it with it, and a failed
+generation never leaves one behind.
 
 Derived cases:
 
@@ -1626,6 +1811,31 @@ every app-specific detail and must export:
   it has a different name (`/api/buildings/{id}`).
 - `JSON_HEADERS: Record<string, string>` — plain unauthenticated JSON
   headers, used for role `"none"`.
+- `expectations?: { validationStatus?: number; concealment?: "404" | "403";
+  operations?: Record<string, { validationStatus?: number; errorStatus?:
+  number }> }` — new in 0.3.6: reviewed expectation overrides for backends whose contract
+  disagrees with the 400 convention, so their matrices are correct **without
+  hand-editing generated files**. `validationStatus` sets the validation-matrix
+  status (e.g. `422`); `concealment` sets the status of the unknown-id /
+  outsider case family when the spec documents neither (an API that answers
+  `404` to outsiders to hide existence, or `403` to hide non-existence);
+  `operations` overrides either per operation, keyed exactly
+  `"METHOD /path"` as the spec writes it, method uppercase — per-operation
+  beats global. **A documented status always wins**: configuration fills gaps
+  in the contract, it never contradicts it, and configured cases carry
+  `configured:<setup-module>` provenance in the manifest. Validated hard at
+  generation time — unknown keys, non-integer or out-of-range statuses
+  (< 400 or ≥ 600), or operation keys the spec does not have refuse the
+  generation with exit 2 and write nothing (a typo'd key would silently
+  configure nothing, so it is an error, not a warning).
+
+  ```ts
+  export const expectations = {
+    validationStatus: 422, // this backend answers 422, never 400
+    concealment: "404", // unknown ids and outsiders both get 404
+    operations: { "POST /api/reports": { validationStatus: 400 } }, // this one really does 400
+  };
+  ```
 
 A complete runnable module to copy lives at
 [`examples/gen-setup.ts`](../examples/gen-setup.ts). **crust does not ship
@@ -1639,10 +1849,12 @@ description says the caller is not authenticated ("not authenticated" /
 "log in"; a login endpoint's bad-credentials 401 deliberately doesn't
 count), 403 needs `scopeParam` plus a documented `403`, 404 needs non-scope
 path params plus a documented `404`, and the 400 matrix needs a JSON
-request-body schema plus a documented `400`.
+request-body schema plus a documented `400` (or a reviewed `validationStatus`
+in the setup module's `expectations` block — see below).
 
 Exit codes: `0` generated, `1` generation error (including a setup module
-missing `scopeParam`), `2` bad args.
+missing `scopeParam`), `2` bad args or a refused setup-module `expectations`
+config.
 
 ### mock-server
 
@@ -1993,6 +2205,49 @@ Flags: `--site-map-url <url-or-path>` or `--base-url <url>` (one required, mutua
 
 By default, all four verification behaviors are on: 2xx status, recurse into internal pages, validate `#fragment` targets against element ids on the destination page, and flag any 3xx redirect chain (often a sign of stale internal links). Each `og:image` URL is fetched and its content-type asserted to start with `image/`.
 
+**Every failure names its source (new in 0.3.6).** Failures are one per failing
+*target*, and each answers "which page did I find this on, and which element":
+
+- `sources[]` — every link that pointed at the failing target, as
+  `{fromUrl, kind, href}` (`kind` is the element: `a`, `img`, `script`, `link`,
+  `iframe`, `og-image`). In the text report each prints as an indented
+  `from <page> (<kind>)` line under the failure; `--json` carries the full
+  array. A broken URL linked from fifty pages is still **one** failure with
+  fifty sources — `totals.failures` and the exit codes are unchanged.
+  `kind: "sitemap"` means the URL arrived as a sitemap `<loc>` with no page
+  linking it; the sitemap URL is named as `fromUrl` rather than the source
+  being omitted.
+- `meta` — structured `{key, expected, actual}` for `meta-mismatch` findings
+  (`meta-fixture-no-page` carries `key: "fixture"`).
+- **Fix-list** — every failing text run ends with a separate aligned section:
+  one line per (page, element, broken-thing) triple, nothing else. A clean run
+  prints no fix-list section; in `--json` the structured fields *are* the
+  fix-list.
+
+```text
+verify-web-links: 3 page(s), 1 asset(s), 3 failure(s)
+
+  [broken-link] 1
+    http://localhost:47831/broken  — HTTP 404
+      from http://localhost:47831/page-a (a)
+      from http://localhost:47831/page-b (img)
+  [meta-mismatch] 1
+    http://localhost:47831/page-x  — meta.og:title: expected "Page X — Wrong Title", got "Page X — Real Title"
+  [missing-anchor] 1
+    http://localhost:47831/page-x#ghost  — #ghost not found on http://localhost:47831/page-x (from http://localhost:47831/page-a)
+      from http://localhost:47831/page-a (a)
+
+  fix list
+  page                           element        broken link / diff
+  http://localhost:47831/page-a  a              http://localhost:47831/broken
+  http://localhost:47831/page-a  a              http://localhost:47831/page-x#ghost
+  http://localhost:47831/page-b  img            http://localhost:47831/broken
+  http://localhost:47831/page-x  meta:og:title  got "Page X — Real Title" (expected "Page X — Wrong Title")
+```
+
+The `detail` prose is unchanged from v0.3.5 — the structured fields are purely
+additive, so nothing that parsed the old report breaks.
+
 A page is crawled when crust can read it as a HTML document: when the content-type says so
 (`text/html` or `application/xhtml+xml`), or when the declaration says otherwise but the document
 itself begins `<!doctype html>` / `<html`. That second case is printed — `N page(s) had to be
@@ -2260,12 +2515,46 @@ builtins — a mock server or dev runner started by one call is still serving
 on the next, and the query tools iterate on the buffered past with pipeline
 fragments exactly like `logs>`.
 
+### Tool classes — side effects up front
+
+The `initialize` handshake carries this taxonomy in `instructions`, so an
+agent sees it before the first call (v0.3.6):
+
+| Class | Tools | What it touches |
+| --- | --- | --- |
+| **Static check** | `crust_check_line` | parses only — runs nothing, no I/O, no spawn |
+| **Execution** | `crust_run_line`, `crust_test_fixture`, `crust_test_pipes`, `crust_gen_fixtures` | arbitrary stages with real side effects — target approval, credentials, writes and cleanup remain the caller's responsibility per repo policy |
+| **Network / load generation** | `crust_verify_web_links`, `crust_load_run` | bounded generation against the network — approved non-production targets only |
+| **Long-lived resources** | `crust_mock_server_*`, `crust_procs_*`, `crust_logs_*` | held by the server process; die when it exits |
+
+**Teardown has three tiers, and no tool crosses them:**
+
+1. **Local processes** — `crust_procs_stop` (and server exit) kill the
+   supervised process groups whole: SIGTERM→SIGKILL, grandchildren included.
+2. **Mock-server sessions** — `crust_mock_server_stop` closes the listener and
+   releases the port. `--state` files and databases are application data: they
+   stay on disk.
+3. **Application data** — nothing in the MCP surface deletes remote or backend
+   resources or releases application data. A container a proc started, a row
+   it wrote, a queue it filled survives its local teardown; releasing it is the
+   caller's job (`crust.onExit` covers scripted cleanup — see
+   [Lifecycle hooks](#lifecycle-hooks)).
+
 ### Contracts, stated honestly
 
 - **Never a false pass.** A nonzero child exit, a killed timeout, a failed
   `assert` or a mock validation error is an `isError` result carrying the
   verbatim exit code and output. Zero matches is an explicit "zero items",
   never silence. A load run that measured nothing is refused (`empty`).
+- **Transport contract.** stdio JSON-RPC 2.0, one frame per line. The host
+  spawns `crust mcp` once; one-shot tools spawn a fresh crust child per call
+  (`cwd`/`env` per call, nothing persists), lifecycle tools live in the server
+  process and die with it. Every crust-side answer arrives as a JSON-RPC
+  frame — a successful result, or an `isError` tool result naming the reason.
+  A call that fails with a host-side error string (an "unavailable tool" style
+  refusal that never appears in crust's output) never reached the server: the
+  server was not spawned, the command/path is wrong, or the host's transport
+  framing broke. Debug with the `printf | crust mcp` smoke test above.
 - **Output is capped per stream** (256 KB, tail-kept) and truncation is
   always announced, never silent.
 - **Lifetime.** stdin EOF, SIGINT or SIGTERM tear down every held job —
@@ -2482,8 +2771,10 @@ crust.onBeforeStart = async () => {
   console.error(`[crust] session start ${new Date().toISOString()}`);
 };
 
-// Runs right before process.exit, with the resolved exit code. Async ok.
-// Errors are caught and logged — they do not block exit.
+// Runs from the centralized shutdown path, with the resolved exit code.
+// Async ok. A throwing hook logs `crust: onExit error: …` and keeps the
+// original code. A direct process.exit() — including one inside an
+// onSignal handler — bypasses it; so do unhandled signals and kill -9.
 crust.onExit = async (code) => {
   await flushMetrics(code);
 };
@@ -2504,7 +2795,7 @@ crust.onSignal("SIGTERM", async () => {
 });
 ```
 
-Handlers run from the centralized shutdown path, so they fire whether crust exits via `exit N`, Ctrl-D, end of `-c`, or a signal handler that calls `process.exit`.
+`onExit` runs from the centralized shutdown path, so it fires with the resolved code on every end of a run: the `exit` builtin, Ctrl-D at the REPL, the end of a `-c` run, and the end of a `.crust` script or piped-stdin run. Under fail-fast it fires with the failing line's own code (later lines are skipped), and a hook that throws logs `crust: onExit error: …` on stderr without changing that code. What bypasses it: a `process.exit()` called anywhere, including inside an `onSignal` handler; SIGINT and SIGTERM when no `crust.onSignal` handler is registered, which keep their default disposition and kill the process (orphaned detached stage groups run to their own end and init reaps them, so no zombies are left); and `kill -9`, which nothing can intercept. An `onSignal` handler that returns lets the run continue to its natural end, and `onExit` then fires (with 0 when the run completes cleanly). The fail-fast fire, code-preservation, and signal cases above are pinned by `tests/onexit.test.ts`.
 
 ### Custom functions
 

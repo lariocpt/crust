@@ -1,5 +1,5 @@
 import { FlagError, type FlagSpec, parseFlags } from "../args";
-import { generateFixtures } from "./generate";
+import { ConfigError, generateFixtures } from "./generate";
 
 // The canonical invocation in the README, the docs and every skill passes
 // exactly these two paths, so they are the defaults rather than required
@@ -22,9 +22,11 @@ detected), runnable by test-pipes. --no-flows suppresses it.
 
 The --setup module carries the app-specific part (auth, scope substitution).
 Required exports: shared(), headersFor(ctx, role), resolvePath(ctx, template),
-scopeParam, JSON_HEADERS; optional scopeRoots. See the contract doc at the
-top of src/genFixtures/generate.ts, and examples/gen-setup.ts in the crust
-repo for a complete runnable module to copy.
+scopeParam, JSON_HEADERS; optional scopeRoots, flowOverrides (per-collection
+flow tuning) and expectations (reviewed validation-status / concealment
+overrides where the contract disagrees with the 400 convention). See the
+contract doc at the top of src/genFixtures/generate.ts, and examples/gen-setup.ts
+in the crust repo for a complete runnable module to copy.
 
   -o, --out <dir>       output directory (default: ${DEFAULT_OUT})
   -s, --setup <module>  setup module (default: ${DEFAULT_SETUP})
@@ -101,9 +103,19 @@ export async function runCli(args: string[]): Promise<number> {
           : "no qualifying collection paths";
       process.stdout.write(`generated 0 CRUD flows (${why})\n`);
     }
+    // The closing line points at the review artifact: provenance + skips live
+    // in the file, not in this scrollback.
+    process.stdout.write(`gen-fixtures: manifest written — ${result.manifestPath}\n`);
     return 0;
   } catch (err) {
     const message = (err as Error).message;
+    // A bad expectations block in the setup module is a caller error exactly
+    // like a bad flag: same exit 2, same "fix your invocation/config" framing.
+    // It throws before any output is written, so nothing was generated.
+    if (err instanceof ConfigError) {
+      process.stderr.write(`gen-fixtures: ${message}\n`);
+      return 2;
+    }
     // A missing setup module used to surface as Bun's raw resolution error, which names an
     // internal source file and nothing the caller can act on. Everything they need is absent from
     // it: `-s/--setup` exists, `./tests/gen-setup.ts` is a CONVENTION in their repo rather than
