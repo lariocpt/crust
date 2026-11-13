@@ -119,6 +119,36 @@ module-scope promise-cached factory. Fixture files may import ONLY relative
 modules and Bun builtins (the binary can't resolve npm at runtime) —
 `Bun.SQL`, `Bun.file`, `Bun.jwt`.
 
+## What evidence does your test produce?
+
+**Tier 1 — snapshot / contract verification.** Response vs a declared case +
+supplied snapshot; setup prepares REQUEST CONTEXT (url, headers, expected),
+not state. Never call it "seeded"/"integration" when nothing is seeded or
+verified at the data layer — it proves contract shape + declared oracle.
+
+**Tier 2 — DB-verified flow.** seed → verify the seed → call the API → query
+the DB → compare against the LIVE query result. Native shape:
+
+```crust
+{"email": "u-$RUN_ID@t.dev"} | POST $BASE/api/users -H "authorization: Bearer $TOKEN" | assert (r => r.status === 201) | (r => r.json()) | capture UID (u => u.id)
+sql "SELECT email FROM users WHERE id = '$UID'" | assert (r => r.email === "u-$RUN_ID@t.dev")
+```
+
+Carries: run-owned data (`$RUN_ID` unique per run, set by setup — never
+shared mutable state); explicit identity matching (query the id you
+captured, never an unrelated record); failure-path cleanup defined BEFORE
+writes — a later line is happy-path only; guaranteed teardown is `crust.onExit`.
+
+**Tier 3 — demo / quickstart.** Disposable local resource, ordinary CRUD —
+the built-in mock server is the native fit — isolates "how little glue does
+crust need" from app safeguards (graph resolution, provisioning denial,
+identity-sensitive stores) — separate approved fixture, never folded in.
+
+Cross-cutting: label the tier so a green run cannot imply DB-level proof it
+never produced; approval/redirect/transport safeguards stay regardless of
+tier; setup attestations (flags asserting IAM/graph/provisioning policy) are
+DECLARATIONS, not backend verification.
+
 ## gen-fixtures — spec-driven cases
 
 ```

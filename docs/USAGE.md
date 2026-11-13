@@ -18,6 +18,7 @@ Mock it, test it, load it, tail it: the whole test stack baked into one binary. 
 - [Builtins](#builtins)
 - [test-fixture](#test-fixture)
 - [test-pipes](#test-pipes)
+- [What evidence does your test produce?](#what-evidence-does-your-test-produce)
 - [gen-fixtures](#gen-fixtures)
 - [mock-server](#mock-server)
 - [verify-web-links](#verify-web-links)
@@ -1567,6 +1568,57 @@ is **snapshotted before setup and restored when the file finishes**, so
 setup vars and captures never leak across files or into your interactive
 session. A `.pipes` file must behave the same on every machine. Exit codes:
 `0` all lines pass, `1` any fail, `2` no files matched / bad args.
+
+### What evidence does your test produce?
+
+Label the tier of evidence a fixture actually produces — in the test name
+or a comment — so a green run can never imply DB-level proof it never
+produced. Three tiers:
+
+**Tier 1 — snapshot / contract verification.** The response is compared
+against a declared case plus a supplied snapshot; `setup()` prepares
+REQUEST CONTEXT (url, headers, expected values), not state. Honest
+naming rule: do not call such a fixture "seeded" or "integration" when
+nothing is seeded or verified at the data layer — name the evidence the
+test actually produces. The check is valuable for what it proves (the
+contract shape against a declared oracle), not for what it doesn't.
+
+**Tier 2 — DB-verified flow.** The full chain: seed → verify the seed →
+call the API → query the DB → compare the response against the LIVE
+query result. The native shape is a `.pipes` suite chaining `capture`
+and `sql` (`$RUN_ID` is unique per run, set by the setup module):
+
+```crust
+{"email": "u-$RUN_ID@t.dev"} | POST $BASE/api/users -H "authorization: Bearer $TOKEN" | assert (r => r.status === 201) | (r => r.json()) | capture UID (u => u.id)
+sql "SELECT email FROM users WHERE id = '$UID'" | assert (r => r.email === "u-$RUN_ID@t.dev")
+```
+
+The first line seeds through the API and verifies the seed (status +
+captured identity); the second queries the live database by the id this
+run created and compares against the value the response carried. A
+`.crust.ts` fixture has the same shape: `setup()` seeds, an async
+matcher re-queries — the signup example above is exactly that. Three
+requirements the tier must carry: **run-owned data** (unique per run —
+never shared mutable state); **explicit identity matching** (query by
+the id you captured — never match an unrelated record); and
+**failure-path cleanup defined BEFORE writes are introduced** — a later
+cleanup line is happy-path only, because fail-fast skips it; guaranteed
+teardown is `crust.onExit` ([Lifecycle hooks](#lifecycle-hooks),
+test-pinned by `tests/onexit.test.ts`).
+
+**Tier 3 — demo / quickstart.** A disposable local resource with
+ordinary CRUD — the built-in [mock-server](#mock-server) is the native
+fit — isolates "how little glue does crust need" from
+application-specific safeguards (graph resolution, provisioning denial,
+identity-sensitive stores). Application safeguards belong in a separate
+approved fixture, never silently folded into a demo.
+
+Cross-cutting, at every tier: label the tier so a green run cannot
+imply DB-level proof it never produced; approval, redirect, and
+transport safeguards stay in place regardless of tier; and an
+attestation in setup code (a flag asserting IAM/graph/provisioning
+policy) is a DECLARATION, not verification of the backend's actual
+configuration — say so in the fixture.
 
 ### gen-fixtures
 
