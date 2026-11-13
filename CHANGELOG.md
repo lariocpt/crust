@@ -4,6 +4,24 @@ Notable changes to crust. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project is
 pre-1.0, so minor versions may carry breaking changes.
 
+## [0.3.7] — 2026-11-13
+
+### Changed
+
+- **A failing `verify-web-links --json` run now prints the fix-list to
+  stderr.** 0.3.6 promised every failing run ends with the aligned fix-list,
+  and that held for the text report only — while the mode CI actually uses is
+  `verify-web-links --json > report.json`, where the report owns stdout, the
+  redirect takes it to a file, and the log was left saying nothing but
+  "exited with 1". The same table now goes to stderr: same columns, same rows,
+  because both channels render it from one formatter instead of two copies, so
+  a log and an artifact cannot disagree about which element broke. Nothing else
+  moved — stdout is still pure JSON for parsers, exit codes are exactly as
+  before, no flag was added, no `--json` field was removed or re-typed, and a
+  clean run still prints no fix-list on either channel. It shares stderr with
+  the `--strict` unchecked-work note, which already used that channel in JSON
+  mode; the two coexist, and both are pinned by tests.
+
 ## [0.3.6] — 2026-11-13
 
 ### Added
