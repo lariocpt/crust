@@ -3,7 +3,7 @@ import { FlagError, type FlagSpec, parseFlags } from "../args";
 import { crawl, extractFragment, stripFragment } from "./crawler";
 import { isHtmlType } from "./extractors";
 import { diff, loadMetaFixtures } from "./metaFixtures";
-import { incompleteReasons, renderJson, renderText } from "./report";
+import { fixListColumns, incompleteReasons, renderJson, renderText } from "./report";
 import { discoverSeeds } from "./sitemap";
 import type { Failure, FailureSource, MetaFixture, VerifyOpts, VerifyReport } from "./types";
 
@@ -46,7 +46,9 @@ Pass --sitemap / --base-url explicitly to override that guess.
                            a page crust could not read as HTML all count. The
                            same fact is totals.complete in --json output.
   --no-progress            suppress the 5s progress heartbeat on stderr.
-  --json                   emit a machine-readable JSON report on stdout.
+  --json                   emit a machine-readable JSON report on stdout. A failing
+                           run also prints the fix-list to stderr, so a log that
+                           redirects stdout to a file still names what broke.
   -h, --help               show this message.
 
 Exit codes: 0 all clear, 1 verification failures (--strict: or unchecked work
@@ -119,6 +121,17 @@ export async function runCli(args: string[]): Promise<number> {
 
   if (opts.json) {
     process.stdout.write(`${renderJson(report)}\n`);
+    // A JSON run sends its entire report to stdout, and CI redirects stdout to
+    // an artifact file — which left a failing run with no human-readable output
+    // anywhere: the log said only "exited with 1". The fix-list therefore goes
+    // to stderr, as the same table the text report prints. stdout stays pure
+    // JSON for parsers, and exit codes are untouched.
+    const cols = fixListColumns(failures);
+    if (cols.length > 0) {
+      process.stderr.write(
+        `verify-web-links: ${failures.length} failure(s) — fix list\n${cols.join("\n")}\n`,
+      );
+    }
   } else {
     process.stdout.write(renderText(report));
   }

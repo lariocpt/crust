@@ -575,18 +575,38 @@ describe("a page whose content-type does not say HTML", () => {
  * `element` never contain whitespace; the broken column is the rest of the
  * line (meta diffs quote values that may contain spaces).
  */
-function parseFixList(stdout: string): { present: boolean; rows: [string, string, string][] } {
-  const lines = stdout.split("\n");
-  const start = lines.findIndex((l) => l.trim() === "fix list");
-  if (start === -1) return { present: false, rows: [] };
+function fixRows(lines: string[]): [string, string, string][] {
   const rows: [string, string, string][] = [];
-  for (const line of lines.slice(start + 2)) {
+  for (const line of lines) {
     if (!line.trim()) continue;
     const m = line.match(/^\s+(\S+)\s+(\S+)\s+(.+)$/);
     if (!m) throw new Error(`fix-list row does not parse as a triple: ${JSON.stringify(line)}`);
     rows.push([m[1]!, m[2]!, m[3]!]);
   }
-  return { present: true, rows };
+  return rows;
+}
+
+function parseFixList(stdout: string): { present: boolean; rows: [string, string, string][] } {
+  const lines = stdout.split("\n");
+  const start = lines.findIndex((l) => l.trim() === "fix list");
+  if (start === -1) return { present: false, rows: [] };
+  return { present: true, rows: fixRows(lines.slice(start + 2)) };
+}
+
+/**
+ * The same contract read off a `--json` run's stderr: a `… — fix list` lead
+ * line, then the column header, then the triples. stdout holds the JSON, so
+ * this is the only human-readable output a redirected CI log gets.
+ */
+function parseFixListStderr(stderr: string): {
+  present: boolean;
+  lead?: string;
+  rows: [string, string, string][];
+} {
+  const lines = stderr.split("\n");
+  const start = lines.findIndex((l) => l.endsWith("— fix list"));
+  if (start === -1) return { present: false, rows: [] };
+  return { present: true, lead: lines[start]!.trim(), rows: fixRows(lines.slice(start + 2)) };
 }
 
 describe("F7: every failure names its source page and element", () => {
@@ -752,5 +772,80 @@ describe("F7: every failure names its source page and element", () => {
     expect(page.status).toBe(200);
     expect(page.linkCount).toBe(1);
     expect(page.links).toBeUndefined();
+  });
+});
+
+describe("--json failures name themselves in the log, not only in the artifact", () => {
+  // The CI shape is `verify-web-links … --json > report.json`: stdout lands in
+  // a file, so a failing run used to leave the log saying nothing but "exited
+  // with 1". The fix-list now goes to stderr — stdout stays pure JSON, exit
+  // codes are untouched, and the table is the one the text report prints.
+
+  test("--json keeps stdout pure JSON and mirrors the fix-list to stderr", async () => {
+    const r = await runCli(["--site-map-url", `${base}/sitemap-f7.xml`, "--json"]);
+    expect(r.code).toBe(1);
+    // stdout is the report and nothing else: a redirected artifact stays parseable.
+    const parsed = JSON.parse(r.stdout);
+    expect(parsed.totals.failures).toBe(1);
+    expect(r.stdout).not.toContain("fix list");
+
+    const list = parseFixListStderr(r.stderr);
+    expect(list.present).toBe(true);
+    expect(list.lead).toBe("verify-web-links: 1 failure(s) — fix list");
+    expect(list.rows).toContainEqual([`${base}/f7-a`, "a", `${base}/f7-dead`]);
+    expect(list.rows).toContainEqual([`${base}/f7-b`, "img", `${base}/f7-dead`]);
+  });
+
+  test("the stderr table is the table the text report prints", async () => {
+    // One formatter, two channels: a log and an artifact cannot disagree about
+    // which element broke.
+    const text = await runCli(["--site-map-url", `${base}/sitemap-f7.xml`]);
+    const json = await runCli(["--site-map-url", `${base}/sitemap-f7.xml`, "--json"]);
+    const rows = parseFixList(text.stdout).rows;
+    expect(rows.length).toBeGreaterThan(0);
+    expect(parseFixListStderr(json.stderr).rows).toEqual(rows);
+  });
+
+  test("meta findings get their meta:<key> row on stderr too", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "crust-vwl-json-meta-"));
+    try {
+      const fixture = join(dir, "about.fail.crust.ts");
+      await Bun.write(
+        fixture,
+        `export default { url: "${base}/about", meta: { "og:title": "Wrong Title" } };\n`,
+      );
+      const r = await runCli([
+        "--site-map-url",
+        `${base}/sitemap-meta.xml`,
+        "--fixtures",
+        fixture,
+        "--json",
+      ]);
+      expect(r.code).toBe(1);
+      expect(parseFixListStderr(r.stderr).rows).toContainEqual([
+        `${base}/about`,
+        "meta:og:title",
+        'got "About Us" (expected "Wrong Title")',
+      ]);
+      // the structured field stays available to machines next to the human line
+      const parsed = JSON.parse(r.stdout);
+      expect(parsed.failures.some((f: { kind: string }) => f.kind === "meta-mismatch")).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a clean --json run leaves stderr alone", async () => {
+    const clean = await runCli(["--site-map-url", `${base}/sitemap-good.xml`, "--json"]);
+    expect(clean.code).toBe(0);
+    expect(clean.stderr).not.toContain("fix list");
+  });
+
+  test("--strict adds its unchecked-work note without displacing the fix-list", async () => {
+    // Two stderr facts about one run; neither may swallow the other.
+    const r = await runCli(["--site-map-url", `${base}/sitemap-json.xml`, "--json", "--strict"]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("--strict");
+    expect(() => JSON.parse(r.stdout)).not.toThrow();
   });
 });
