@@ -4,6 +4,58 @@ Notable changes to crust. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project is
 pre-1.0, so minor versions may carry breaking changes.
 
+## [0.3.8] — 2026-11-13
+
+### Added
+
+- **`expectations.validationEnvelope` — the configured validation-response
+  envelope.** The 0.3.6 expectations block configured the validation
+  *status* and explicitly left the response-body shape to crust convention
+  ("only the status is"). That left framework-layer validators — FastAPI
+  included, which answers `422` with a `detail` array before your handler
+  runs — unmatched by any generated expectation. The block now takes
+  `validationEnvelope` (`"crust"` or `"fastapi"`), global and per-operation
+  under `operations` alongside `validationStatus`, per-operation beating
+  global. It sets the **shape** of the expected validation body — never its
+  status, and never inferred from one. Omitted, the matrix keeps the
+  canonical `{ error, code: "validation", fieldErrors }` body **byte for
+  byte**: existing setups, generated files and regen diffs are untouched.
+  Set to `"fastapi"`, each validation case additionally expects a
+  FastAPI-shaped body: a `detail` array containing an error whose `loc`
+  equals the case's own body location — `["body", "<field>"]`, derived from
+  the mutated schema field, never parsed from a case name (an
+  unexpected-property case targets the synthetic field
+  `crustUnexpectedProp`) — with nonempty string `msg` and `type`. No message
+  text is ever matched: the location is the contract. A wrong-field error, a
+  query/path location, a malformed entry or a generic body fails under
+  **either** envelope; a case whose mutation cannot be attributed to a body
+  location is dropped and disclosed in the manifest's `unsupported` list
+  rather than weakened. The documented response schema stays attached —
+  predicate and schema are cumulative, neither permissive — and a
+  documented `400` beats a configured `422` even with an envelope set. As
+  with the rest of the block, an envelope value that is neither `crust` nor
+  `fastapi` refuses the generation with exit 2 and writes nothing.
+
+- **`validationOracle` — body-shape provenance in `gen-manifest.json`.**
+  Every validation-matrix case now records what its envelope asserts:
+  `validationOracle: { envelope, source, target }` — the envelope
+  (`"crust"` or `"fastapi"`), `source` (`"default"` for the omitted
+  convention, `configured:<setup-module>` for an explicit choice), and
+  `target` (the body location with its mutation kind: `missing-required`,
+  `wrong-type`, `enum`, `bound`, `pattern`, or `unexpected-property`).
+  `expectationSource` keeps its status-provenance semantics; the oracle
+  answers the other half of "what does this case expect, and where does
+  that come from?". Additive — the manifest stays schema v1, byte-stable
+  for runs whose envelope is the default.
+
+- **Contract review: the envelope item.** `docs/CONTRACT-REVIEW.md`
+  (published on the website at `/docs/contract-review/`) gains the
+  companion check — configured validation envelopes match the backend's
+  documented error shape — and the `crust-api-testing` skill's condensed
+  highest-risk checks and setup-module notes carry the same. The MCP
+  `crust_gen_fixtures` tool documents the block (description and `setup`
+  parameter) and the manifest's oracle.
+
 ## [0.3.7] — 2026-11-13
 
 ### Changed
