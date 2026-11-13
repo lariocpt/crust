@@ -2463,12 +2463,46 @@ builtins — a mock server or dev runner started by one call is still serving
 on the next, and the query tools iterate on the buffered past with pipeline
 fragments exactly like `logs>`.
 
+### Tool classes — side effects up front
+
+The `initialize` handshake carries this taxonomy in `instructions`, so an
+agent sees it before the first call (v0.3.6):
+
+| Class | Tools | What it touches |
+| --- | --- | --- |
+| **Static check** | `crust_check_line` | parses only — runs nothing, no I/O, no spawn |
+| **Execution** | `crust_run_line`, `crust_test_fixture`, `crust_test_pipes`, `crust_gen_fixtures` | arbitrary stages with real side effects — target approval, credentials, writes and cleanup remain the caller's responsibility per repo policy |
+| **Network / load generation** | `crust_verify_web_links`, `crust_load_run` | bounded generation against the network — approved non-production targets only |
+| **Long-lived resources** | `crust_mock_server_*`, `crust_procs_*`, `crust_logs_*` | held by the server process; die when it exits |
+
+**Teardown has three tiers, and no tool crosses them:**
+
+1. **Local processes** — `crust_procs_stop` (and server exit) kill the
+   supervised process groups whole: SIGTERM→SIGKILL, grandchildren included.
+2. **Mock-server sessions** — `crust_mock_server_stop` closes the listener and
+   releases the port. `--state` files and databases are application data: they
+   stay on disk.
+3. **Application data** — nothing in the MCP surface deletes remote or backend
+   resources or releases application data. A container a proc started, a row
+   it wrote, a queue it filled survives its local teardown; releasing it is the
+   caller's job (`crust.onExit` covers scripted cleanup — see
+   [Lifecycle hooks](#lifecycle-hooks)).
+
 ### Contracts, stated honestly
 
 - **Never a false pass.** A nonzero child exit, a killed timeout, a failed
   `assert` or a mock validation error is an `isError` result carrying the
   verbatim exit code and output. Zero matches is an explicit "zero items",
   never silence. A load run that measured nothing is refused (`empty`).
+- **Transport contract.** stdio JSON-RPC 2.0, one frame per line. The host
+  spawns `crust mcp` once; one-shot tools spawn a fresh crust child per call
+  (`cwd`/`env` per call, nothing persists), lifecycle tools live in the server
+  process and die with it. Every crust-side answer arrives as a JSON-RPC
+  frame — a successful result, or an `isError` tool result naming the reason.
+  A call that fails with a host-side error string (an "unavailable tool" style
+  refusal that never appears in crust's output) never reached the server: the
+  server was not spawned, the command/path is wrong, or the host's transport
+  framing broke. Debug with the `printf | crust mcp` smoke test above.
 - **Output is capped per stream** (256 KB, tail-kept) and truncation is
   always announced, never silent.
 - **Lifetime.** stdin EOF, SIGINT or SIGTERM tear down every held job —
