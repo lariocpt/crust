@@ -2153,6 +2153,49 @@ Flags: `--site-map-url <url-or-path>` or `--base-url <url>` (one required, mutua
 
 By default, all four verification behaviors are on: 2xx status, recurse into internal pages, validate `#fragment` targets against element ids on the destination page, and flag any 3xx redirect chain (often a sign of stale internal links). Each `og:image` URL is fetched and its content-type asserted to start with `image/`.
 
+**Every failure names its source (new in 0.3.6).** Failures are one per failing
+*target*, and each answers "which page did I find this on, and which element":
+
+- `sources[]` — every link that pointed at the failing target, as
+  `{fromUrl, kind, href}` (`kind` is the element: `a`, `img`, `script`, `link`,
+  `iframe`, `og-image`). In the text report each prints as an indented
+  `from <page> (<kind>)` line under the failure; `--json` carries the full
+  array. A broken URL linked from fifty pages is still **one** failure with
+  fifty sources — `totals.failures` and the exit codes are unchanged.
+  `kind: "sitemap"` means the URL arrived as a sitemap `<loc>` with no page
+  linking it; the sitemap URL is named as `fromUrl` rather than the source
+  being omitted.
+- `meta` — structured `{key, expected, actual}` for `meta-mismatch` findings
+  (`meta-fixture-no-page` carries `key: "fixture"`).
+- **Fix-list** — every failing text run ends with a separate aligned section:
+  one line per (page, element, broken-thing) triple, nothing else. A clean run
+  prints no fix-list section; in `--json` the structured fields *are* the
+  fix-list.
+
+```text
+verify-web-links: 3 page(s), 1 asset(s), 3 failure(s)
+
+  [broken-link] 1
+    http://localhost:47831/broken  — HTTP 404
+      from http://localhost:47831/page-a (a)
+      from http://localhost:47831/page-b (img)
+  [meta-mismatch] 1
+    http://localhost:47831/page-x  — meta.og:title: expected "Page X — Wrong Title", got "Page X — Real Title"
+  [missing-anchor] 1
+    http://localhost:47831/page-x#ghost  — #ghost not found on http://localhost:47831/page-x (from http://localhost:47831/page-a)
+      from http://localhost:47831/page-a (a)
+
+  fix list
+  page                           element        broken link / diff
+  http://localhost:47831/page-a  a              http://localhost:47831/broken
+  http://localhost:47831/page-a  a              http://localhost:47831/page-x#ghost
+  http://localhost:47831/page-b  img            http://localhost:47831/broken
+  http://localhost:47831/page-x  meta:og:title  got "Page X — Real Title" (expected "Page X — Wrong Title")
+```
+
+The `detail` prose is unchanged from v0.3.5 — the structured fields are purely
+additive, so nothing that parsed the old report breaks.
+
 A page is crawled when crust can read it as a HTML document: when the content-type says so
 (`text/html` or `application/xhtml+xml`), or when the declaration says otherwise but the document
 itself begins `<!doctype html>` / `<html`. That second case is printed — `N page(s) had to be
