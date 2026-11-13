@@ -176,9 +176,11 @@ Setup-module contract (imported lazily): `shared()` promise-cached context,
 whose values a spec can't express (business date rules → `body` merge;
 required foreign keys → `skip`).
 When the contract disagrees with the 400 convention (422 backends, 404/403
-concealment), the optional `expectations` block configures correct statuses —
-a documented status always wins over a configured one;
-`docs/USAGE.md §gen-fixtures` has the schema and precedence.
+concealment), the optional `expectations` block configures correct statuses
+and the expected validation-body shape (`validationEnvelope`: `"crust"`,
+the default, or `"fastapi"` for framework-layer validators) — a documented
+status always wins over a configured one; `docs/USAGE.md §gen-fixtures` has
+the schema, the fastapi predicate, and precedence.
 
 The `--out` dir is DELETED and recreated every run — never hand-edit
 generated files.
@@ -250,7 +252,9 @@ Highest-risk checks (full checklist:
 https://lariocpt.github.io/crust-website/docs/contract-review/):
 
 - Expected statuses come from the reviewed contract — validation cases do
-  NOT default to 400 (a 422 contract must generate 422 expectations).
+  NOT default to 400 (a 422 contract must generate 422 expectations); a
+  configured `validationEnvelope` must match the backend's documented error
+  shape.
 - Authorization cases account for intentional 404 concealment; unknown-id
   cases use syntactically valid identifiers.
 - One intended condition per negative case; unrelated fields stay valid so
@@ -293,7 +297,9 @@ Behavior described here was verified against **crust v0.3.5** (source-read
 and run through the compiled binary where it matters: `--redirect` record
 shapes, `output.schema` $ref refusal, gen-fixtures skip reporting). New in
 **v0.3.6**: the `gen-manifest.json` review artifact, the setup-module
-`expectations` block, and the evidence-tier taxonomy. Newer
+`expectations` block, and the evidence-tier taxonomy. New in **v0.3.8**:
+`expectations.validationEnvelope` (the expected validation-body shape) and
+the manifest's `validationOracle` provenance for validation cases. Newer
 crust versions may extend behavior; re-verify before documenting it. Keep
 approved targets, credentials, transport exceptions, resource ownership, and
 execution restrictions in repository policy, not in this skill.

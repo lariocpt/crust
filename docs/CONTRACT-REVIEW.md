@@ -59,6 +59,7 @@ Confirm:
 - [ ] Authorization cases account for intentional `404` concealment.
 - [ ] Unknown-ID cases use syntactically valid identifiers.
 - [ ] Broad alternatives such as "400 or 422" are used only when explicitly contractual.
+- [ ] Configured validation envelopes match the backend's documented error shape.
 
 ## C. Validate negative-case isolation
 

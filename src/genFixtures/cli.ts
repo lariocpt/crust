@@ -23,8 +23,10 @@ detected), runnable by test-pipes. --no-flows suppresses it.
 The --setup module carries the app-specific part (auth, scope substitution).
 Required exports: shared(), headersFor(ctx, role), resolvePath(ctx, template),
 scopeParam, JSON_HEADERS; optional scopeRoots, flowOverrides (per-collection
-flow tuning) and expectations (reviewed validation-status / concealment
-overrides where the contract disagrees with the 400 convention). See the
+flow tuning) and expectations (reviewed validation-status / envelope /
+concealment overrides where the contract disagrees with the 400 convention;
+validationEnvelope picks the expected validation-response shape, "crust" or
+"fastapi"). See the
 contract doc at the top of src/genFixtures/generate.ts, and examples/gen-setup.ts
 in the crust repo for a complete runnable module to copy.
 

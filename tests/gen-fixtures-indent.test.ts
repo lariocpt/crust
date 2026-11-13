@@ -373,6 +373,10 @@ describe("resolveEmitStyle", () => {
       lineWidth: Number.POSITIVE_INFINITY,
       quoteStyle: "json",
       organizeImports: false,
+      jsonExpand: "auto",
+      jsonIndentUnit: DEFAULT_INDENT_UNIT,
+      jsonIndentWidth: 2,
+      jsonLineWidth: Number.POSITIVE_INFINITY,
       legacy: true,
       biomeJson: null,
     });
@@ -394,6 +398,10 @@ describe("resolveEmitStyle", () => {
       lineWidth: 80,
       quoteStyle: "single",
       organizeImports: true,
+      jsonExpand: "auto",
+      jsonIndentUnit: "\t",
+      jsonIndentWidth: 2,
+      jsonLineWidth: 80,
       legacy: false,
       biomeJson: join(outTree, "biome.json"),
     });
@@ -415,6 +423,10 @@ describe("resolveEmitStyle", () => {
       lineWidth: 80,
       quoteStyle: "double",
       organizeImports: false,
+      jsonExpand: "auto",
+      jsonIndentUnit: "    ",
+      jsonIndentWidth: 4,
+      jsonLineWidth: 80,
       legacy: false,
       biomeJson: join(cwdTree, "biome.json"),
     });
