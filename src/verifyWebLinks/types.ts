@@ -52,10 +52,44 @@ export type FailureKind =
   | "meta-fixture-no-page"
   | "og-image-broken";
 
+/**
+ * Where a failing target was found (v0.3.6+). `kind` is the element that
+ * linked it; `"sitemap"` means the URL arrived as a `<loc>` in the sitemap
+ * itself — no page element pointed there, and the report says so honestly
+ * rather than omitting the source.
+ */
+export interface FailureSource {
+  fromUrl: string;
+  kind: LinkKind | "sitemap";
+  href: string;
+}
+
+/**
+ * Structured meta finding (v0.3.6+): the key that differs plus the compared
+ * values, so a consumer never has to re-parse the `detail` prose.
+ * `meta-fixture-no-page` uses `key: "fixture"` with `expected: "page was
+ * crawled"` and `actual: null`.
+ */
+export interface FailureMeta {
+  key: string;
+  expected: unknown;
+  actual: unknown;
+}
+
 export interface Failure {
   kind: FailureKind;
   url: string;
   detail: string;
+  /**
+   * Every place this failing target was found, aggregated into ONE failure per
+   * failing target (v0.3.6+): a broken URL linked from fifty pages is still
+   * one failure — `totals.failures` and the exit codes are unchanged by this
+   * field. Absent only when nothing pointed at the target (should not happen:
+   * every fetched URL came from a sitemap seed or a link).
+   */
+  sources?: FailureSource[];
+  /** Structured key/expected/actual for `meta-mismatch` / `meta-fixture-no-page` (v0.3.6+). */
+  meta?: FailureMeta;
 }
 
 export interface MetaFixture {

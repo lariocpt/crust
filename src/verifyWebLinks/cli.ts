@@ -5,7 +5,7 @@ import { isHtmlType } from "./extractors";
 import { diff, loadMetaFixtures } from "./metaFixtures";
 import { incompleteReasons, renderJson, renderText } from "./report";
 import { discoverSeeds } from "./sitemap";
-import type { Failure, MetaFixture, VerifyOpts, VerifyReport } from "./types";
+import type { Failure, FailureSource, MetaFixture, VerifyOpts, VerifyReport } from "./types";
 
 const DEFAULT_UA = "crust-verify-web-links/0.1";
 
@@ -59,6 +59,7 @@ export async function runCli(args: string[]): Promise<number> {
 
   let seeds: string[];
   let origin: URL;
+  let seedSources: { url: string; sitemap: string }[];
   try {
     const d = await discoverSeeds({
       sitemapUrl: opts.sitemapUrl,
@@ -68,6 +69,7 @@ export async function runCli(args: string[]): Promise<number> {
     });
     seeds = d.seeds;
     origin = d.origin;
+    seedSources = d.seedSources;
   } catch (err) {
     process.stderr.write(`verify-web-links: ${(err as Error).message}\n`);
     return 2;
@@ -84,7 +86,7 @@ export async function runCli(args: string[]): Promise<number> {
   }
 
   const { results, dropped } = await crawl(seeds, origin, opts);
-  const { failures, anchorsSkipped } = collectFailures(results, fixtures, opts);
+  const { failures, anchorsSkipped } = collectFailures(results, fixtures, opts, seedSources);
 
   let pages = 0;
   let assets = 0;
@@ -139,21 +141,80 @@ function canonicalUrl(u: string): string {
   }
 }
 
+function cmp(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+function sortSources(sources: FailureSource[]): FailureSource[] {
+  const seen = new Set<string>();
+  const out: FailureSource[] = [];
+  for (const s of sources) {
+    const key = `${s.fromUrl}\u0000${s.kind}\u0000${s.href}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(s);
+  }
+  return out.sort(
+    (x, y) => cmp(x.fromUrl, y.fromUrl) || cmp(x.kind, y.kind) || cmp(x.href, y.href),
+  );
+}
+
 function collectFailures(
   results: Map<string, import("./types").CrawlResult>,
   fixtures: MetaFixture[],
   opts: VerifyOpts,
+  seedSources: { url: string; sitemap: string }[],
 ): { failures: Failure[]; anchorsSkipped: number } {
   const failures: Failure[] = [];
   let anchorsSkipped = 0;
 
+  // F7 attribution: join every LinkRef back to the failing target so each
+  // failure answers "which page did I find this on, and which element".
+  // Indexed by the CANONICAL target URL — the crawler keys results by the raw
+  // sitemap <loc> while refs are resolved through `new URL()`, so a raw-string
+  // join would miss (bare origin vs trailing-slash spellings of one page).
+  // One failure per failing TARGET with all sources aggregated: a broken URL
+  // linked from fifty pages is still one failure — totals.failures and the
+  // exit codes are untouched by this join.
+  const linkSources = new Map<string, FailureSource[]>();
+  for (const r of results.values()) {
+    for (const ref of r.links) {
+      const key = canonicalUrl(stripFragment(ref.resolved));
+      const arr = linkSources.get(key) ?? [];
+      arr.push({ fromUrl: ref.fromUrl, kind: ref.kind, href: ref.href });
+      linkSources.set(key, arr);
+    }
+  }
+  // A failure whose origin is the sitemap itself (a <loc> that 404s and no
+  // page links it): fromUrl is the sitemap URL — stated honestly, not omitted.
+  const sitemapSources = new Map<string, FailureSource>();
+  for (const s of seedSources) {
+    sitemapSources.set(canonicalUrl(stripFragment(s.url)), {
+      fromUrl: s.sitemap,
+      kind: "sitemap",
+      href: s.url,
+    });
+  }
+  const sourcesFor = (url: string): { sources?: FailureSource[] } => {
+    const key = canonicalUrl(stripFragment(url));
+    const fromSitemap = sitemapSources.get(key);
+    const all = [...(linkSources.get(key) ?? []), ...(fromSitemap ? [fromSitemap] : [])];
+    const sorted = sortSources(all);
+    return sorted.length > 0 ? { sources: sorted } : {};
+  };
+
   for (const r of results.values()) {
     if (r.error) {
-      failures.push({ kind: "broken-link", url: r.url, detail: r.error });
+      failures.push({ kind: "broken-link", url: r.url, detail: r.error, ...sourcesFor(r.url) });
       continue;
     }
     if (r.status < 200 || r.status >= 400) {
-      failures.push({ kind: "broken-link", url: r.url, detail: `HTTP ${r.status}` });
+      failures.push({
+        kind: "broken-link",
+        url: r.url,
+        detail: `HTTP ${r.status}`,
+        ...sourcesFor(r.url),
+      });
     }
   }
 
@@ -165,12 +226,16 @@ function collectFailures(
           kind: "redirect-chain",
           url: r.url,
           detail: `${r.redirectChain.length} hop(s): ${path}`,
+          ...sourcesFor(r.url),
         });
       }
     }
   }
 
   if (opts.checkAnchors) {
+    // Aggregated per resolved fragment URL: the same missing #frag linked from
+    // two pages is one failure carrying both sources.
+    const anchors = new Map<string, { url: string; detail: string; sources: FailureSource[] }>();
     for (const r of results.values()) {
       for (const ref of r.links) {
         const frag = extractFragment(ref.resolved);
@@ -194,34 +259,59 @@ function collectFailures(
           continue;
         }
         if (!target.ids.includes(frag)) {
-          failures.push({
-            kind: "missing-anchor",
-            url: ref.resolved,
-            detail: `#${frag} not found on ${targetUrl} (from ${ref.fromUrl})`,
-          });
+          const key = canonicalUrl(ref.resolved);
+          const src: FailureSource = { fromUrl: ref.fromUrl, kind: ref.kind, href: ref.href };
+          const existing = anchors.get(key);
+          if (existing) existing.sources.push(src);
+          else
+            anchors.set(key, {
+              url: ref.resolved,
+              detail: `#${frag} not found on ${targetUrl} (from ${ref.fromUrl})`,
+              sources: [src],
+            });
         }
       }
     }
+    for (const a of anchors.values()) {
+      failures.push({
+        kind: "missing-anchor",
+        url: a.url,
+        detail: a.detail,
+        sources: sortSources(a.sources),
+      });
+    }
   }
 
-  for (const r of results.values()) {
-    for (const ref of r.links) {
-      if (ref.kind !== "og-image") continue;
-      const target = results.get(stripFragment(ref.resolved));
-      if (!target) continue;
-      if (target.status < 200 || target.status >= 400) {
-        failures.push({
-          kind: "og-image-broken",
-          url: ref.resolved,
-          detail: `from ${ref.fromUrl}, HTTP ${target.status}`,
-        });
-      } else if (!target.contentType.toLowerCase().startsWith("image/")) {
-        failures.push({
-          kind: "og-image-broken",
-          url: ref.resolved,
-          detail: `from ${ref.fromUrl}, content-type ${target.contentType || "<unset>"}`,
-        });
+  {
+    // og-image refs live in the same link graph; aggregate per image URL the
+    // same way (the detail prose keeps the first ref that saw the problem).
+    const og = new Map<string, { url: string; detail: string; sources: FailureSource[] }>();
+    for (const r of results.values()) {
+      for (const ref of r.links) {
+        if (ref.kind !== "og-image") continue;
+        const target = results.get(stripFragment(ref.resolved));
+        if (!target) continue;
+        let detail: string | undefined;
+        if (target.status < 200 || target.status >= 400) {
+          detail = `from ${ref.fromUrl}, HTTP ${target.status}`;
+        } else if (!target.contentType.toLowerCase().startsWith("image/")) {
+          detail = `from ${ref.fromUrl}, content-type ${target.contentType || "<unset>"}`;
+        }
+        if (detail === undefined) continue;
+        const key = canonicalUrl(ref.resolved);
+        const src: FailureSource = { fromUrl: ref.fromUrl, kind: ref.kind, href: ref.href };
+        const existing = og.get(key);
+        if (existing) existing.sources.push(src);
+        else og.set(key, { url: ref.resolved, detail, sources: [src] });
       }
+    }
+    for (const o of og.values()) {
+      failures.push({
+        kind: "og-image-broken",
+        url: o.url,
+        detail: o.detail,
+        sources: sortSources(o.sources),
+      });
     }
   }
 
@@ -239,6 +329,7 @@ function collectFailures(
         kind: "meta-fixture-no-page",
         url: fx.url,
         detail: "fixture URL was not crawled (not in sitemap and not reachable from one)",
+        meta: { key: "fixture", expected: "page was crawled", actual: null },
       });
       continue;
     }
@@ -248,9 +339,20 @@ function collectFailures(
         kind: "meta-mismatch",
         url: fx.url,
         detail: `${f.path}: expected ${JSON.stringify(f.expected)}, got ${JSON.stringify(f.actual)}`,
+        // The diff root is the literal "meta" — the structured key is the bare
+        // meta key (`og:title`), so the fix-list column reads `meta:og:title`.
+        meta: {
+          key: f.path.startsWith("meta.") ? f.path.slice("meta.".length) : f.path,
+          expected: f.expected,
+          actual: f.actual,
+        },
       });
     }
   }
+
+  // Deterministic ordering everywhere: the crawl fills `results` in fetch
+  // order, which is concurrency-dependent. Sort by kind, then url, then detail.
+  failures.sort((a, b) => cmp(a.kind, b.kind) || cmp(a.url, b.url) || cmp(a.detail, b.detail));
 
   return { failures, anchorsSkipped };
 }
