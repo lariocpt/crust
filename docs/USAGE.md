@@ -1573,7 +1573,7 @@ session. A `.pipes` file must behave the same on every machine. Exit codes:
 
 Label the tier of evidence a fixture actually produces — in the test name
 or a comment — so a green run can never imply DB-level proof it never
-produced. Three tiers:
+produced (taxonomy new in 0.3.6). Three tiers:
 
 **Tier 1 — snapshot / contract verification.** The response is compared
 against a declared case plus a supplied snapshot; `setup()` prepares
@@ -1657,7 +1657,7 @@ test-fixture --target 'tests/gen/*.gen.crust.ts' --threads 8
 test-pipes --target tests/gen/flows/flows.gen.pipes   # generated CRUD flows
 ```
 
-**`gen-manifest.json` — the review artifact.** The last write of every
+**`gen-manifest.json` — the review artifact (new in 0.3.6).** The last write of every
 successful generation is `gen-manifest.json` inside `--out`: every generated
 case with its expectation's PROVENANCE — `contract:paths.<path>.<method>.responses.<code>`
 when the spec documents that status for the operation (every case family
@@ -1813,7 +1813,7 @@ every app-specific detail and must export:
   headers, used for role `"none"`.
 - `expectations?: { validationStatus?: number; concealment?: "404" | "403";
   operations?: Record<string, { validationStatus?: number; errorStatus?:
-  number }> }` — reviewed expectation overrides for backends whose contract
+  number }> }` — new in 0.3.6: reviewed expectation overrides for backends whose contract
   disagrees with the 400 convention, so their matrices are correct **without
   hand-editing generated files**. `validationStatus` sets the validation-matrix
   status (e.g. `422`); `concealment` sets the status of the unknown-id /
