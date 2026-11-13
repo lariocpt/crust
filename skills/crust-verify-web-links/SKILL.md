@@ -21,6 +21,38 @@ having left discovered links unchecked. `2` also covers `--site-map-url`
 together with `--base-url`, neither of them given, `no fixture files matched
 <glob>`, `--concurrency must be >= 1`, and `unexpected argument`.
 
+## Every failure names its source (new in 0.3.6)
+
+Failures are **one per failing target**, and each answers "which page did I
+find this on, and which element":
+
+- `sources[]` — every link that pointed at the failing target, as
+  `{fromUrl, kind, href}`. In text each prints as an indented
+  `from <page> (<kind>)` line under the failure; in `--json` it is the full
+  array. A broken URL linked from fifty pages is still **one** failure with
+  fifty sources — `totals.failures` and exit codes are unchanged.
+  `kind: "sitemap"` means the URL arrived as a sitemap `<loc>` and no page
+  linked it; the sitemap URL is named as `fromUrl` instead of the source being
+  omitted.
+- `meta` — structured `{key, expected, actual}` for `meta-mismatch`
+  (`meta-fixture-no-page` carries `key: "fixture"`).
+- **Fix-list**: every failing text run ends with a separate aligned section —
+  one line per (page, element, broken-thing) triple, nothing else:
+
+  ```text
+  fix list
+  page                           element        broken link / diff
+  http://localhost:47831/page-a  a              http://localhost:47831/broken
+  http://localhost:47831/page-b  img            http://localhost:47831/broken
+  http://localhost:47831/page-x  meta:og:title  got "Real Title" (expected "Wrong Title")
+  ```
+
+  A clean run prints no fix-list section. `--json` carries the structured
+  `sources`/`meta` fields instead — the data *is* the fix-list there.
+
+The `detail` prose is unchanged from v0.3.5: the structured fields are purely
+additive.
+
 ## Getting it pointed at the right thing
 
 ```crust
