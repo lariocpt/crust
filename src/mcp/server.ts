@@ -57,7 +57,11 @@ export const MCP_USAGE = `crust mcp — Model Context Protocol server over stdio
   (crust_mock_server_*, crust_procs_*, crust_logs_*).
 
   Held jobs (mock servers, procs, log sessions) die with this process;
-  stop tools report teardown honestly. A nonzero child exit is ALWAYS an
+  stop tools report teardown honestly. Teardown tiers: LOCAL processes
+  are killed (whole process group); mock SESSIONS close (port released,
+  persisted --state data untouched); APPLICATION data and remote/backend
+  resources are never touched by teardown — releasing them stays the
+  caller's job. A nonzero child exit is ALWAYS an
   isError result — crust never reports a false pass, including over MCP.
 `;
 
@@ -115,7 +119,7 @@ export async function runMcp(opts: { envFile?: string } = {}): Promise<number> {
           capabilities: { tools: {} },
           serverInfo: { name: "crust", title: "crust", version: pkg.version },
           instructions:
-            "crust test-stack tools over MCP. One-shot tools run a fresh crust child per call: cwd/env apply per call and never persist — pass them explicitly. Lifecycle tools (mock server, procs, logs) are held by this server process and die when it exits. Nonzero exits, killed timeouts and failed asserts are isError results carrying the verbatim output; crust never reports a false pass.",
+            "crust test-stack tools over MCP. Tool classes: crust_check_line is a static check — it parses, runs nothing. crust_run_line is execution — arbitrary stages with real side effects; target approval, credentials, writes and cleanup remain the caller's responsibility per repo policy. crust_load_run generates network load — bounded, approved non-production targets only. Lifecycle tools (mock server, procs, logs) are long-lived resources held by this server process and die when it exits; stopping them tears down LOCAL processes and releases ports — it does NOT delete remote/backend resources or release application data. One-shot tools run a fresh crust child per call: cwd/env apply per call and never persist — pass them explicitly. Nonzero exits, killed timeouts and failed asserts are isError results carrying the verbatim output; crust never reports a false pass.",
         });
       }
       case "ping":

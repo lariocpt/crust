@@ -100,7 +100,7 @@ const MOCK_TOOLS: ToolDef[] = [
   {
     name: "crust_mock_server_stop",
     description:
-      "Stop one mock server (by id) or ALL of them (omit id). The port is released; stateful --state files keep their data on disk.",
+      "Stop one mock server (by id) or ALL of them (omit id). This ends the mock SESSION: the port is released. Persisted state (--state files, sqlite/postgres data) is application data — it stays until you delete it.",
     inputSchema: {
       type: "object",
       properties: {
@@ -215,7 +215,7 @@ const STREAM_TOOLS: ToolDef[] = [
   {
     name: "crust_procs_start",
     description:
-      "Supervise dev processes with crust procs() and KEEP them running across calls: one merged {proc, stream, line} stream, per-proc env, dependency ordering (after), readiness probes (ready), restart backoff, and process-group teardown on stop. Query the merged output with crust_logs_query (id is shared); gate readiness in a follow-up crust_run_line with `wait :3000/health`. Items with stream ready/exit are supervision events, not app logs.",
+      "Supervise dev processes with crust procs() and KEEP them running across calls: one merged {proc, stream, line} stream, per-proc env, dependency ordering (after), readiness probes (ready), restart backoff, and process-group teardown on stop. Teardown is the LOCAL-process tier: it kills what crust spawned, not remote state those procs created (containers, rows, cloud resources — those need their own cleanup). Query the merged output with crust_logs_query (id is shared); gate readiness in a follow-up crust_run_line with `wait :3000/health`. Items with stream ready/exit are supervision events, not app logs.",
     inputSchema: {
       type: "object",
       properties: {
@@ -255,7 +255,7 @@ const STREAM_TOOLS: ToolDef[] = [
   {
     name: "crust_procs_stop",
     description:
-      "Stop a procs session: SIGTERM→SIGKILL escalation across every proc's whole process group, so grandchildren die too. Reports honestly if a child is still unwinding past 10s.",
+      "Stop a procs session: SIGTERM→SIGKILL escalation across every proc's whole process group, so grandchildren die too. Local processes only — resources the procs created remotely (containers, rows, queues) survive and stay the caller's to release. Reports honestly if a child is still unwinding past 10s.",
     inputSchema: {
       type: "object",
       properties: { id: { type: "string" } },
