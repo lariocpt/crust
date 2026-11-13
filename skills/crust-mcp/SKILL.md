@@ -66,6 +66,31 @@ printf '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion
 range(1,5) | (n => n * n) | stats
 ```
 
+## Tool classes and teardown tiers
+
+The `initialize` handshake carries this taxonomy in `instructions` (0.3.6):
+
+- **Static check** — `crust_check_line`: parses, runs nothing.
+- **Execution** — `crust_run_line` and the test/gen tools: arbitrary stages,
+  real side effects. Target approval, credentials, writes and cleanup stay
+  the caller's responsibility.
+- **Network/load generation** — `crust_load_run`, `crust_verify_web_links`:
+  bounded generation, approved non-production targets only.
+- **Long-lived resources** — mock server, procs, log sessions: held by the
+  server process, die when it exits.
+
+Teardown has three tiers and no tool crosses them: **local processes** are
+killed whole (process group, grandchildren included); **mock sessions** close
+(port released — `--state` files/DBs are application data and stay on disk);
+**application data** is never touched — a container, row or queue a proc
+created remotely survives its local teardown, releasing it is your job.
+
+Transport contract: stdio JSON-RPC, one frame per line; one-shot tools spawn
+a fresh crust child per call (`cwd`/`env` per call, nothing persists). A
+refusal whose error string never appears in crust's own output (an
+"unavailable tool" style host error) never reached the server — debug the
+host's spawn command, not crust.
+
 ## Honest failure — never a false pass over MCP
 
 A nonzero child exit, a killed timeout, a failed `assert`, a mock validation
@@ -97,8 +122,11 @@ filter (l => l.proc === "api") | (l => l.line) | grep -i timeout
   the returned `url`. `proxy: "<upstream>"` turns it into a conformance audit;
   read findings with `crust_mock_server_violations`.
 - `crust_load_run` composes the documented pipeline (`load … | parallel … |
-  … | stats | assert`); an `assert` failure is `isError` — a run that
-  measured nothing is refused (`empty`), never a green gate.
+  … | stats | assert`); gates go in `assert` — one predicate, or an array of
+  them, one assert stage per gate. An `expect` inside `target` runs BEFORE
+  stats and suppresses the summary when it fails; a post-stats `assert`
+  failure is `isError` with the stats still included. A run that measured
+  nothing is refused (`empty`), never a green gate.
 
 ## Limits, stated
 

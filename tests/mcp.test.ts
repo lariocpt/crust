@@ -201,6 +201,14 @@ describe("mcp protocol", () => {
     });
     expect(known.result.protocolVersion).toBe("2025-03-26");
     expect(known.result.capabilities.tools).toBeDefined();
+    // The tool-class taxonomy is part of the handshake contract: an agent that
+    // only reads `instructions` must learn static/execution/load/lifecycle
+    // classes and that teardown does not touch remote or application state.
+    const instructions: string = known.result.instructions;
+    expect(instructions).toContain("static check");
+    expect(instructions).toContain("real side effects");
+    expect(instructions).toContain("non-production targets only");
+    expect(instructions).toContain("does NOT delete remote/backend resources");
     const unknown = await c.rpc("initialize", {
       protocolVersion: "1999-01-01",
       capabilities: {},
@@ -313,6 +321,85 @@ describe("mcp one-shot tools", () => {
     expect(good.text).toContain("parse");
     const bad = await c.call("crust_check_line", { line: "GET :3000 | expect" });
     expect(bad.isError).toBe(true);
+  });
+});
+
+describe("mcp crust_load_run gates", () => {
+  // The gate composition is the whole point of the tool: asserts live AFTER
+  // stats (failure names the predicate, stats survive); an expect inside the
+  // target runs BEFORE stats (failure means no stats ever existed).
+  let c: McpClient;
+  let srv: ReturnType<typeof Bun.serve>;
+  let base: string;
+  beforeAll(async () => {
+    srv = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: () => Response.json({ ok: true }),
+    });
+    base = `http://127.0.0.1:${srv.port}`;
+    c = await client();
+    await c.initialize();
+  });
+  afterAll(() => {
+    c.kill();
+    srv.stop();
+  });
+
+  test("single-string assert composes one gate after stats (unchanged behavior)", async () => {
+    const r = await c.call("crust_load_run", {
+      target: `GET ${base}/health`,
+      duration: "1s",
+      rate: 2,
+      parallel: 2,
+      assert: "s => s.count >= 1",
+    });
+    expect(r.isError).toBeUndefined();
+    expect(r.text).toContain('"count"');
+  });
+
+  test("assert array: the failing predicate is named and the stats are still included", async () => {
+    const r = await c.call("crust_load_run", {
+      target: `GET ${base}/health`,
+      duration: "1s",
+      rate: 2,
+      parallel: 2,
+      assert: ["s => s.count >= 1", "s => s.p95 < -1"],
+    });
+    expect(r.isError).toBe(true);
+    expect(r.text).toContain("s.p95 < -1"); // names the FAILING predicate, not the passing one
+    expect(r.text).toContain('"count"'); // post-stats failure keeps the summary — the report survives the gate
+  });
+
+  test("expect inside target fails BEFORE stats — no stats exist in the result", async () => {
+    const r = await c.call("crust_load_run", {
+      target: `GET ${base}/health | expect 418`,
+      duration: "1s",
+      rate: 2,
+      parallel: 2,
+    });
+    expect(r.isError).toBe(true);
+    expect(r.text).toContain("expect 418"); // the failing stage is named
+    expect(r.text).not.toContain("p95"); // the summary was suppressed — this is the F2 anti-pattern
+  });
+
+  test("assert array validation: non-string entries and empty arrays refuse", async () => {
+    const mixed = await c.call("crust_load_run", {
+      target: `GET ${base}/health`,
+      duration: "1s",
+      rate: 2,
+      assert: ["s => s.count >= 1", 42],
+    });
+    expect(mixed.isError).toBe(true);
+    expect(mixed.text).toContain("array of strings");
+    const empty = await c.call("crust_load_run", {
+      target: `GET ${base}/health`,
+      duration: "1s",
+      rate: 2,
+      assert: [],
+    });
+    expect(empty.isError).toBe(true);
+    expect(empty.text).toContain("at least one predicate");
   });
 });
 
