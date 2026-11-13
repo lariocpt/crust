@@ -113,6 +113,20 @@ export interface EmitStyle {
    * "off", or `assist.enabled: false`, switches it off.
    */
   organizeImports: boolean;
+  /**
+   * The expansion policy biome's JSON printer uses: `formatter.expand`, the
+   * `json.formatter` layer over the top level. "auto" — biome's default —
+   * breaks objects even when they fit but flattens arrays that fit;
+   * "always" breaks every container (the 0.3.2 JSON.stringify shape);
+   * "never" flattens every container that fits and breaks the rest.
+   */
+  jsonExpand: "auto" | "always" | "never";
+  /** The indent unit biome's JSON printer uses — `json.formatter` over the top. */
+  jsonIndentUnit: string;
+  /** Columns one JSON indent level costs. A tab counts as biome's indentWidth. */
+  jsonIndentWidth: number;
+  /** Where biome wraps JSON. Infinity in the legacy form — nothing ever wraps. */
+  jsonLineWidth: number;
   /** True when no biome.json was found — the 0.3.2 byte-for-byte contract. */
   legacy: boolean;
   /** The biome.json that decided it, or null when none was found. */
@@ -130,6 +144,10 @@ export function styleForBiomeConfig(config: unknown): Omit<EmitStyle, "legacy" |
     isRecord(config) && isRecord(config.javascript) && isRecord(config.javascript.formatter)
       ? (config.javascript.formatter as Record<string, unknown>)
       : {};
+  const jsonLayer =
+    isRecord(config) && isRecord(config.json) && isRecord(config.json.formatter)
+      ? (config.json.formatter as Record<string, unknown>)
+      : {};
   let indentWidth = BIOME_INDENT_WIDTH;
   let lineWidth = BIOME_LINE_WIDTH;
   for (const layer of [top, js]) {
@@ -139,6 +157,28 @@ export function styleForBiomeConfig(config: unknown): Omit<EmitStyle, "legacy" |
     }
     if (Number.isInteger(layer.lineWidth) && (layer.lineWidth as number) > 0) {
       lineWidth = layer.lineWidth as number;
+    }
+  }
+  // The JSON slice layers top → json.formatter; javascript.formatter never
+  // applies to JSON files. biome's JSON printer is what formats
+  // gen-manifest.json, so the emitter mirrors its exact resolution.
+  let jsonIndentStyle: string = BIOME_INDENT_STYLE;
+  let jsonIndentWidth = BIOME_INDENT_WIDTH;
+  let jsonLineWidth = BIOME_LINE_WIDTH;
+  let jsonExpand: "auto" | "always" | "never" = "auto";
+  for (const layer of [top, jsonLayer]) {
+    if (layer.indentStyle === "tab" || layer.indentStyle === "space") {
+      jsonIndentStyle = layer.indentStyle;
+    }
+    if (Number.isInteger(layer.indentWidth) && (layer.indentWidth as number) > 0) {
+      jsonIndentWidth = layer.indentWidth as number;
+    }
+    if (Number.isInteger(layer.lineWidth) && (layer.lineWidth as number) > 0) {
+      jsonLineWidth = layer.lineWidth as number;
+    }
+    // Anything biome would reject is treated as absent — the default stands.
+    if (layer.expand === "auto" || layer.expand === "always" || layer.expand === "never") {
+      jsonExpand = layer.expand;
     }
   }
   // quoteStyle lives under javascript.formatter only — biome 2.x has no
@@ -160,6 +200,10 @@ export function styleForBiomeConfig(config: unknown): Omit<EmitStyle, "legacy" |
     lineWidth,
     quoteStyle,
     organizeImports,
+    jsonExpand,
+    jsonIndentUnit: jsonIndentStyle === "tab" ? "\t" : " ".repeat(jsonIndentWidth),
+    jsonIndentWidth,
+    jsonLineWidth,
   };
 }
 
@@ -187,6 +231,10 @@ export function resolveEmitStyle(
     lineWidth: Number.POSITIVE_INFINITY,
     quoteStyle: "json",
     organizeImports: false,
+    jsonExpand: "auto",
+    jsonIndentUnit: DEFAULT_INDENT_UNIT,
+    jsonIndentWidth: 2,
+    jsonLineWidth: Number.POSITIVE_INFINITY,
     legacy: true,
     biomeJson: null,
   };

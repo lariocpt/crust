@@ -1811,29 +1811,61 @@ every app-specific detail and must export:
   it has a different name (`/api/buildings/{id}`).
 - `JSON_HEADERS: Record<string, string>` — plain unauthenticated JSON
   headers, used for role `"none"`.
-- `expectations?: { validationStatus?: number; concealment?: "404" | "403";
-  operations?: Record<string, { validationStatus?: number; errorStatus?:
-  number }> }` — new in 0.3.6: reviewed expectation overrides for backends whose contract
-  disagrees with the 400 convention, so their matrices are correct **without
-  hand-editing generated files**. `validationStatus` sets the validation-matrix
-  status (e.g. `422`); `concealment` sets the status of the unknown-id /
-  outsider case family when the spec documents neither (an API that answers
-  `404` to outsiders to hide existence, or `403` to hide non-existence);
-  `operations` overrides either per operation, keyed exactly
-  `"METHOD /path"` as the spec writes it, method uppercase — per-operation
-  beats global. **A documented status always wins**: configuration fills gaps
-  in the contract, it never contradicts it, and configured cases carry
-  `configured:<setup-module>` provenance in the manifest. Validated hard at
-  generation time — unknown keys, non-integer or out-of-range statuses
-  (< 400 or ≥ 600), or operation keys the spec does not have refuse the
-  generation with exit 2 and write nothing (a typo'd key would silently
-  configure nothing, so it is an error, not a warning).
+- `expectations?: { validationStatus?: number; validationEnvelope?:
+  "crust" | "fastapi"; concealment?: "404" | "403"; operations?:
+  Record<string, { validationStatus?: number; validationEnvelope?: "crust" |
+  "fastapi"; errorStatus?: number }> }` — new in 0.3.6: reviewed expectation
+  overrides for backends whose contract disagrees with the 400 convention, so
+  their matrices are correct **without hand-editing generated files**.
+  `validationStatus` sets the validation-matrix status (e.g. `422`);
+  `concealment` sets the status of the unknown-id / outsider case family when
+  the spec documents neither (an API that answers `404` to outsiders to hide
+  existence, or `403` to hide non-existence); `operations` overrides any of
+  the three per operation, keyed exactly `"METHOD /path"` as the spec writes
+  it, method uppercase — per-operation beats global. **A documented status
+  always wins**: configuration fills gaps in the contract, it never
+  contradicts it — a documented `400` beats a configured `422` even with an
+  envelope set — and configured cases carry `configured:<setup-module>`
+  provenance in the manifest. Validated hard at generation time — unknown
+  keys, non-integer or out-of-range statuses (< 400 or ≥ 600), an envelope
+  value that is neither `crust` nor `fastapi`, or operation keys the spec
+  does not have refuse the generation with exit 2 and write nothing (a
+  typo'd key would silently configure nothing, so it is an error, not a
+  warning).
+
+  `validationEnvelope` (new in 0.3.8) sets the **shape** of the expected
+  validation response — never its status, and never inferred from one.
+  Omitted, the matrix keeps the existing Crust form (`{ error, code:
+  "validation", fieldErrors }`) byte for byte. Set to `"fastapi"`, each
+  validation case additionally expects a FastAPI-shaped body: a `detail`
+  array containing an error whose `loc` equals the case's own body location
+  (`["body", "<field>"]`, derived from the mutated schema field, never
+  parsed from a case name; an unexpected-property case targets the synthetic
+  field `crustUnexpectedProp`) with nonempty string `msg` and `type`. No
+  message text is ever matched — the location is the contract. A wrong-field
+  error, a query/path location, a malformed entry or a generic body fails
+  under **either** envelope, and a case whose mutation cannot be attributed
+  to a body location is dropped and disclosed in the manifest's `unsupported`
+  list rather than weakened. The documented response schema stays attached —
+  the predicate and the schema are cumulative, and neither is permissive.
+  Envelope selection does not resolve auth or resource-validity attribution,
+  dual-status attribution, mutation safety or approvals: the manifest still
+  records generation only. The manifest records the choice as
+  `validationOracle: { envelope, source, target }` on the entries it applies
+  to — `source` is `"default"` for the omitted convention and
+  `configured:<setup-module>` for an explicit choice, `target` the body
+  location with its mutation kind — while `expectationSource` keeps its
+  status-provenance semantics.
 
   ```ts
   export const expectations = {
     validationStatus: 422, // this backend answers 422, never 400
+    validationEnvelope: "fastapi", // …and 422 bodies are FastAPI-shaped
     concealment: "404", // unknown ids and outsiders both get 404
-    operations: { "POST /api/reports": { validationStatus: 400 } }, // this one really does 400
+    operations: {
+      // this one really does 400, Crust-shaped — per-operation beats global
+      "POST /api/reports": { validationStatus: 400, validationEnvelope: "crust" },
+    },
   };
   ```
 

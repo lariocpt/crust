@@ -80,18 +80,32 @@
  *     flow (e.g. a required FK no static value can satisfy). Read at
  *     generation time.
  *   - `expectations?: { validationStatus?: number; concealment?: "404" | "403";
+ *     validationEnvelope?: "crust" | "fastapi";
  *     operations?: Record<"METHOD /path", { validationStatus?: number;
- *     errorStatus?: number }> }` — reviewed expectation overrides for backends
- *     whose contract disagrees with the 400 convention. `validationStatus`
- *     sets the validation-matrix status (global, or per operation via
- *     `operations`); `concealment` (global) / `errorStatus` (per operation)
- *     set the status of the unknown-id / outsider case family when the spec
- *     documents neither. A documented status ALWAYS wins over a configured
- *     one — configuration fills gaps, it never contradicts the contract —
- *     and configured cases carry `configured:<module>` provenance in the
- *     manifest. Validated hard at generation time: unknown keys, statuses
- *     outside 400–599, or unknown operation keys refuse the generation
- *     (exit 2) rather than being ignored.
+ *     errorStatus?: number; validationEnvelope?: "crust" | "fastapi" }> }`
+ *     — reviewed expectation overrides for backends whose contract disagrees
+ *     with the 400 convention. `validationStatus` sets the validation-matrix
+ *     status (global, or per operation via `operations`); `concealment`
+ *     (global) / `errorStatus` (per operation) set the status of the
+ *     unknown-id / outsider case family when the spec documents neither;
+ *     `validationEnvelope` (global, or per operation — per operation beats
+ *     global) sets the response ENVELOPE the validation-matrix data
+ *     predicate asserts: `"crust"` (the default when omitted — the canonical
+ *     `{ error, code: "validation", fieldErrors }` body, emitted byte for
+ *     byte as before) or `"fastapi"` (a `detail` array containing an error
+ *     whose `loc` equals the case's own body location, e.g. `["body",
+ *     "email"]`, with nonempty string `msg` and `type`). The envelope is
+ *     chosen by configuration ONLY — never inferred from a status, so a
+ *     contract that answers 422 keeps the crust predicate unless told
+ *     otherwise. A documented status ALWAYS wins over a configured one —
+ *     configuration fills gaps, it never contradicts the contract — and
+ *     configured statuses carry `configured:<module>` provenance in the
+ *     manifest; the envelope carries its own provenance in the manifest's
+ *     `validationOracle.source` (`"default"` for the omitted convention,
+ *     `configured:<module>` for an explicit choice). Validated hard at
+ *     generation time: unknown keys, statuses outside 400–599, envelope
+ *     values other than `"crust"`/`"fastapi"`, or unknown operation keys
+ *     refuse the generation (exit 2) rather than being ignored.
  */
 import { createHash } from "node:crypto";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
@@ -113,6 +127,7 @@ import {
   formatCall,
   formatImport,
   formatJsonProperty,
+  formatManifestJson,
   pad,
   quoteStringLiteral,
   sortSpecifiers,
@@ -207,6 +222,8 @@ export interface ExpectationOverride {
   validationStatus?: number;
   /** Unknown-id / outsider case status for this operation (instead of the global concealment). */
   errorStatus?: number;
+  /** Validation-response envelope for this operation (instead of the global one). */
+  validationEnvelope?: "crust" | "fastapi";
 }
 
 export interface ExpectationsConfig {
@@ -214,6 +231,12 @@ export interface ExpectationsConfig {
   validationStatus?: number;
   /** Authorization concealment for the unknown-id / outsider family. */
   concealment?: "404" | "403";
+  /**
+   * Global validation-response envelope. Omitted = the crust convention
+   * (unchanged output); `"fastapi"` switches the validation-matrix data
+   * predicate to the FastAPI detail array. Never inferred from a status.
+   */
+  validationEnvelope?: "crust" | "fastapi";
   /** Per-operation overrides keyed exactly `"METHOD /path"` — the manifest's operation key style. */
   operations?: Record<string, ExpectationOverride>;
 }
@@ -226,6 +249,7 @@ interface ExpectationOverrides {
   module: string;
   validationStatus?: number;
   concealment?: number;
+  validationEnvelope?: "crust" | "fastapi";
   operations: Record<string, ExpectationOverride>;
 }
 
@@ -250,6 +274,20 @@ function checkConfigStatus(what: string, value: unknown): number {
   return value;
 }
 
+// The two envelopes a validation response can be asserted in. Validated at
+// the same point as every other expectation field — before any output is
+// written — and refused when anything else is written: the envelope is a
+// deliberate choice, never a guess from a status code.
+function checkConfigEnvelope(what: string, value: unknown): "crust" | "fastapi" {
+  if (value !== "crust" && value !== "fastapi") {
+    throw new ConfigError(
+      `${what} must be "crust" or "fastapi" (got ${JSON.stringify(value)}) — ` +
+        "the envelope is chosen by configuration, never inferred from a status",
+    );
+  }
+  return value;
+}
+
 function checkConfigOverrideKeys(what: string, value: unknown, allowed: string[]): void {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new ConfigError(`${what} must be an object (got ${JSON.stringify(value)})`);
@@ -269,7 +307,12 @@ function validateExpectations(
   module: string,
 ): ExpectationOverrides | null {
   if (raw === undefined || raw === null) return null;
-  checkConfigOverrideKeys("expectations", raw, ["validationStatus", "concealment", "operations"]);
+  checkConfigOverrideKeys("expectations", raw, [
+    "validationStatus",
+    "concealment",
+    "validationEnvelope",
+    "operations",
+  ]);
   const src = raw as ExpectationsConfig;
   const out: ExpectationOverrides = { module, operations: {} };
   if (src.validationStatus !== undefined) {
@@ -286,6 +329,12 @@ function validateExpectations(
       );
     }
     out.concealment = norm;
+  }
+  if (src.validationEnvelope !== undefined) {
+    out.validationEnvelope = checkConfigEnvelope(
+      "expectations.validationEnvelope",
+      src.validationEnvelope,
+    );
   }
   if (src.operations !== undefined) {
     if (
@@ -309,6 +358,7 @@ function validateExpectations(
       checkConfigOverrideKeys(`expectations.operations["${key}"]`, value, [
         "validationStatus",
         "errorStatus",
+        "validationEnvelope",
       ]);
       const o: ExpectationOverride = {};
       if (value.validationStatus !== undefined) {
@@ -321,6 +371,12 @@ function validateExpectations(
         o.errorStatus = checkConfigStatus(
           `expectations.operations["${key}"].errorStatus`,
           value.errorStatus,
+        );
+      }
+      if (value.validationEnvelope !== undefined) {
+        o.validationEnvelope = checkConfigEnvelope(
+          `expectations.operations["${key}"].validationEnvelope`,
+          value.validationEnvelope,
         );
       }
       out.operations[key] = o;
@@ -851,7 +907,7 @@ export function effectiveSchema(s: Schema | undefined): Schema | undefined {
 // Case derivation
 // ---------------------------------------------------------------------------
 
-interface GenCase {
+export interface GenCase {
   name: string;
   auth: "none" | "outsider" | "member";
   method: string;
@@ -872,6 +928,34 @@ interface GenCase {
   expectValidationField?: string;
   /** Assert only status + code === "validation" (no fieldErrors matcher). */
   expectValidationCode?: boolean;
+  /**
+   * The response envelope this case's data predicate asserts, resolved per
+   * operation at derivation (per-op config beats global; omitted = the crust
+   * convention). Set on every validation-matrix case. Never inferred from a
+   * status: a contract that answers 422 stays crust unless configured.
+   */
+  validationEnvelope?: "crust" | "fastapi";
+  /**
+   * Where the envelope choice came from: `"default"` (the crust convention —
+   * the envelope was not configured anywhere) or `configured:<setup-module
+   * specifier>`. Recorded in the manifest's validationOracle, never emitted
+   * into the fixture files.
+   */
+  validationEnvelopeSource?: string;
+  /**
+   * The exact body location the validation error must name — carried from
+   * derivation's own knowledge of the perturbation, never parsed from the
+   * case name. Drives the fastapi predicate and the manifest's
+   * validationOracle.target.
+   */
+  validationTarget?: {
+    /** The full location: `["body", <field>]` for a top-level body property. */
+    loc: string[];
+    /** The mutation family that produced the case. */
+    kind: "missing-required" | "wrong-type" | "enum" | "bound" | "pattern" | "unexpected-property";
+    /** The mutated body property ("crustUnexpectedProp" for the extra-property case). */
+    field: string;
+  };
   /** documented response schema for expectStatus (inline post-deref) */
   responseSchema?: unknown;
 }
@@ -974,6 +1058,28 @@ function deriveCases(
   const configuredValidation = opOverride?.validationStatus ?? exp?.validationStatus;
   const configuredError = opOverride?.errorStatus ?? exp?.concealment;
   const configuredSource = exp ? `configured:${exp.module}` : "";
+  // The envelope names the response SHAPE a validation case asserts (the
+  // crust canonical body vs a FastAPI detail array) — a matcher choice,
+  // orthogonal to the status provenance above. Configuration only: per-op
+  // beats global, omitted is the crust convention, and a status code never
+  // selects it.
+  const validationEnvelope = opOverride?.validationEnvelope ?? exp?.validationEnvelope ?? "crust";
+  const validationEnvelopeSource =
+    opOverride?.validationEnvelope !== undefined || exp?.validationEnvelope !== undefined
+      ? configuredSource
+      : "default";
+  // Every perturbation the validation matrix can build today is one top-level
+  // body property, so every locatable target is a `["body", <field>]` location
+  // built here from the derivation's own knowledge of what was perturbed —
+  // never re-parsed from the case name.
+  const validationCaseFields = (
+    field: string,
+    kind: NonNullable<GenCase["validationTarget"]>["kind"],
+  ): Pick<GenCase, "validationEnvelope" | "validationEnvelopeSource" | "validationTarget"> => ({
+    validationEnvelope,
+    validationEnvelopeSource,
+    validationTarget: { loc: ["body", field], kind, field },
+  });
   // Provenance for a family status: `contract:` whenever the spec documents
   // that exact status (even one the configuration also asked for), `configured:`
   // only when the spec is silent on it.
@@ -1075,6 +1181,7 @@ function deriveCases(
         expectStatus: matrixStatus,
         expectationSource: matrixSource,
         expectValidationField: field,
+        ...validationCaseFields(field, "missing-required"),
       });
       // Only when the value is ACTUALLY rejected. A field whose schema constrains nothing —
       // `{properties: {...}}` with no `type`, a description-only node — has no wrong value, and the
@@ -1094,6 +1201,7 @@ function deriveCases(
           expectStatus: matrixStatus,
           expectationSource: matrixSource,
           expectValidationField: field,
+          ...validationCaseFields(field, "wrong-type"),
         });
       }
     }
@@ -1111,6 +1219,7 @@ function deriveCases(
           expectStatus: matrixStatus,
           expectationSource: matrixSource,
           expectValidationField: field,
+          ...validationCaseFields(field, "enum"),
         });
       }
     }
@@ -1121,7 +1230,7 @@ function deriveCases(
     for (const [field, rawFs] of Object.entries(props)) {
       const fs = effectiveSchema(rawFs);
       if (!fs) continue;
-      const push = (suffix: string, wrongValue: unknown) =>
+      const push = (suffix: string, wrongValue: unknown, kind: "bound" | "pattern") =>
         cases.push({
           name: `${method.toUpperCase()} ${path} ${suffix} '${field}' -> ${matrixStatus}`,
           auth: validAuth,
@@ -1131,20 +1240,21 @@ function deriveCases(
           expectStatus: matrixStatus,
           expectationSource: matrixSource,
           expectValidationField: field,
+          ...validationCaseFields(field, kind),
         });
       const ft = primaryType(fs);
       const isString = ft === "string";
       const isNumeric = ft === "integer" || ft === "number";
       if (isString && typeof fs.minLength === "number" && fs.minLength >= 1) {
-        push("too short", "x".repeat(fs.minLength - 1));
+        push("too short", "x".repeat(fs.minLength - 1), "bound");
       }
       // maxLength > 4096 is skipped on purpose: a 100KB literal in a
       // checked-in generated file is unreviewable.
       if (isString && typeof fs.maxLength === "number" && fs.maxLength <= 4096) {
-        push("too long", "x".repeat(fs.maxLength + 1));
+        push("too long", "x".repeat(fs.maxLength + 1), "bound");
       }
       if (isNumeric && typeof fs.minimum === "number") {
-        push("below minimum", fs.minimum - 1);
+        push("below minimum", fs.minimum - 1, "bound");
       }
       // Real specs use MAX_SAFE_INTEGER as an "unbounded" sentinel — +1 would
       // not even round-trip through JSON faithfully, so skip those.
@@ -1153,14 +1263,14 @@ function deriveCases(
         typeof fs.maximum === "number" &&
         fs.maximum + 1 <= Number.MAX_SAFE_INTEGER
       ) {
-        push("above maximum", fs.maximum + 1);
+        push("above maximum", fs.maximum + 1, "bound");
       }
       if (fs.pattern) {
         // For required constrained-string fields the wrong-type case already
         // sends wrongTypeFor's string sentinel — a pattern violation in
         // disguise. Dedupe to avoid an identical-in-substance case.
         const covered = required.includes(field) && wrongTypeFor(rawFs) === "!!not-a-valid-value!!";
-        if (!covered) push("pattern violation", "!!pattern-violation!!");
+        if (!covered) push("pattern violation", "!!pattern-violation!!", "pattern");
       }
     }
 
@@ -1176,6 +1286,9 @@ function deriveCases(
         expectStatus: matrixStatus,
         expectationSource: matrixSource,
         expectValidationCode: true,
+        // The extra property is crust's own injection, so the fastapi envelope
+        // can attribute the error to it with certainty.
+        ...validationCaseFields("crustUnexpectedProp", "unexpected-property"),
       });
     }
 
@@ -1231,6 +1344,44 @@ function deriveCases(
   return cases;
 }
 
+/**
+ * A fastapi case whose body location cannot be attributed cannot be asserted
+ * honestly: the only predicate left to write would be a permissive one ("a
+ * nonempty detail at all"), and that passes the wrong field, a query or path
+ * location, and a generic status-only body. Dropping the case and recording
+ * it in the manifest's `unsupported` is the honest half — the matcher is
+ * never weakened to make the case exist. Derivation always carries a target
+ * today, so this guards the invariant for a mutation a future derivation
+ * might add rather than a live path.
+ */
+export function dropUnattributable(cases: GenCase[]): {
+  kept: GenCase[];
+  dropped: { operation: string; assumption: string }[];
+} {
+  const kept: GenCase[] = [];
+  const dropped: { operation: string; assumption: string }[] = [];
+  for (const c of cases) {
+    const isValidationCase =
+      c.expectValidationField !== undefined || c.expectValidationCode === true;
+    if (
+      c.validationEnvelope === "fastapi" &&
+      isValidationCase &&
+      c.validationTarget === undefined
+    ) {
+      dropped.push({
+        operation: `${c.method.toUpperCase()} ${c.path}`,
+        assumption:
+          `the fastapi envelope is configured, but no body location could be ` +
+          `attributed to the case "${c.name}" — the case is dropped rather ` +
+          "than matched permissively",
+      });
+      continue;
+    }
+    kept.push(c);
+  }
+  return { kept, dropped };
+}
+
 // ---------------------------------------------------------------------------
 // gen-manifest.json — the generation record
 //
@@ -1254,8 +1405,21 @@ export interface GenManifestCase {
   /** What the case mutates (or "baseline" when nothing is mutated). */
   mutation: string;
   expectStatus: number;
-  /** `contract:<spec pointer>` | `convention:<name>` | `configured:<setup-module specifier>`. */
+  /** `contract:<spec pointer>` | `convention:<name>` | `configured:<setup-module specifier>` — the STATUS provenance. */
   expectationSource: string;
+  /**
+   * Validation-matrix cases only: the response envelope the case's data
+   * predicate asserts, where that choice came from (`"default"` = the crust
+   * convention with no envelope configured; `configured:<module>` = an
+   * explicit setup-module choice), and the exact location the validation
+   * error must name. Deterministic — derived from spec + config, no
+   * timestamps.
+   */
+  validationOracle?: {
+    envelope: "crust" | "fastapi";
+    source: string;
+    target: { loc: string[]; kind: string };
+  };
   prerequisites: string[];
 }
 
@@ -1344,6 +1508,71 @@ async function specContentHash(specPath: string, rawSpec: unknown): Promise<stri
 // Emission
 // ---------------------------------------------------------------------------
 
+/**
+ * The fastapi envelope's data predicate, in canonical 2-space (reindented
+ * with the rest of the file). It asserts exactly one thing: some `detail`
+ * error names the case's own body location — same length, same segments —
+ * with a nonempty string `msg` and a nonempty string `type`. Message text is
+ * never matched; no other location shape (another field, a query or path
+ * location, extra segments) passes; and the element checks run on `unknown`
+ * values, so a malformed element or a non-object body fails the case instead
+ * of throwing or coercing into a pass.
+ */
+function fastapiPredicateLines(
+  target: NonNullable<GenCase["validationTarget"]>,
+  style: EmitStyle,
+): string[] {
+  const loc = target.loc;
+  const locChecks = loc.map((seg, i) => `e.loc[${i}] === ${quoteStringLiteral(seg, style)}`);
+  const chain =
+    `Array.isArray(e.loc) && e.loc.length === ${loc.length} && ${locChecks.join(" && ")} && ` +
+    'typeof e.msg === "string" && e.msg.length > 0 && typeof e.type === "string" && e.type.length > 0';
+  const lines: string[] = [
+    `${pad(3)}data: (d: { detail?: unknown }) =>`,
+    `${pad(4)}Array.isArray(d.detail) &&`,
+    `${pad(4)}d.detail.some((e) => {`,
+    `${pad(5)}if (e === null || typeof e !== "object") return false;`,
+  ];
+  // A block-body arrow can never sit on one line, so the outer chain breaks
+  // at every width; only the inner `return (...)` can join when the receiver's
+  // lineWidth is large enough for the whole chain.
+  if (fits(style, 5, `return (${chain});`)) {
+    lines.push(`${pad(5)}return (${chain});`);
+  } else {
+    lines.push(
+      `${pad(5)}return (`,
+      `${pad(6)}Array.isArray(e.loc) &&`,
+      `${pad(6)}e.loc.length === ${loc.length} &&`,
+      // Every check is followed by another operand (another location check
+      // or the msg check), so EVERY line keeps a trailing `&&` — including
+      // the last location check.
+      ...locChecks.map((c) => `${pad(6)}${c} &&`),
+      `${pad(6)}typeof e.msg === "string" &&`,
+      `${pad(6)}e.msg.length > 0 &&`,
+      `${pad(6)}typeof e.type === "string" &&`,
+      `${pad(6)}e.type.length > 0`,
+      `${pad(5)});`,
+    );
+  }
+  lines.push(`${pad(4)}}),`);
+  return lines;
+}
+
+// The fastapi branch of the validation data predicate. A fastapi case whose
+// target is missing is an internal invariant violation — dropUnattributable
+// runs before emission and is the sanctioned path for unattributable cases —
+// so the only remaining way to reach here is a programming error, and its
+// failure mode is refused loud rather than shipped as a weakened matcher.
+function fastapiDataLines(c: GenCase, style: EmitStyle): string[] {
+  if (c.validationTarget === undefined) {
+    throw new Error(
+      `gen-fixtures: internal error — fastapi case "${c.name}" has no attributed ` +
+        "validation target; refusing to emit a weakened matcher",
+    );
+  }
+  return fastapiPredicateLines(c.validationTarget, style);
+}
+
 function emitFixture(c: GenCase, used: Set<string>, style: EmitStyle): string {
   const lines: string[] = [
     "  {",
@@ -1380,36 +1609,45 @@ function emitFixture(c: GenCase, used: Set<string>, style: EmitStyle): string {
   }
   lines.push("    }),", "    output: {", `      status: ${c.expectStatus},`);
   if (c.expectValidationField) {
-    const fieldLit = quoteStringLiteral(c.expectValidationField, style);
-    const header = `data: (d: { code?: string; fieldErrors?: Record<string, unknown> }) =>`;
-    const chain = `d.code === "validation" && d.fieldErrors !== undefined && ${fieldLit} in d.fieldErrors`;
-    if (!style.legacy && fits(style, 3, `${header} ${chain},`)) {
-      lines.push(pad(3) + `${header} ${chain},`);
+    if (c.validationEnvelope === "fastapi") {
+      lines.push(...fastapiDataLines(c, style));
     } else {
-      // Below the arrow (biome joins the one-liner only when it fits; the
-      // legacy template always broke here — keep that shape byte for byte).
-      // When even the header line does not fit, biome breaks the type
-      // literal's members one per line, closing `}) =>` at the property's
-      // own level.
-      lines.push(
-        style.legacy || fits(style, 3, header)
-          ? pad(3) + header
-          : `${pad(3)}data: (d: {\n${pad(4)}code?: string;\n${pad(4)}fieldErrors?: Record<string, unknown>;\n${pad(3)}}) =>`,
-      );
-      if (style.legacy || fits(style, 4, `${chain},`)) {
-        lines.push(`${pad(4)}${chain},`);
+      // The crust envelope — byte for byte the historical shape.
+      const fieldLit = quoteStringLiteral(c.expectValidationField, style);
+      const header = `data: (d: { code?: string; fieldErrors?: Record<string, unknown> }) =>`;
+      const chain = `d.code === "validation" && d.fieldErrors !== undefined && ${fieldLit} in d.fieldErrors`;
+      if (!style.legacy && fits(style, 3, `${header} ${chain},`)) {
+        lines.push(pad(3) + `${header} ${chain},`);
       } else {
-        // The chain does not fit on one line below the arrow: biome puts one
-        // operand per line, `&&` trailing.
+        // Below the arrow (biome joins the one-liner only when it fits; the
+        // legacy template always broke here — keep that shape byte for byte).
+        // When even the header line does not fit, biome breaks the type
+        // literal's members one per line, closing `}) =>` at the property's
+        // own level.
         lines.push(
-          `${pad(4)}d.code === "validation" &&`,
-          `${pad(4)}d.fieldErrors !== undefined &&`,
-          `${pad(4)}${fieldLit} in d.fieldErrors,`,
+          style.legacy || fits(style, 3, header)
+            ? pad(3) + header
+            : `${pad(3)}data: (d: {\n${pad(4)}code?: string;\n${pad(4)}fieldErrors?: Record<string, unknown>;\n${pad(3)}}) =>`,
         );
+        if (style.legacy || fits(style, 4, `${chain},`)) {
+          lines.push(`${pad(4)}${chain},`);
+        } else {
+          // The chain does not fit on one line below the arrow: biome puts one
+          // operand per line, `&&` trailing.
+          lines.push(
+            `${pad(4)}d.code === "validation" &&`,
+            `${pad(4)}d.fieldErrors !== undefined &&`,
+            `${pad(4)}${fieldLit} in d.fieldErrors,`,
+          );
+        }
       }
     }
   } else if (c.expectValidationCode) {
-    lines.push('      data: (d: { code?: string }) => d.code === "validation",');
+    if (c.validationEnvelope === "fastapi") {
+      lines.push(...fastapiDataLines(c, style));
+    } else {
+      lines.push('      data: (d: { code?: string }) => d.code === "validation",');
+    }
   }
   if (c.responseSchema !== undefined) {
     lines.push(
@@ -1893,6 +2131,25 @@ export async function generateFixtures(opts: GenerateOpts): Promise<GenerateResu
     }
   }
 
+  // A fastapi case whose location cannot be attributed is dropped and
+  // disclosed (manifest `unsupported`) rather than matched permissively.
+  // Derivation always carries a target today, so this guards the invariant
+  // for mutations a future derivation might add — nothing below may ever see
+  // a fastapi validation case without a target.
+  const unattributable: { operation: string; assumption: string }[] = [];
+  for (const [tag, cases] of byTag) {
+    const { kept, dropped } = dropUnattributable(cases);
+    if (dropped.length > 0) {
+      log(
+        `gen-fixtures: ${dropped.length} case(s) skipped — the configured fastapi envelope ` +
+          "cannot be asserted for a case without an attributed body location, and the matcher " +
+          "would be weakened rather than the case dropped",
+      );
+      unattributable.push(...dropped);
+      byTag.set(tag, kept);
+    }
+  }
+
   // Cases dropped for an unfillable body are disclosed here, not left as a silently smaller suite —
   // and each field is blamed on whoever is responsible. Where the spec allows no value at all the
   // notice says the SPEC contradicts itself, because "crust's own value" points a reader at the
@@ -1943,12 +2200,26 @@ export async function generateFixtures(opts: GenerateOpts): Promise<GenerateResu
     if (cases.length === 0) continue;
     totalCases += cases.length;
     for (const c of cases) {
+      // Validation-matrix cases only: the oracle is deterministic metadata —
+      // envelope, where it came from, and the exact location asserted. The
+      // conditional spread keeps the key order fixed (expectationSource,
+      // validationOracle, prerequisites) so regeneration of the same input
+      // is byte-identical.
       manifestCases.push({
         operation: `${c.method.toUpperCase()} ${c.path}`,
         case: c.name,
         mutation: mutationOf(c.name),
         expectStatus: c.expectStatus,
         expectationSource: c.expectationSource,
+        ...(c.validationTarget !== undefined
+          ? {
+              validationOracle: {
+                envelope: c.validationEnvelope ?? "crust",
+                source: c.validationEnvelopeSource ?? "default",
+                target: { loc: c.validationTarget.loc, kind: c.validationTarget.kind },
+              },
+            }
+          : {}),
         prerequisites: prerequisitesOf(c),
       });
     }
@@ -2036,10 +2307,18 @@ ${fixtures}
           "the spec documents no 400 for this operation, so no validation matrix was " +
           "derived — crust does not assume 400 where the contract is silent",
       })),
+      ...unattributable,
     ],
   };
   const manifestPath = resolve(outDir, "gen-manifest.json");
-  await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  // The manifest is JSON: biome's JSON layout — expand policy, indent, width
+  // (top level → json.formatter) — decides its shape, so a consumer's
+  // `biome format --write` is a no-op on it. The legacy 0.3.2 contract (no
+  // biome.json in reach) stays plain JSON.stringify output.
+  const manifestText = style.legacy
+    ? JSON.stringify(manifest, null, 2)
+    : formatManifestJson(style, manifest);
+  await writeFile(manifestPath, `${manifestText}\n`);
 
   return { outDir, files, totalCases, flowFile, flowCount, flowSkipped, withNoCases, manifestPath };
 }

@@ -263,6 +263,8 @@ function isJsonContainer(value: unknown): boolean {
  * an atomic value moves below the key only when the key is wide enough
  * (biome's `indentWidth + 3` rule) — a short key keeps its overlong string
  * on the same line, overflowing, exactly as biome leaves `body: '…'` doing.
+ * Every form ends with a trailing comma (biome's `trailingCommas: "all"`),
+ * so callers never add one themselves.
  */
 export function formatJsonProperty(
   style: EmitStyle,
@@ -273,7 +275,10 @@ export function formatJsonProperty(
   const keyText = jsonKeyText(key, style);
   const one = jsonOneLine(value, style);
   if (fits(style, level, `${keyText}: ${one},`)) return `${keyText}: ${one},`;
-  if (isJsonContainer(value)) return `${keyText}: ${formatJsonBroken(style, value, level)}`;
+  // The broken form carries no trailing comma of its own, so add it here —
+  // without it a member whose value is a broken container loses the comma
+  // separating it from its next sibling (latent until a nested schema).
+  if (isJsonContainer(value)) return `${keyText}: ${formatJsonBroken(style, value, level)},`;
   if (keyText.length >= style.indentWidth + 3) {
     return `${keyText}:\n${pad(level + 1)}${one},`;
   }
@@ -302,4 +307,106 @@ function formatJsonBroken(style: EmitStyle, value: unknown, level: number): stri
   }
   lines.push(`${pad(level)}}`);
   return lines.join("\n");
+}
+
+// ---------------------------------------------------------------------------
+// gen-manifest.json — biome's JSON layout
+// ---------------------------------------------------------------------------
+
+/**
+ * The one-line form of a JSON value, or null when the value cannot be
+ * one-lined at all: a non-empty object never renders flat — a flat
+ * container may only hold flat children, and a non-empty object is never
+ * one of them. Empty containers are trivially flat.
+ */
+function jsonFlat(value: unknown): string | null {
+  if (Array.isArray(value)) {
+    const parts = value.map((v) => jsonFlat(v));
+    return parts.some((p) => p === null) ? null : `[${parts.join(", ")}]`;
+  }
+  if (value !== null && typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>);
+    if (entries.length === 0) return "{}";
+    const parts = entries.map(([k, v]) => {
+      const flat = jsonFlat(v);
+      return flat === null ? null : `${JSON.stringify(k)}: ${flat}`;
+    });
+    return parts.some((p) => p === null) ? null : `{ ${parts.join(", ")} }`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
+/** Whether `line` (indent excluded) fits at `level` under biome's JSON width. */
+function jsonFits(style: EmitStyle, level: number, line: string): boolean {
+  return level * style.jsonIndentWidth + line.length <= style.jsonLineWidth;
+}
+
+/**
+ * One value of the manifest, rendered the way biome's JSON printer would.
+ * "always" breaks every container; "auto" — biome's default — breaks objects
+ * but flattens arrays whose flat form fits the line; "never" flattens
+ * whatever fits and breaks the rest. `prefix` is the text already on the
+ * line before the value (an entry's `"key": ` part); `comma` is the
+ * separator that belongs on the value's last line — a broken container
+ * carries it onto its closing bracket.
+ */
+function jsonValue(
+  style: EmitStyle,
+  value: unknown,
+  level: number,
+  prefix: string,
+  comma: string,
+): string {
+  if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+    const entries = Object.entries(value as Record<string, unknown>);
+    if (entries.length === 0) return `${prefix}{}${comma}`;
+    if (style.jsonExpand === "never") {
+      const flat = jsonFlat(value);
+      if (flat !== null && jsonFits(style, level, `${prefix}${flat}${comma}`)) {
+        return `${prefix}${flat}${comma}`;
+      }
+    }
+    const padNext = style.jsonIndentUnit.repeat(level + 1);
+    const padHere = style.jsonIndentUnit.repeat(level);
+    const lines = [`${prefix}{`];
+    entries.forEach(([k, v], i) => {
+      const c = i < entries.length - 1 ? "," : "";
+      lines.push(`${padNext}${JSON.stringify(k)}: ${jsonValue(style, v, level + 1, "", c)}`);
+    });
+    lines.push(`${padHere}}${comma}`);
+    return lines.join("\n");
+  }
+  if (Array.isArray(value)) {
+    // "auto" and "never" flatten arrays whose flat form fits the line;
+    // "always" breaks them one element per line, JSON.stringify-style.
+    const flat = jsonFlat(value);
+    if (
+      flat !== null &&
+      style.jsonExpand !== "always" &&
+      jsonFits(style, level, `${prefix}${flat}${comma}`)
+    ) {
+      return `${prefix}${flat}${comma}`;
+    }
+    const padNext = style.jsonIndentUnit.repeat(level + 1);
+    const padHere = style.jsonIndentUnit.repeat(level);
+    const lines = [`${prefix}[`];
+    value.forEach((item, i) => {
+      const c = i < value.length - 1 ? "," : "";
+      lines.push(`${padNext}${jsonValue(style, item, level + 1, "", c)}`);
+    });
+    lines.push(`${padHere}]${comma}`);
+    return lines.join("\n");
+  }
+  return `${prefix}${JSON.stringify(value) ?? "null"}${comma}`;
+}
+
+/**
+ * The whole manifest, rendered byte-for-byte as biome's JSON printer would —
+ * expand policy, indent unit and width all taken from the config that
+ * decided the style — so a consumer's `biome format --write` on a generated
+ * gen-manifest.json is a no-op. (With no biome.json in reach the write site
+ * keeps the plain JSON.stringify output of the 0.3.2 contract instead.)
+ */
+export function formatManifestJson(style: EmitStyle, value: unknown): string {
+  return jsonValue(style, value, 0, "", "");
 }
