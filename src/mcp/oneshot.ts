@@ -272,7 +272,7 @@ export const ONE_SHOT_TOOLS: ToolDef[] = [
   {
     name: "crust_gen_fixtures",
     description:
-      "Generate a fixture suite from an OpenAPI spec with `gen-fixtures`: CRUD flow files plus a negative-case matrix (required-field drops, wrong types) as .crust.ts fixtures in an output dir. Also writes gen-manifest.json — per-case expectation provenance and skip reasons (0.3.6); review it before running: generation records intent, it does not verify the API. Point crust_test_fixture at the generated glob afterwards.",
+      "Generate a fixture suite from an OpenAPI spec with `gen-fixtures`: CRUD flow files plus a negative-case matrix (required-field drops, wrong types) as .crust.ts fixtures in an output dir. Also writes gen-manifest.json — per-case expectation provenance and skip reasons (0.3.6); validation-matrix cases additionally carry a `validationOracle` (envelope, source, target) recording which response-body shape each case asserts (0.3.8). Review it before running: generation records intent, it does not verify the API. Point crust_test_fixture at the generated glob afterwards.",
     inputSchema: {
       type: "object",
       properties: {
@@ -281,7 +281,7 @@ export const ONE_SHOT_TOOLS: ToolDef[] = [
         setup: {
           type: "string",
           description:
-            "setup module path (default ./tests/gen-setup.ts — a convention in YOUR repo; crust ships examples/gen-setup.ts as the template)",
+            "setup module path (default ./tests/gen-setup.ts — a convention in YOUR repo; crust ships examples/gen-setup.ts as the template; may export an `expectations` block — validationStatus, validationEnvelope, concealment, per-operation overrides — to match a backend whose contract disagrees with the 400 convention)",
         },
         no_flows: { type: "boolean", description: "skip the CRUD flow suite, negative cases only" },
         cwd: { type: "string" },
