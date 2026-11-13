@@ -145,6 +145,10 @@ Setup-module contract (imported lazily): `shared()` promise-cached context,
 `flowOverrides: { "<template>": { body?: {...}, skip?: true } }` for creates
 whose values a spec can't express (business date rules → `body` merge;
 required foreign keys → `skip`).
+When the contract disagrees with the 400 convention (422 backends, 404/403
+concealment), the optional `expectations` block configures correct statuses —
+a documented status always wins over a configured one;
+`docs/USAGE.md §gen-fixtures` has the schema and precedence.
 
 The `--out` dir is DELETED and recreated every run — never hand-edit
 generated files.

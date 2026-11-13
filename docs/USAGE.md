@@ -1611,7 +1611,10 @@ case with its expectation's PROVENANCE — `contract:paths.<path>.<method>.respo
 when the spec documents that status for the operation (every case family
 today is gated on a documented response; crust never assumes a status the
 contract is silent on), `convention:<name>` if a status were ever assumed by
-rule rather than read from the spec — plus every skip (dropped cases, skipped
+rule rather than read from the spec, `configured:<setup-module>` when a
+reviewed `expectations` override in the setup module supplied a status the
+spec leaves silent (a documented status always wins over a configured one) —
+plus every skip (dropped cases, skipped
 flows, `flowOverrides.skip`) with the same reason stdout shows, and every
 unsupported operation with what crust could not derive. Prerequisites are
 NAMES (`auth`, `scope:member`, `resource:<param>`), never values from your
@@ -1756,6 +1759,31 @@ every app-specific detail and must export:
   it has a different name (`/api/buildings/{id}`).
 - `JSON_HEADERS: Record<string, string>` — plain unauthenticated JSON
   headers, used for role `"none"`.
+- `expectations?: { validationStatus?: number; concealment?: "404" | "403";
+  operations?: Record<string, { validationStatus?: number; errorStatus?:
+  number }> }` — reviewed expectation overrides for backends whose contract
+  disagrees with the 400 convention, so their matrices are correct **without
+  hand-editing generated files**. `validationStatus` sets the validation-matrix
+  status (e.g. `422`); `concealment` sets the status of the unknown-id /
+  outsider case family when the spec documents neither (an API that answers
+  `404` to outsiders to hide existence, or `403` to hide non-existence);
+  `operations` overrides either per operation, keyed exactly
+  `"METHOD /path"` as the spec writes it, method uppercase — per-operation
+  beats global. **A documented status always wins**: configuration fills gaps
+  in the contract, it never contradicts it, and configured cases carry
+  `configured:<setup-module>` provenance in the manifest. Validated hard at
+  generation time — unknown keys, non-integer or out-of-range statuses
+  (< 400 or ≥ 600), or operation keys the spec does not have refuse the
+  generation with exit 2 and write nothing (a typo'd key would silently
+  configure nothing, so it is an error, not a warning).
+
+  ```ts
+  export const expectations = {
+    validationStatus: 422, // this backend answers 422, never 400
+    concealment: "404", // unknown ids and outsiders both get 404
+    operations: { "POST /api/reports": { validationStatus: 400 } }, // this one really does 400
+  };
+  ```
 
 A complete runnable module to copy lives at
 [`examples/gen-setup.ts`](../examples/gen-setup.ts). **crust does not ship
@@ -1769,10 +1797,12 @@ description says the caller is not authenticated ("not authenticated" /
 "log in"; a login endpoint's bad-credentials 401 deliberately doesn't
 count), 403 needs `scopeParam` plus a documented `403`, 404 needs non-scope
 path params plus a documented `404`, and the 400 matrix needs a JSON
-request-body schema plus a documented `400`.
+request-body schema plus a documented `400` (or a reviewed `validationStatus`
+in the setup module's `expectations` block — see below).
 
 Exit codes: `0` generated, `1` generation error (including a setup module
-missing `scopeParam`), `2` bad args.
+missing `scopeParam`), `2` bad args or a refused setup-module `expectations`
+config.
 
 ### mock-server
 
