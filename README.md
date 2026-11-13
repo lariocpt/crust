@@ -115,12 +115,15 @@ test-pipes "tests/**/*.pipes" -s tests/seed.setup.ts -b -o reports/pipes.junit.x
 
 **Load testing that CI can gate on.** Thresholds are `assert` composition, so a
 failure names the predicate and exits non-zero. A run that measured nothing is
-tagged `empty` and refused — `{count: 0, p95: 0}` never passes a gate.
+tagged `empty` and refused — `{count: 0, p95: 0}` never passes a gate. The
+primary CI pattern is report-preserving and status-first — `stats --out`
+before the gates, status gated before latency or rate
+([CI load gates](https://lariocpt.github.io/crust-website/docs/recipes/ci-load-gates/)):
 
 ```crust
 load 30s 200/s | parallel 50 | GET :3000/health | expect 200 | stats | assert (s => s.p95 < 250)
 load 10s 50/s, 5m 200/s | parallel 200 | GET $BASE/api/search | stats --every 15 | assert (s => !s.window || s.p99 < 800)
-load 60s 100/s | parallel 50 | GET :3000/health | stats --out load/last.json | assert (s => s.p95 < 250)
+load 30s 100/s | parallel 50 | GET :3000/health | stats --out load/last.json | assert (s => Object.keys(s.status).every(k => k.startsWith("2"))) | assert (s => s.timedOut === 0) | assert (s => s.redirectRefused === 0) | assert (s => s.p95 < 200) | assert (s => s.rps > 80)
 ```
 
 **A persistent mock server from a Swagger/OpenAPI spec.** Example-first
