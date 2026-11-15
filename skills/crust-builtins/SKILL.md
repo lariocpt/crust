@@ -1,6 +1,6 @@
 ---
 name: crust-builtins
-description: crust has two separate namespaces — tool builtins (`mock-server`, `test-fixture`, `test-pipes`, `gen-fixtures`, `verify-web-links`, `logs`, `dotenv`, `skills`) that need a line of their own, and registered functions (`base64`, `salt`, `jwt`, `bundle`, `sql`, `wait`) that are space-separated stages usable as a source or mid-pipeline. Explains what the upstream item means to each one, why `bundle(5)` is a shell syntax error, and how to reach crypto/FS from a lambda. Use when a crust stage exits 2 with `syntax error near unexpected token`, when a mid-pipeline function eats the wrong argument, or when a lambda says `salt is not defined`.
+description: crust has two separate namespaces — tool builtins (`mock-server`, `test-fixture`, `test-pipes`, `gen-fixtures`, `verify-web-links`, `logs`, `dotenv`, `skills`) that need a line of their own, and registered functions (`base64`, `salt`, `jwt`, `bundle`, `sql`, `mongo`, `wait`) that are space-separated stages usable as a source or mid-pipeline. Explains what the upstream item means to each one, why `bundle(5)` is a shell syntax error, and how to reach crypto/FS from a lambda. Use when a crust stage exits 2 with `syntax error near unexpected token`, when a mid-pipeline function eats the wrong argument, or when a lambda says `salt is not defined`.
 ---
 
 # crust's two namespaces
@@ -8,7 +8,7 @@ description: crust has two separate namespaces — tool builtins (`mock-server`,
 | | What it is | Where it runs | Parens? |
 | --- | --- | --- | --- |
 | **Tool builtin** | `mock-server`, `test-fixture`, `test-pipes`, `gen-fixtures`, `verify-web-links`, `logs`, `dotenv`, `skills` | dispatched **before** pipeline parsing, in-process, own line | subcommand style: `logs tail -F app.log` |
-| **Registered function** | `base64`, `salt`, `jwt`, `bundle`, `sql`, `wait` + anything you add with `crust.fn` | an ordinary pipeline stage, or a source when nothing is upstream | **space-separated**: `salt 16`, not `salt(16)` |
+| **Registered function** | `base64`, `salt`, `jwt`, `bundle`, `sql`, `mongo`, `wait` + anything you add with `crust.fn` | an ordinary pipeline stage, or a source when nothing is upstream | **space-separated**: `salt 16`, not `salt(16)` |
 
 `cd`, `export`, `alias`, `source`, `exit`, `history`, `help` and the job verbs
 `jobs`, `fg`, `bg` are builtins too — the ones sh has its own version of, which
@@ -112,7 +112,7 @@ used to print `LS1kZXNj` and exit 0), and decoding refuses a character outside
 the alphabet — Node's decoder skips unknown characters, which printed three
 replacement characters at exit 0 for `not base64!!!`.
 
-Each of the six also answers `-h`/`--help` with its own usage screen and exit
+Each registered builtin also answers `-h`/`--help` with its own usage screen and exit
 **0** — at parse time, **before any stage runs**, so `… | sql --help` prints
 usage without making the request (the `touch` upstream of it never happens).
 The scan stops at `--`, so `base64 -- --help` encodes the flag, and a value

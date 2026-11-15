@@ -6,8 +6,8 @@
 // this extends the same guarantee to docs/USAGE.md and README.md, which are the
 // copies a user actually reads.
 //
-// Lines are parsed, never drained: building a pipeline opens no file and spawns
-// nothing, so an example referencing fixtures/*.json or :3000 checks clean here.
+// Lines are parsed, never drained: no example stages or requests run.
+// Shell syntax preflight may spawn `sh -n`; referenced data files are not read.
 import { describe, expect, test } from "bun:test";
 import { splitArgs } from "../src/args";
 import { registerBuiltinFns } from "../src/builtinFns";
@@ -187,6 +187,7 @@ describe("documented examples parse", () => {
     ["skills/crust-verify-web-links/SKILL.md", 8],
     ["skills/crust-builtins/SKILL.md", 12],
     ["skills/crust-cli/SKILL.md", 8],
+    ["skills/crust-mcp/SKILL.md", 3],
   ])("%s", async (rel, minLines) => {
     const text = await Bun.file(`${import.meta.dir}/../${rel}`).text();
     const lines = crustLines(text);

@@ -8,8 +8,8 @@
 //
 // Honest-failure contract (the repo's first design rule, ported to MCP): a
 // nonzero child exit, a killed timeout, or a failed assert is an isError
-// result carrying the child's own output — never a success that measured
-// nothing. Output caps are always announced, never silent.
+// result carrying the child's own output. No independent verdict is added:
+// an ungated empty/all-failed measurement can exit 0. Caps are announced.
 
 import { killGroup } from "../sources";
 import type { JsonObject } from "./protocol";
@@ -114,7 +114,7 @@ function timeoutArg(args: JsonObject, max = TIMEOUT_MAX): number | undefined {
   return optInt(args, "timeout_ms", TIMEOUT_MIN, max);
 }
 
-/** Per-call cwd/env/watchdog, shared by every one-shot tool. */
+/** Per-call options; individual tool schemas restrict which keys are accepted. */
 function callOpts(args: JsonObject): {
   cwd?: string;
   env?: Record<string, string>;
@@ -159,7 +159,7 @@ export const ONE_SHOT_TOOLS: ToolDef[] = [
   {
     name: "crust_check_line",
     description:
-      "Parse crust line(s) WITHOUT running them — the same linter that guards this repo's docs (`crust --check`). No I/O, no spawn: examples referencing files or ports check clean. Reports the first parse failure with the offending line. Use it to validate generated crust before spending a run.",
+      "Check Crust command syntax in a fresh `crust --check` child (fixed 15s watchdog; line is the only argument). Does not execute supplied stages, read their referenced data files, or send their requests. Shell-stage syntax preflight may launch `sh -n`; this is not a no-spawn guarantee. Does not inspect TypeScript fixture contents or prove runtime success. Reports the first parse failure with the offending line.",
     inputSchema: {
       type: "object",
       properties: {
@@ -272,16 +272,19 @@ export const ONE_SHOT_TOOLS: ToolDef[] = [
   {
     name: "crust_gen_fixtures",
     description:
-      "Generate a fixture suite from an OpenAPI spec with `gen-fixtures`: CRUD flow files plus a negative-case matrix (required-field drops, wrong types) as .crust.ts fixtures in an output dir. Also writes gen-manifest.json — per-case expectation provenance and skip reasons (0.3.6); validation-matrix cases additionally carry a `validationOracle` (envelope, source, target) recording which response-body shape each case asserts (0.3.8). Review it before running: generation records intent, it does not verify the API. Point crust_test_fixture at the generated glob afterwards.",
+      "Generate supported negative .crust.ts cases and qualifying CRUD flows from OpenAPI. The output directory is DELETED and recreated. Effective security and required/configured query prerequisites can omit operations or whole candidate flows; unsupported cases and reasons are disclosed in gen-manifest.json with expectation provenance and validationOracle body-shape provenance. Setup-module exports supply parameterValues, resolveParameter, and expectations; these are not top-level tool arguments. Accepts cwd/timeout_ms but not env. Review the manifest before separate approved execution: generation is not verification or complete coverage.",
     inputSchema: {
       type: "object",
       properties: {
         spec: { type: "string", description: "OpenAPI/Swagger spec, path or URL" },
-        out: { type: "string", description: "output directory (default tests/gen)" },
+        out: {
+          type: "string",
+          description: "output directory, DELETED and recreated (default tests/gen)",
+        },
         setup: {
           type: "string",
           description:
-            "setup module path (default ./tests/gen-setup.ts — a convention in YOUR repo; crust ships examples/gen-setup.ts as the template; may export an `expectations` block — validationStatus, validationEnvelope, concealment, per-operation overrides — to match a backend whose contract disagrees with the 400 convention)",
+            "setup module path (default ./tests/gen-setup.ts in YOUR repo; template: examples/gen-setup.ts). Imported during generation: keep import side-effect-free and setup lazy. May export non-secret parameterValues, lazy resolveParameter, and reviewed expectations (validationStatus, validationEnvelope, concealment, per-operation overrides).",
         },
         no_flows: { type: "boolean", description: "skip the CRUD flow suite, negative cases only" },
         cwd: { type: "string" },
@@ -386,7 +389,7 @@ export const ONE_SHOT_TOOLS: ToolDef[] = [
   {
     name: "crust_load_run",
     description:
-      'A paced load run CI can gate on, composed as the documented pipeline: `load <dur> <rate>/s | parallel <n> | <target> | stats | assert`. Gates belong AFTER stats — the tool composes them there: a post-stats assert failure is an error result WITH the stats still included. An `expect` inside target runs BEFORE stats: when it fails, no stats exist to report. A run that measured nothing is tagged `empty` and refused. Multi-phase ramps: phases: "10s 50/s, 5m 200/s" (mutually exclusive with duration+rate).',
+      "Paced load composed as `load <dur> <rate>/s | parallel <n> | <target> | stats`, with post-stats gates ONLY when assert is supplied. Without assert, empty or all-failed measurements can exit 0: stats reports, it does not gate. Supply status-first predicates, then latency/rate thresholds; a tagged empty summary is refused by assert. Post-stats failure retains stats; an expect inside target fails BEFORE stats and suppresses them. Window/final guards need stats_every or their thresholds short-circuit. Dropped slots warn on stderr, not as automatic failures or a stats field. phases replaces duration+rate.",
     inputSchema: {
       type: "object",
       properties: {
@@ -402,18 +405,20 @@ export const ONE_SHOT_TOOLS: ToolDef[] = [
           description: 'multi-phase schedule "10s 50/s, 5m 200/s" instead of duration+rate',
         },
         parallel: { type: "number", description: "worker pool size (default 50)" },
-        stats_every: { type: "number", description: "rolling window seconds for stats lines" },
+        stats_every: {
+          type: "number",
+          description: "rolling window seconds (1..3600); required for window/final-scoped guards",
+        },
         stats_out: { type: "string", description: "write the final stats JSON to this path" },
         assert: {
           oneOf: [{ type: "string" }, { type: "array", items: { type: "string" } }],
-          description:
-            'gate predicate(s), one per gate, composed as one assert stage per entry after stats — a failure names the failing predicate. Status-first example: "s => Object.keys(s.status).every(k => k.startsWith("2")) && s.p95 < 250", or ["s => Object.keys(s.status).every(k => k.startsWith("2"))", "s => s.p95 < 250"] (parens optional)',
+          description: `Optional gate predicate(s), one post-stats assert per entry; omitted means NO gates. A supplied assertion refuses tagged empty stats. Gate status before performance, e.g. ["s => s.status['200'] === s.count", "s => s.p95 < 250"] (parens optional).`,
         },
         cwd: { type: "string" },
         env: { type: "object", additionalProperties: { type: "string" } },
         timeout_ms: {
           type: "number",
-          description: "child watchdog; default is the schedule plus 60s grace",
+          description: "child watchdog; default max(30s, schedule) + 60s grace, capped at 1h",
         },
       },
       required: ["target"],

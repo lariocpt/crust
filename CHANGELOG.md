@@ -4,6 +4,112 @@ Notable changes to crust. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project is
 pre-1.0, so minor versions may carry breaking changes.
 
+## [0.3.9] — 2026-11-15
+
+### Added
+
+- **Generator request planning.** Effective operation/root security, supported
+  header authentication alternatives, merged parameters, reviewed static query
+  baselines, and lazy query resolvers now inform generated fixture requests.
+  Unsupported prerequisites are disclosed rather than guessed; a blocked CRUD
+  step omits the whole derived flow, including cleanup.
+- **Offline request-planning regression coverage.** Covers conservative schema
+  and format proofs, query serialization boundaries, header guards, and emitted
+  fixture formatting. The generated header helper uses width-aware formatting.
+
+### Documentation
+
+- Align usage, shipped skills, MCP descriptions, and website recipes with actual
+  interfaces and safety limits. Add a maintainer documentation-release checklist.
+- Local candidate validation: 61 targeted tests passed, including generated
+  formatter idempotence; TypeScript typecheck passed. Production workflow results
+  are tracked separately in GitHub Actions.
+
+### Earlier documentation-parity draft (historical)
+
+The following draft records the earlier documentation-only pass, not the full
+0.3.9 release scope or its publication status.
+
+**Original draft documentation release notes.** Release version, date,
+and source/website candidate revisions remain unassigned. These notes cover the
+documentation-parity work, not every change currently in the working trees.
+
+### Added
+
+- **Documentation release checklist.** The
+  [maintainer checklist](docs/DOCUMENTATION-RELEASE-CHECKLIST.md), linked from
+  [Contributing](CONTRIBUTING.md), separates candidate review, bounded
+  validation, publication approval, release ordering, rollback planning, and
+  post-release verification. Its release gates remain unchecked.
+- **MCP skill example coverage in the documentation parser test.** The targeted
+  docs test now includes the MCP skill's standalone command examples. This is
+  syntax coverage, not execution or host-connectivity verification.
+
+### Changed
+
+- **Usage, website recipes, and shipped skills now describe the same limits.**
+  The [usage reference](docs/USAGE.md), five corresponding skills, and website
+  overview, recipe, and agent-skill pages were aligned against reviewed source.
+  These are documentation corrections, not newly added runtime capabilities.
+- **Generator guidance is explicit about prerequisites and omissions.**
+  Security requirements, required-query baselines, supported cases, and
+  whole-flow omissions are qualified rather than presented as universal API
+  coverage. Manifest prerequisites record names, not runtime values;
+  generation is not execution. Setup-module import side effects and deletion
+  of the output directory are called out.
+- **Fixture and recipe examples use the actual interfaces.** JSON request
+  headers and serialization, lazy setup/thunks, result/report envelopes,
+  JUnit output, and stress-result fields are corrected. Source-checkout
+  imports are distinguished from a published library API; plain Bun scripts
+  do not receive Crust globals. Unsupported `Bun.jwt` examples were replaced.
+- **Load guidance separates reports from gates.** Examples preserve summaries
+  and gate successful statuses before latency or rate. Documentation explains
+  optional MCP assertions, empty/failed-run guard limits, `--every` /
+  `stats_every` requirements, warmup boundaries, and dropped-slot warnings.
+  A minimum-rate gate does not prove the full requested rate was achieved.
+- **MCP registration and safety claims are host-specific.** VS Code's
+  `servers` schema is distinguished from hosts using `mcpServers`; registering
+  in Copilot does not register another host. Help, tool descriptions, skills,
+  and website pages clarify startup initialization, per-tool overrides,
+  timeout/output limits, error attribution, and teardown that does not undo
+  application data. Grammar accepted by a generic execution tool does not
+  automatically become a dedicated named tool.
+- **CLI and builtin guidance is more precise.** Script arguments, exit-code
+  limits, HTTP result handling, and the MongoDB builtin inventory are aligned.
+  Syntax checks do not execute pipelines, but shell preflight may invoke
+  `sh -n`; checking a command does not inspect imported fixture contents.
+
+### Validation evidence and limitations
+
+The preceding parity pass recorded **21 passing source docs tests**, **378
+website command examples checked with zero failures**, and successful builds
+of **33 pages** in each website mode. Generated-file link checks recorded
+**1,545 internal links / 54 anchors / zero dead links** for LAN mode and
+**1,579 internal links / 54 anchors / zero dead links** for the public base
+path. MCP source comparison found documentation-literal/comment changes only,
+with handlers and schema structure unchanged.
+
+These results are **historical**, were not rerun to draft these notes, and are
+not tied here to immutable release-candidate revisions. Syntax and generated
+internal-link checks do not establish runtime correctness, external-link
+health, or MCP host connectivity. The Shiki warning for the unregistered
+`crust` language fell back to plaintext without failing the builds. See the
+[checklist](docs/DOCUMENTATION-RELEASE-CHECKLIST.md) for evidence and release
+gates.
+
+### Release scope
+
+Pre-existing generator implementation and test changes require separate review
+and are not claimed as part of this documentation-only scope. No full suite,
+application/API/DB/fixture/load execution, binary rebuild, package publication,
+or deployment was performed for the parity pass or this draft. Dependencies
+and lockfiles were unchanged.
+
+A website publication alone does not update installed skills or compiled MCP
+descriptions. Candidate selection, any required packaging/build steps, and all
+commit, push, tag, publishing, and deployment actions remain pending explicit
+approval; these notes authorize none of them.
+
 ## [0.3.8] — 2026-11-13
 
 ### Added

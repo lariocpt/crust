@@ -47,14 +47,16 @@ export const MCP_USAGE = `crust mcp — Model Context Protocol server over stdio
   REPL: stdin belongs to the protocol, stdout to the server. Tool output
   is captured per call; the streams never mix.
 
-  Configure in an MCP host (OpenCode, Claude Code, Codex, Cursor, ...):
+  Configure using your host's schema; for hosts using mcpServers:
     { "mcpServers": { "crust": { "command": "crust", "args": ["mcp"] } } }
 
-  tools/list returns every crust capability as a direct tool: one-shot
-  runners (crust_run_line, crust_check_line, crust_test_fixture,
+  tools/list returns the defined wrappers: one-shot runners
+  (crust_run_line, crust_check_line, crust_test_fixture,
   crust_test_pipes, crust_gen_fixtures, crust_verify_web_links,
   crust_load_run) and lifecycle tools held open across calls
   (crust_mock_server_*, crust_procs_*, crust_logs_*).
+  New grammar can run through crust_run_line when supported by the
+  installed binary; it does not automatically add tools or schema keys.
 
   Held jobs (mock servers, procs, log sessions) die with this process;
   stop tools report teardown honestly. Teardown tiers: LOCAL processes
@@ -62,7 +64,10 @@ export const MCP_USAGE = `crust mcp — Model Context Protocol server over stdio
   persisted --state data untouched); APPLICATION data and remote/backend
   resources are never touched by teardown — releasing them stays the
   caller's job. A nonzero child exit is ALWAYS an
-  isError result — crust never reports a false pass, including over MCP.
+  isError result; exit 0 alone is NOT request-success proof.
+  Load assertions are optional: supply status-first gates explicitly.
+  check_line launches a syntax-check child and may launch sh -n; it does
+  not execute supplied stages or inspect TypeScript fixture contents.
 `;
 
 /** Protocol versions this server answers, newest first. A client asking for
@@ -119,7 +124,7 @@ export async function runMcp(opts: { envFile?: string } = {}): Promise<number> {
           capabilities: { tools: {} },
           serverInfo: { name: "crust", title: "crust", version: pkg.version },
           instructions:
-            "crust test-stack tools over MCP. Tool classes: crust_check_line is a static check — it parses, runs nothing. crust_run_line is execution — arbitrary stages with real side effects; target approval, credentials, writes and cleanup remain the caller's responsibility per repo policy. crust_load_run generates network load — bounded, approved non-production targets only. Lifecycle tools (mock server, procs, logs) are long-lived resources held by this server process and die when it exits; stopping them tears down LOCAL processes and releases ports — it does NOT delete remote/backend resources or release application data. One-shot tools run a fresh crust child per call: cwd/env apply per call and never persist — pass them explicitly. Nonzero exits, killed timeouts and failed asserts are isError results carrying the verbatim output; crust never reports a false pass.",
+            "crust tools over MCP. crust_check_line launches a syntax-only child (possibly sh -n); it does not execute supplied stages, read their data files, send their requests, or inspect TypeScript fixture contents. Server startup loads normal user config. Execution tools can run arbitrary stages with real side effects: target, identity, credentials, writes and cleanup remain the caller's responsibility. Load requires bounded approved non-production targets and separate authorization. crust_load_run assertions are OPTIONAL: without them empty/all-failed measurements can exit 0. Supply status-first gates, then performance; supplied asserts refuse tagged empty stats. Window/final guards need stats_every. Drops warn on stderr, not as automatic failures or a stats field. Lifecycle resources stay held; shutdown kills local processes/releases ports, not application data or remote resources. Execution tools CAN mutate that data; teardown does not undo it. One-shot children have no persistent session: use only schema-supported overrides. check_line accepts only line (15s watchdog); gen_fixtures and verify_web_links do not accept env. Other one-shot env overrides overlay inherited values. Nonzero child exits and killed timeouts yield isError with captured output; exit 0 is not request-success proof. Proxy violations are findings to inspect explicitly.",
         });
       }
       case "ping":

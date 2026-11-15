@@ -23,7 +23,7 @@ Three layers, one binary:
 |---|---|---|
 | `test-pipes` | `.pipes` — one pipeline per line | readable CRUD suites, chaining, SQL cross-checks |
 | `test-fixture` | `.crust.ts` — TS fixture modules | complex setup, matcher functions, stress (`-n`) |
-| `gen-fixtures` | generated from `openapi.json` | negative matrices + CRUD flows for every documented op |
+| `gen-fixtures` | generated from `openapi.json` | supported negative matrices + qualifying CRUD flows, with omissions disclosed |
 
 ## .pipes suites (test-pipes)
 
@@ -85,8 +85,11 @@ export default {
   input: {
     url: "http://localhost:3000/api/users",
     method: "POST",
-    headers: (ctx) => ({ authorization: `Bearer ${ctx.token}` }),
-    body: { name: "x" },
+    headers: (ctx) => ({
+      authorization: `Bearer ${ctx.token}`,
+      "content-type": "application/json",
+    }),
+    body: JSON.stringify({ name: "x" }),
   },
   output: {
     status: 201,
@@ -99,6 +102,12 @@ Run: `test-fixture 'tests/*.crust.ts' -j8 [-n N] [-t ms] [-b] [-o report.xml]`.
 `-o`'s extension picks the format — `.xml` is JUnit for CI: testcase per
 run (stress iterations individually), percentiles in `<system-out>`; `.json` is
 the raw report, `.md` markdown, anything else the text report.
+
+Resolved fixture input is forwarded to fetch as `RequestInit`: it does NOT
+auto-serialize objects or add JSON headers like an object-to-HTTP pipeline.
+Use `JSON.stringify` and an explicit content type. Zero-argument thunks are
+resolved on both sides; input functions with arguments receive context,
+while output functions with arguments are matchers.
 
 `input.redirect: "error" | "manual" | "follow"` reaches fetch like any other
 `RequestInit` field — the fixture-side twin of the http stage's `--redirect`
@@ -117,7 +126,7 @@ expected status.
 Fixtures may run CONCURRENTLY under -j/--threads — share state only via a
 module-scope promise-cached factory. Fixture files may import ONLY relative
 modules and Bun builtins (the binary can't resolve npm at runtime) —
-`Bun.SQL`, `Bun.file`, `Bun.jwt`.
+use `Bun.SQL`, `Bun.file`, or Web Crypto's `crypto.subtle` as appropriate.
 
 ## What evidence does your test produce?
 
@@ -158,18 +167,19 @@ gen-fixtures ./openapi.json [--no-flows]   # --out/--setup default to tests/gen
 Emits (deterministic, byte-stable — check the output in, regenerate, review
 the `git diff`):
 
-- **Negative matrix** per op (`<tag>.gen.crust.ts`): 401 no-creds, 403
+- **Negative matrix** for supported ops (`<tag>.gen.crust.ts`): documented 401 no-creds, 403
   authenticated-outsider (scope-gated paths), 404 unknown-id, and a 400
   matrix per body field — missing required, wrong type, bad enum, too
   short/long (minLength/maxLength), below/above numeric bounds, pattern
   violations, unexpected extra property. Nullable `anyOf` fields unwrapped.
-- **CRUD flows** (`flows/flows.gen.pipes` + sibling setup, run by
+- **Qualifying CRUD flows** (`flows/flows.gen.pipes` + sibling setup, run by
   test-pipes with zero extra flags): create → read (body round-trips the
   captured id) → update → delete → read-after-delete-404, chained with
   `capture`, auth via `$GEN_AUTH_HEADER`. SQL assertions are NOT derivable
   from a spec — add those by hand in your own .pipes.
 
-Setup-module contract (imported lazily): `shared()` promise-cached context,
+Setup-module contract (imported during generation; keep module import free
+of side effects and `shared()` lazy): `shared()` promise-cached context,
 `headersFor(ctx, "none"|"member"|"outsider")`, `resolvePath(ctx, template)`,
 `scopeParam`, `scopeRoots?`, `JSON_HEADERS`, and optional
 `flowOverrides: { "<template>": { body?: {...}, skip?: true } }` for creates
@@ -184,6 +194,54 @@ the schema, the fastapi predicate, and precedence.
 
 The `--out` dir is DELETED and recreated every run — never hand-edit
 generated files.
+
+**Security and query prerequisites:** operation `security` overrides root
+security; `[]` or any anonymous `{}` alternative permits anonymous access
+and suppresses no-credentials 401 cases. Otherwise supported alternatives
+are OR, schemes within one alternative AND: Bearer, Basic, or header API
+keys with empty scope lists. No supported alternative means an omitted,
+disclosed operation. Only absent security uses the legacy middleware-401
+description heuristic. Security does not invent undocumented 401/403.
+Header guards check structure, not valid identity, scope, or resource access.
+
+Path-item and operation parameters merge by `(name, in)` with operation
+overrides. Required query values, and explicitly configured optional ones,
+are carried by every fixture family. Non-secret `parameterValues` entries
+(`"METHOD /path"` → query name) outrank schema defaults, parameter examples,
+schema examples, and first enum members. Only a missing static value selects
+lazy `resolveParameter(ctx, operation, name)`; it is never called during
+generation. Invalid static values never silently fall back to that resolver.
+
+Static query checks fail closed on unsupported assertions (`oneOf`, `const`,
+`multipleOf`, etc.), unknown formats, invalid patterns, unresolved/cyclic
+references, and unproven branches. Supported string lengths count Unicode
+code points, not UTF-16 units/graphemes. Formats use conservative local
+proofs (real Gregorian dates, timezone-qualified date-times, RFC 4122 v1–5
+or nil UUIDs, ASCII dot-atom emails, absolute HTTP(S) URIs); outside those
+subsets means unproven, not universally invalid. These are generator-local
+checks, not changes to the mock validator.
+
+Query `form` scalars/nonempty scalar arrays support both explode modes;
+included names replace existing same-name values, preserving unrelated keys.
+Non-exploded arrays reject comma-bearing elements; numeric integral values
+with absolute magnitude ≥ `1e21` and malformed Unicode in values or
+required/configured names are rejected statically and by emitted guards.
+Required header/cookie parameters, query objects, content-based parameters,
+other styles, and `allowReserved: true` remain unsupported. No query-negative
+matrix is generated. Runtime resolvers own full schema/application validity;
+guards enforce structure and wire safety, not full schema/format/length.
+See `docs/USAGE.md` under “Security and required-query baselines” for details.
+
+The CRUD emitter does not yet carry query/security plans, including explicit
+anonymous or inherited security. A blocked create, read, selected update
+(PATCH before PUT), or DELETE in the ORIGINAL operation graph omits the
+whole candidate with the blocked operation named; cleanup is never silently
+dropped to emit a partial flow. Happy-path DELETE is not failure-path cleanup.
+Review stdout and the manifest: unsupported prerequisites are coverage gaps,
+not proof that the API needs no tests. Manifest prerequisites are names only
+(`auth`, `scope:member`, `resource:<param>`, `query:<name>`), never runtime
+values or credentials. Static baselines are embedded in fixtures: keep them
+non-secret. Generation is neither execution nor verification.
 
 What crust cannot attribute it does not emit. The pattern sampler returns a
 knowingly-wrong placeholder for a pattern it cannot read — a lookahead, Python
@@ -222,10 +280,11 @@ For negative tests:
 - Avoid exact human-readable message matching unless wording is contractual.
 
 A generic error status is insufficient evidence when the request could have
-failed for an unrelated reason. And the generated **400 validation matrix is
-a generator assumption, not a universal API convention** — some contracts
-specify `422` (or another status) for validation failures; when the contract
-disagrees, say so in review and adjust expectations to the CONTRACT, never
+failed for an unrelated reason. A **400 validation matrix is not a universal
+API convention** — some contracts specify `422` (or another status).
+Generation requires documented statuses or reviewed `expectations` for
+supported gaps; never infer status from security or an error envelope.
+When contract and behavior disagree, classify the failure and follow the CONTRACT, never
 the other way around. Document unsupported assumptions and skipped cases
 rather than silently reducing coverage or normalizing the contract to fit
 generation.
@@ -293,13 +352,14 @@ https://lariocpt.github.io/crust-website/docs/contract-review/):
 
 ## Version and evidence
 
-Behavior described here was verified against **crust v0.3.5** (source-read
+Historical runtime evidence was collected against **crust v0.3.5** (source-read
 and run through the compiled binary where it matters: `--redirect` record
 shapes, `output.schema` $ref refusal, gen-fixtures skip reporting). New in
 **v0.3.6**: the `gen-manifest.json` review artifact, the setup-module
 `expectations` block, and the evidence-tier taxonomy. New in **v0.3.8**:
 `expectations.validationEnvelope` (the expected validation-body shape) and
 the manifest's `validationOracle` provenance for validation cases. Newer
-crust versions may extend behavior; re-verify before documenting it. Keep
+security/query guidance above is source-reviewed, not a claim of a new
+application test run. Re-verify behavior for the installed version. Keep
 approved targets, credentials, transport exceptions, resource ownership, and
 execution restrictions in repository policy, not in this skill.

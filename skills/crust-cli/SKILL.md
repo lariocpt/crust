@@ -23,8 +23,8 @@ description: How to invoke crust and read its answer — the run modes (`-c`, sc
 | Code | Meaning | Examples |
 | --- | --- | --- |
 | 0 | Success. | `range(1,2)` |
-| 1 | **crust** failed. Every error crust itself raises. | `assert` mismatch, a lambda that throws, `expect 200` vs a 500, `wait: <target> not ready after Ns`, a `GET` that can't connect, `read` on a missing file, a refused empty stage (`echo a \|\| echo b`), a builtin name that reached sh. |
-| 2 | Invocation or syntax error — nothing ran. | `crust --nonsense`, `--check` with no line, `--env-file` on a missing file, `-c` given two lines, `mock-server --bogus` (prints the valid flags), sh's own parse errors on a pure-shell line (`bundle(5)`) — and the same parse error on any shell stage of a **mixed** line (named; before this a bad stage N surfaced only when its child exited, after stages 1..N-1 had run). |
+| 1 | **crust** failed. Every error crust itself raises. | `assert` mismatch, a lambda that throws, `expect 200` vs a 500, `wait: <target> not ready after Ns`, a first-stage non-parallel `GET` that can't connect, `read` on a missing file, a refused empty stage (`echo a \|\| echo b`), a builtin name that reached sh. Timed/per-item HTTP failures are instead records; gate them. |
+| 2 | Invocation or syntax error; not a global guarantee that nothing ran. | `crust --nonsense`, `--check` with no line, `--env-file` on a missing file, `-c` given two arguments, `mock-server --bogus` (prints valid flags), sh's own parse errors on a pure-shell line (`bundle(5)`) or a shell-stage preflight failure on a mixed line. Earlier script lines or config code may already have run. Script positional args are valid. |
 | the stage's own | A shell stage's exit code, propagated. | `range(1,3) \| sh -c "exit 9"` → 9 |
 | 127 | Command not found (shell stage), or an unreadable script file. | `nosuchbinary-xyz` |
 | 130 / 143 | crust killed by SIGINT / SIGTERM. | Ctrl-C during a long `-c` run |
@@ -63,17 +63,17 @@ failing shell stage propagates. So a gate must **end on a crust stage**:
 # a run.crust: blanks and `#` are skipped, lines run in order, first failure stops the file
 wait :3000/health
 range(1,99) | parallel 10 | GET http://localhost:3000/items | expect 200 | stats
-GET http://localhost:3000/items | assert (x => x.length > 0)
+GET http://localhost:3000/items | assert (r => r.status === 200) | (r => r.json()) | assert (x => x.length > 0)
 # a trailing `\` continues the line — in a script, in piped stdin, in a
 # multi-line -c, or at the REPL (where an unbalanced quote or ( continues too)
 load 10s 100/s | parallel 20 | GET http://localhost:3000/items \
   | expect 200 | stats
 ```
 
-Or ask sh to gate, explicitly:
+Or use a shell that supports pipefail, explicitly (not portable `/bin/sh`):
 
 ```bash
-sh -c 'set -o pipefail; ls /nope | wc -l'   # 2 — would be 0 without pipefail
+bash -o pipefail -c 'ls /nope | wc -l'   # nonzero — would be 0 without pipefail
 ```
 
 ## `--check`: the linter, and its edges
@@ -83,7 +83,9 @@ otherwise (`ok: N line(s) parse`). It splits on newlines and skips blank and
 `#` lines, so a whole fenced block goes in as one argument. It checks three
 things: crust's own grammar, a builtin-head line against **that CLI's flag
 spec**, and every shell stage through `sh -n` (noexec — `cat > f` under `-n`
-does not create `f`).
+does not create `f`). It does not execute supplied stages, read their
+referenced data, or send their requests; shell syntax checks CAN launch a
+child process. “Parse only” is not a no-spawn guarantee.
 
 ```bash
 crust --check 'read /nonexistent/*.json | POST :3000/x'   # ok — sources are lazy

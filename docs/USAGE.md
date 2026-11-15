@@ -211,13 +211,15 @@ The edges, all measured:
 
 `crust --check '<line>'` parses and exits — 0 if every line parses, 1 with the
 parse error otherwise. It builds the pipeline but never drains it, and every
-source is lazy, so nothing is opened, fetched or spawned:
+source is lazy: it does not execute the documented stages, send their HTTP
+requests, or open their referenced data files. It can launch `sh -n` for
+shell-stage syntax checks; “parse only” does not mean “no child process”:
 
 ```bash
 crust --check 'range(0,999) | parallel 50 | GET :3000/health | expect 200 | stats'
 # ok: 1 line(s) parse
 
-crust --check 'read /nonexistent/*.json | POST :3000/x'   # still ok — no I/O happens
+crust --check 'read /nonexistent/*.json | POST :3000/x'   # ok — no data read or request sent
 crust --check 'time warmup | range(1,3)'
 # crust: time: the label must be quoted — did you mean `time "warmup"`?
 ```
@@ -776,7 +778,7 @@ Why that shape — the five properties the pattern buys you:
   gates status on the summary instead (see the ordering trap at the end of
   this section).
 - **"Measured nothing" never passes.** A zero-request run — a glob that
-  matched nothing, a filter that dropped everything, a server never reached —
+  matched nothing or a filter that dropped everything —
   yields a summary tagged `empty: true`, and `assert` refuses it outright;
   `{count: 0, p95: 0}` used to satisfy `s => s.p95 < 200` and pass a CI gate.
 - **`rps` is the ACHIEVED rate, never the target.** `stats.rps` is measured
@@ -786,7 +788,9 @@ Why that shape — the five properties the pattern buys you:
   (downstream saturated; raise parallel N?), achieved 95.6/s`): stale slots
   are skipped, never burst. A drop report means the number under the rate
   gate is the honest one — raise `parallel N` or lower the rate before
-  quoting percentiles. A drop is never a pass.
+  claiming the target was sustained. Drops warn on stderr, do not themselves
+  fail the run, and are not a stats-summary field. The example requests 100/s
+  but accepts more than 80/s: it can pass with dropped slots.
 
 **What makes a line fail.** As of v0.2 the gate is honest in three more places
 that used to exit 0:
@@ -830,8 +834,9 @@ suite by being counted as a silent zero.
 **A gate that measured nothing is not a pass.** `stats` over an empty stream
 emits `{"count": 0, …, "empty": true}` and `assert` refuses it, because
 `{count: 0, p95: 0}` satisfies `s => s.p95 < 200` — so a run that issued zero
-requests (a glob that matched nothing, a filter that dropped everything, a
-server never reached) used to report success. A bare `… | stats` with no
+requests (a glob that matched nothing or a filter that dropped everything)
+used to report success. An unreachable server instead produces `status: 0`
+timing records; reject those with a status gate. A bare `… | stats` with no
 assertion still prints the tagged summary and exits 0, so exploring stays cheap.
 
 **Percentiles are bucketed, not exact order statistics.** `stats` keeps a fixed
@@ -849,6 +854,7 @@ line:
 
 ```bash
 load 10s 100/s | parallel 50 | GET :3000/health | stats --out load/last.json \
+  | assert (s => s.status["200"] === s.count) \
   | assert (async s => { const b = await Bun.file("load/baseline.json").json(); return s.p95 < 2 * b.summary.p95 })
 ```
 
@@ -869,12 +875,16 @@ exits **0** with p95 at 4.2. Same for `!s.final ||`. Drop the guard when you
 drop `--every`; a gate that can never fail is worse than no gate.
 
 **Warmup** is a separate line in the same `-c` script — its summary simply
-isn't gated:
+omits performance thresholds, not request-success checks:
 
 ```bash
-crust -c 'range(0, 99) | parallel 10 | GET :3000/health | stats
-load 30s 100/s | parallel 50 | GET :3000/health | stats | assert (s => s.p95 < 200)'
+crust -c 'range(0, 99) | parallel 10 | GET :3000/health --timeout 2s | stats | assert (s => s.status["200"] === s.count)
+load 30s 100/s | parallel 50 | GET :3000/health --timeout 2s | stats | assert (s => s.status["200"] === s.count) | assert (s => s.p95 < 200)'
 ```
+
+Timed network failures are `status: 0` records. The warmup status gate makes
+a dead service stop the script; the measured status gate prevents fast
+failures from satisfying the latency budget.
 
 **Ordering trap:** in `… | expect 200 | stats | assert (…)`, a failing
 `expect` throws at drain — *before* `stats` emits — so you lose the summary:
@@ -1487,14 +1497,12 @@ Example fixture:
 
 ```ts
 // fixtures/users.crust.ts
+// Public demo endpoint. Authenticated fixtures obtain approved context in setup().
 export default {
   name: "GET /users/42 returns Lario",
   input: {
     method: "GET",
     url: "http://localhost:3000/users/42",
-    headers: async () => ({
-      Authorization: `Bearer ${await Bun.jwt.sign({ sub: "42" }, "k")}`,
-    }),
   },
   output: {
     status: 200,
@@ -1622,9 +1630,10 @@ configuration — say so in the fixture.
 
 ### gen-fixtures
 
-Derives a **negative-case fixture matrix** from an OpenAPI 3.x spec (Swagger
-2.0 is auto-converted): for every operation the spec documents, cases the
-server must *reject*. Output is one `<tag>.gen.crust.ts` per OpenAPI tag in
+Derives **supported negative-case fixtures** from an OpenAPI 3.x spec (Swagger
+2.0 is auto-converted), subject to documented/configured expectations and
+usable request prerequisites. Unsupported operations and skipped cases are
+disclosed; this is not complete API coverage. Output is one `<tag>.gen.crust.ts` per OpenAPI tag in
 `--out` (the directory is **deleted and recreated** every run — never edit
 generated files), runnable by [test-fixture](#test-fixture). The emitted
 style follows the receiving project's own formatter: the nearest `biome.json`
@@ -1669,7 +1678,7 @@ spec leaves silent (a documented status always wins over a configured one) —
 plus every skip (dropped cases, skipped
 flows, `flowOverrides.skip`) with the same reason stdout shows, and every
 unsupported operation with what crust could not derive. Prerequisites are
-NAMES (`auth`, `scope:member`, `resource:<param>`), never values from your
+NAMES (`auth`, `scope:member`, `resource:<param>`, `query:<name>`), never runtime values from your
 setup module. The file is deterministic — no timestamps; the spec is
 identified by a sha256 of its content — so the same spec + crust version
 regenerate it byte-identically, and it states its own limit in every copy:
@@ -1679,9 +1688,11 @@ generation never leaves one behind.
 
 Derived cases:
 
-- **401** when the op documents a *middleware* 401 — a 401 response whose
-  description matches `/not authenticated|log in/i`. Public endpoints like
-  login that document 401 for bad credentials get no case.
+- **401** when the operation documents 401 and its effective security requires
+  authentication. Operation security overrides root security; `[]` or any
+  anonymous `{}` alternative suppresses this case. Only when security is
+  absent does the legacy `/not authenticated|log in/i` description heuristic
+  apply, avoiding bad-credentials cases on public login endpoints.
 - **403** for scope-gated ops that document 403 (an authenticated outsider
   with no membership in the scope).
 - **404** for non-scope-gated ops with path params that document 404 (an
@@ -1782,6 +1793,115 @@ reported at generation time.
 
 #### The setup-module contract
 
+##### Security and required-query baselines
+
+Fixture generation resolves operation `security` over root security. An explicit
+`security: []` or an anonymous `{}` alternative permits anonymous access. Otherwise,
+validation and unknown-resource cases use `headersFor(ctx, "member")`, and generated
+fixtures check that its headers satisfy a supported security alternative. Alternatives
+are OR; schemes within one alternative are AND. Bearer, Basic, and header API keys
+with empty scope lists are supported. Cookie/query authentication, scoped OAuth,
+unresolved schemes, and incompatible same-header combinations are not silently
+treated as public: an operation with no supported alternative is disclosed in
+`gen-manifest.json` and omitted. When security is absent, the legacy middleware-401
+description heuristic remains the fallback. Security selects credentials; it does
+not invent undocumented 401 or 403 expectations.
+
+Path-item and operation parameters are merged by `(name, in)`, with the operation
+overriding the path item. Every fixture family carries required query parameters.
+The setup module may additionally export:
+
+- `parameterValues: Record<"METHOD /path", Record<string, unknown>>` — reviewed,
+  non-secret query baselines. Unknown operations or query names are errors. Values
+  are validated against the supported parameter-schema fragment, including local
+  referenced constraints, and embedded in generated fixtures;
+  **never put credentials or private resource data here**.
+- `resolveParameter(ctx, operation, name)` — an optional lazy, sync or async resolver
+  for required query values not available statically. It is called only when a
+  fixture executes, never during generation. Return a scalar or a nonempty array
+  of scalars as declared by the parameter. The resolver owns full schema and
+  application validity; runtime guards reject missing, non-finite, or structurally
+  unsupported results, and the wire-format limitations below, before a request
+  is sent.
+
+Without an override, a schema default, parameter/schema example, or first enum
+member supplies the baseline. Otherwise a required parameter needs the lazy
+resolver; the generator does not guess business strings such as `node_type`.
+Documented values can still be stale or insufficient for application rules:
+review them before execution. An operation without a usable baseline is reported
+as unsupported instead of receiving misleading negative tests.
+
+Static baselines fail closed when the generator cannot judge a constraint:
+`multipleOf`, `oneOf` (exactly-one semantics), `not`, `const`, `uniqueItems`, and
+other unsupported assertions are disclosed and the operation is omitted. The check
+also covers array items and every `allOf`/`anyOf` branch, including local references.
+Original query schemas are checked before accepting the dereferenced result;
+assertion siblings of `$ref` are unsupported rather than silently discarded.
+Unknown formats, invalid patterns, malformed constraints, unresolved/cyclic references,
+and empty or annotation-only branches are not proof of a valid static prerequisite.
+Supported types, enums, bounds, patterns, array limits, and fully covered
+`allOf`/`anyOf` compositions still use schema validation. Generator-local string
+length checks count Unicode code points, not UTF-16 units or grapheme clusters:
+an emoji counts as one, while `e` followed by a combining accent counts as two.
+These checks apply through references, compositions, and array items; each
+`anyOf` alternative must pass its own complete set of constraints. The shared
+mock validator is unchanged. An unsupported static baseline is not silently
+replaced by a lazy resolver.
+
+Static string formats use conservative, generator-local proofs rather than
+regex shape alone. All of these subsets reject controls, spaces, and non-ASCII
+text (URI percent-encoding is allowed):
+
+- `date`: a real Gregorian calendar date in years `0001`–`9999`, with month/day
+  ranges and leap years checked.
+- `date-time`: the same calendar check plus RFC 3339 `T`/`t`, hours `00`–`23`,
+  minutes/seconds `00`–`59`, optional fractional seconds, and a required `Z`/`z`
+  or `±HH:MM` offset (hours `00`–`23`, minutes `00`–`59`). No timezone-less
+  timestamps, space separator, compact offsets, year zero, or leap seconds.
+- `uuid`: canonical hyphenated RFC 4122 versions 1–5 with the RFC variant bits,
+  or the nil UUID; hexadecimal case is ignored. Other UUID versions and
+  representations are outside this static subset.
+- `email`: an unquoted ASCII dot-atom local part (at most 64 characters), DNS
+  labels (at most 63 characters each), an alphabetic final label of 2–63
+  characters, and at most 254 characters overall. Quoted local parts, address
+  literals, internationalized addresses, and single-label domains are excluded.
+- `uri`: absolute HTTP(S) URIs with ASCII DNS-label hosts or canonical dotted
+  IPv4, optional ports `0`–`65535`, RFC 3986 component characters, and well-formed
+  percent escapes. No userinfo, IPv6 literals, non-HTTP schemes, raw Unicode,
+  trailing-dot hosts, or WHATWG-only repairs such as backslashes or shortened IPv4.
+
+A value outside these subsets is omitted and disclosed as an unproven static
+baseline, not declared invalid under every possible interpretation of its format.
+No DNS, mailbox, or resource-existence checks are performed. For intentionally
+broader contracts, a lazy resolver with no static baseline retains responsibility
+for full schema and application validity; it does not gain runtime format or
+length validation from these generation-time checks.
+
+This increment supports query `form` scalars and scalar arrays (`explode` true
+or false), encoding reserved characters and preserving unrelated existing query
+parameters. Parameter values replace existing values of the same name. Required
+header/cookie parameters, query objects, content-based parameters, other styles,
+and `allowReserved: true` are disclosed as unsupported. Optional query parameters
+are omitted unless explicitly configured. Query-negative matrices are not generated.
+Non-exploded arrays cannot contain comma-bearing string elements: encoding a comma
+does not distinguish element data from the delimiter after query decoding. Use
+exploded arrays only when the contract permits them. Numeric integral values with
+absolute magnitude at least `1e21` are unsupported because JavaScript emits them
+in exponent form rather than the integer wire syntax; smaller decimal-form integers
+and finite fractional numbers remain supported. Both restrictions apply to static
+baselines and lazy resolver results, including numeric array elements.
+Malformed Unicode (unpaired UTF-16 surrogates) in scalar values, string array
+elements, or required/configured query names is also rejected before URL encoding
+can silently replace it. Valid surrogate pairs and BMP text round-trip unchanged.
+The emitted URL helper also guards parameter names before calling a lazy resolver.
+Runtime parameter values and credentials are never recorded in the manifest;
+query prerequisites are names only. CRUD pipes flows requiring these query/security
+plans are omitted and disclosed until their emitter supports the same guarantees.
+Eligibility is checked against the original operation graph: if the create, read,
+selected update (PATCH before PUT), or DELETE step is unsupported, the entire
+candidate flow is omitted with the blocked operation named. A blocked cleanup
+step is never silently dropped to emit a partial flow.
+
 Generated files are app-agnostic: they import ONLY from the `--setup` module
 (the import specifier is rewritten relative to `--out`). That module carries
 every app-specific detail and must export:
@@ -1875,14 +1995,16 @@ A complete runnable module to copy lives at
 repo.** Run `gen-fixtures` without one and it says so, naming the path it
 looked at, the template to copy and the `--setup` flag.
 
-**If you get `generated 0 cases`:** derivation keys off **documented
-responses**, not `securitySchemes` — 401 needs a documented `401` whose
-description says the caller is not authenticated ("not authenticated" /
-"log in"; a login endpoint's bad-credentials 401 deliberately doesn't
-count), 403 needs `scopeParam` plus a documented `403`, 404 needs non-scope
-path params plus a documented `404`, and the 400 matrix needs a JSON
-request-body schema plus a documented `400` (or a reviewed `validationStatus`
-in the setup module's `expectations` block — see below).
+**If you get `generated 0 cases`:** inspect stdout and `gen-manifest.json`
+for unsupported security/query prerequisites as well as missing expectations.
+Security never invents response statuses. A 401 case needs a documented 401
+and effective authenticated security (or the middleware-description fallback
+only when security is absent). A 403 needs `scopeParam` plus a documented 403;
+unknown-id cases need non-scope path params and a documented 404. Reviewed
+`expectations` can fill supported validation/concealment gaps. The body
+validation matrix needs a JSON request schema and a documented validation
+status or reviewed `validationStatus`. Zero generated cases is not proof
+that the API has no negative cases to test.
 
 Exit codes: `0` generated, `1` generation error (including a setup module
 missing `scopeParam`), `2` bad args or a refused setup-module `expectations`
@@ -2187,10 +2309,13 @@ mock-server --swagger ./openapi.yaml --port 4000 \
 
 `--count N` runs every matched fixture N times. Combined with `--threads`, you get concurrency + volume. When `N > 1` the report adds a stress block per fixture: `p50`, `p95`, `p99`, mean, min, max, plus the status-code distribution. Each result is tagged with its `iter` index so failures point at the offending iteration.
 
-To vary inputs across iterations, use thunks in `input` together with the `random` helper:
+To vary inputs across iterations, use thunks in `input` together with the
+`random` helper. This example is `stress.crust.ts` at the Crust source-checkout
+root; elsewhere use a reviewed relative helper or Bun builtins. The compiled
+executable does not expose a `crust/testFixture/random` package import.
 
 ```ts
-import { random } from "crust/testFixture/random";
+import { random } from "./src/testFixture/random";
 
 const userIds = [1, 2, 3, 4, 5, 6, 7, 8];
 
@@ -2198,7 +2323,8 @@ export default {
   input: {
     url: () => `http://localhost:3000/users/${random.choice(userIds)}`,
     method: "POST",
-    body: () => ({
+    headers: { "content-type": "application/json" },
+    body: () => JSON.stringify({
       name: random.string(8),
       age: random.int(18, 99),
       tier: random.weighted([["free", 7] as const, ["pro", 3] as const]),
@@ -2214,6 +2340,12 @@ test-fixture --target stress.crust.ts --count 1000 --threads 32 --out report.jso
 ```
 
 Helpers: `random.int(min, max)`, `random.float(min, max)`, `random.bool(p?)`, `random.choice(arr)`, `random.from(iter)`, `random.weighted([[v, w], ...])`, `random.string(len, alphabet?)`, `random.uuid()`, `random.shuffle(arr)`.
+
+Fixture `input` is forwarded to fetch after field resolution; unlike the
+object-to-HTTP pipeline stages, it does not automatically JSON-encode bodies
+or add a content type. Zero-argument thunks are resolved on both sides;
+input functions with arguments receive context, while output functions
+with arguments are matchers.
 
 ### verify-web-links
 
@@ -2498,13 +2630,15 @@ Note: function-as-source now **flattens Array return values** — `fn` returning
 `crust mcp` speaks the **Model Context Protocol** over stdio — JSON-RPC 2.0,
 one message per line — so an MCP-capable agent (OpenCode, Claude Code, Codex,
 Cursor, …) drives crust directly instead of fumbling a shell. Every capability
-is a first-class tool in `tools/list`, so the agent sees them directly.
+has access through the advertised tools; `crust_run_line` exposes general
+grammar, while dedicated tools have their own argument schemas.
 
 It is a whole-process **mode**, not a REPL builtin: the MCP host owns stdin
 and stdout. Running `crust mcp --help` prints the contract; a `mcp` line at
 the REPL refuses with that explanation rather than sh's misleading 127.
 
-Register it with the host (OpenCode / Claude Code style config):
+Register it using the particular host's settings. For hosts using
+`mcpServers` (for example Claude-style configuration):
 
 ```bash
 # { "mcpServers": { "crust": { "command": "crust", "args": ["mcp"] } } }
@@ -2518,17 +2652,16 @@ The VS Code form, and its two verified traps:
 # { "servers": { "crust": { "type": "stdio", "command": "/ABS/PATH/to/crust", "args": ["mcp"] } } }
 ```
 
-1. `"command"` must be an **absolute path** — a GUI-launched VS Code does not
-   inherit the shell's `PATH`, so bare `"crust"` dies `spawn crust ENOENT`
-   when the launcher lives outside the default lookup dirs.
-2. VS Code's MCP support ships inside the Chat/Copilot Chat extension —
-   Code - OSS / VSCodium has no MCP host without an extension (Cline,
-   Roo Code or Continue each carry their own MCP settings).
+1. Prefer an **absolute executable path** when the GUI host's `PATH` differs
+   from your shell. A bare `"crust"` works only if that host can resolve it;
+   otherwise it fails with an error such as `spawn crust ENOENT`.
+2. Each host/extension has its own registration and tool-exposure policy.
+   A server available to Copilot is not automatically registered with another
+   agent. Code - OSS/VSCodium also needs an MCP-capable host extension.
 
-Grammar lands automatically: the one-shot tools pass line/fixture text to a
-fresh crust child untouched, so anything the lexer accepts (`--redirect`,
-new builtins) is an MCP tool call the moment the installed binary has it —
-no MCP-side change per feature.
+New grammar is available through `crust_run_line` when the installed binary
+supports it. Dedicated named tools still need their wrapper/schema to expose
+new arguments; lexer support does not automatically create new MCP tools.
 
 Verify by hand — the transport is just lines on stdin, so `printf | crust mcp`
 is a real smoke test (initialize, then `tools/list`):
@@ -2541,8 +2674,16 @@ printf '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion
 
 | Plane | Tools | State |
 | --- | --- | --- |
-| **One-shot** | `crust_run_line`, `crust_check_line`, `crust_test_fixture`, `crust_test_pipes`, `crust_gen_fixtures`, `crust_verify_web_links`, `crust_load_run` | a fresh crust child per call; `cwd`/`env` apply per call and never persist |
+| **One-shot** | `crust_run_line`, `crust_check_line`, `crust_test_fixture`, `crust_test_pipes`, `crust_gen_fixtures`, `crust_verify_web_links`, `crust_load_run` | a fresh crust child per call; accepted overrides apply only to that call, never a persistent session |
 | **Lifecycle** | `crust_mock_server_start/stop/list/violations`, `crust_procs_start/stop`, `crust_logs_open/query/close` | held in the server across calls; every held job dies when the server exits |
+
+Read each tool's schema: `crust_check_line` accepts only `line` and uses a
+fixed 15s watchdog. `crust_gen_fixtures` and `crust_verify_web_links` accept
+`cwd`/`timeout_ms`, but not `env`. The run-line, test, and load tools accept
+per-call `env` overlays on the inherited environment, not a replacement.
+Generator `parameterValues`, `resolveParameter`, and `expectations` belong
+in its setup module, not top-level MCP arguments. Generation deletes and
+recreates `out`; review the manifest's omissions before any separate execution.
 
 `crust_run_line` runs ordinary crust grammar — the same `|`-stages, lambdas
 and builtins as `crust -c`. `crust_check_line` is `--check` over MCP: it
@@ -2559,39 +2700,47 @@ agent sees it before the first call (v0.3.6):
 
 | Class | Tools | What it touches |
 | --- | --- | --- |
-| **Static check** | `crust_check_line` | parses only — runs nothing, no I/O, no spawn |
+| **Static check** | `crust_check_line` | launches a syntax-check child; may launch `sh -n`; does not execute supplied stages, read their data files, or send their requests; does not validate TypeScript fixture contents |
 | **Execution** | `crust_run_line`, `crust_test_fixture`, `crust_test_pipes`, `crust_gen_fixtures` | arbitrary stages with real side effects — target approval, credentials, writes and cleanup remain the caller's responsibility per repo policy |
 | **Network / load generation** | `crust_verify_web_links`, `crust_load_run` | bounded generation against the network — approved non-production targets only |
 | **Long-lived resources** | `crust_mock_server_*`, `crust_procs_*`, `crust_logs_*` | held by the server process; die when it exits |
 
-**Teardown has three tiers, and no tool crosses them:**
+**Teardown has three tiers; stopping local resources is not data cleanup:**
 
 1. **Local processes** — `crust_procs_stop` (and server exit) kill the
    supervised process groups whole: SIGTERM→SIGKILL, grandchildren included.
 2. **Mock-server sessions** — `crust_mock_server_stop` closes the listener and
    releases the port. `--state` files and databases are application data: they
    stay on disk.
-3. **Application data** — nothing in the MCP surface deletes remote or backend
-   resources or releases application data. A container a proc started, a row
-   it wrote, a queue it filled survives its local teardown; releasing it is the
+3. **Application data** — teardown does not delete remote/backend resources or
+   application data. Execution tools can create, change, or delete that data;
+   stopping their local processes does not undo it. A container a proc started,
+   a row it wrote, or a queue it filled survives local teardown; releasing it is the
    caller's job (`crust.onExit` covers scripted cleanup — see
    [Lifecycle hooks](#lifecycle-hooks)).
 
 ### Contracts, stated honestly
 
-- **Never a false pass.** A nonzero child exit, a killed timeout, a failed
-  `assert` or a mock validation error is an `isError` result carrying the
-  verbatim exit code and output. Zero matches is an explicit "zero items",
-  never silence. A load run that measured nothing is refused (`empty`).
+- **Child failure is preserved, not independently judged.** A nonzero child
+  exit or killed timeout yields `isError` with its output (subject to the
+  announced caps). `isError: false` is not proof of request correctness:
+  timed HTTP failures are records, and proxy violations are findings to inspect
+  with `crust_mock_server_violations`, not automatic tool failures.
+- **Load gates are optional.** `crust_load_run` adds no assertion if `assert`
+  is omitted; even an empty or all-failed measurement can exit 0. Supply
+  status-first predicates before latency/rate thresholds. With an assertion,
+  a tagged `empty` summary is refused. Window/final guards need `stats_every`;
+  without it those keys are absent and the guarded threshold short-circuits.
+  Dropped slots warn on stderr, not as an automatic failure or stats field.
 - **Transport contract.** stdio JSON-RPC 2.0, one frame per line. The host
   spawns `crust mcp` once; one-shot tools spawn a fresh crust child per call
-  (`cwd`/`env` per call, nothing persists), lifecycle tools live in the server
+  (schema-supported overrides per call), lifecycle tools live in the server
   process and die with it. Every crust-side answer arrives as a JSON-RPC
-  frame — a successful result, or an `isError` tool result naming the reason.
-  A call that fails with a host-side error string (an "unavailable tool" style
-  refusal that never appears in crust's output) never reached the server: the
-  server was not spawned, the command/path is wrong, or the host's transport
-  framing broke. Debug with the `printf | crust mcp` smoke test above.
+  frame: a result or protocol error. Known-tool argument/run failures yield
+  `isError`; unknown tool names and malformed protocol parameters can instead
+  yield JSON-RPC errors. A host-side “unavailable tool” message alone does not
+  diagnose which layer failed: check host registration/exposure and server
+  frames before attributing it to Crust.
 - **Output is capped per stream** (256 KB, tail-kept) and truncation is
   always announced, never silent.
 - **Lifetime.** stdin EOF, SIGINT or SIGTERM tear down every held job —
@@ -2603,6 +2752,10 @@ agent sees it before the first call (v0.3.6):
 
 The `crust-mcp` agent skill (installed with `crust skills install`) maps each
 task to the right `crust_*` tool.
+
+Server startup loads normal Crust config, including user `init.ts` code and
+an optional `--env-file`. A syntax-only tool does not make server startup
+side-effect-free. Follow repository approvals before starting the server.
 
 ---
 

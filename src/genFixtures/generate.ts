@@ -132,6 +132,14 @@ import {
   quoteStringLiteral,
   sortSpecifiers,
 } from "./layout";
+import {
+  emitRequestHelpers,
+  mergeParameters,
+  type ParameterSetup,
+  planRequest,
+  type RequestPlan,
+  validateParameterSetup,
+} from "./requestPlan";
 
 type Schema = {
   /** 3.0 writes a string; 3.1 may write a union array (`["string","null"]`). Read via primaryType. */
@@ -912,6 +920,7 @@ export interface GenCase {
   auth: "none" | "outsider" | "member";
   method: string;
   path: string; // with {params} placeholders — resolved by the setup module
+  requestPlan?: RequestPlan;
   body?: Record<string, unknown>;
   expectStatus: number;
   /**
@@ -1039,6 +1048,7 @@ function deriveCases(
   unsound: UnsoundOp[],
   bodyless: BodylessOp[],
   noMatrix: NoMatrixOp[],
+  requestPlan?: RequestPlan,
 ): GenCase[] {
   const cases: GenCase[] = [];
   const responses = op.responses ?? {};
@@ -1088,7 +1098,9 @@ function deriveCases(
   // A documented 401 only implies "requires auth" when it's the middleware's
   // 401 — public endpoints like login document 401 for bad credentials.
   const desc401 = String(responses["401"]?.description ?? "");
-  const requiresAuth = has(401) && /not authenticated|log in/i.test(desc401);
+  const legacyAuth = has(401) && /not authenticated|log in/i.test(desc401);
+  const requiresAuth = requestPlan?.explicitSecurity ? requestPlan.authenticated : legacyAuth;
+  const unauthenticatedCase = requiresAuth && has(401);
   const params = [...path.matchAll(/\{(\w+)\}/g)].map((m) => m[1] as string);
   const firstParam = params[0] ?? null;
   const scoped = isScopeGated(path, firstParam, scope);
@@ -1104,7 +1116,7 @@ function deriveCases(
   const authzBody = sendableBody ? (bodySchema ? baseBody(bodySchema) : {}) : undefined;
   const bodylessOp = sendableBody === undefined && op.requestBody !== undefined;
 
-  if (requiresAuth) {
+  if (unauthenticatedCase) {
     cases.push({
       name: `${method.toUpperCase()} ${path} without credentials -> 401`,
       auth: "none",
@@ -1483,6 +1495,9 @@ function prerequisitesOf(c: GenCase): string[] {
   const pre: string[] = [];
   if (c.auth === "member") pre.push("auth", "scope:member");
   else if (c.auth === "outsider") pre.push("auth", "scope:outsider");
+  for (const p of c.requestPlan?.query ?? []) {
+    pre.push(`query:${p.name}`);
+  }
   for (const m of c.path.matchAll(/\{(\w+)\}/g)) {
     const name = `resource:${m[1]}`;
     if (!pre.includes(name)) pre.push(name);
@@ -1573,34 +1588,93 @@ function fastapiDataLines(c: GenCase, style: EmitStyle): string[] {
   return fastapiPredicateLines(c.validationTarget, style);
 }
 
-function emitFixture(c: GenCase, used: Set<string>, style: EmitStyle): string {
+function emitFixture(
+  c: GenCase,
+  used: Set<string>,
+  style: EmitStyle,
+  request: string | undefined,
+): string {
+  const query = c.requestPlan?.query ?? [];
   const lines: string[] = [
     "  {",
     `    name: ${quoteStringLiteral(c.name, style)},`,
     "    setup: shared,",
-    "    input: (ctx: Ctx) => ({",
+    query.length > 0 ? "    input: async (ctx: Ctx) => ({" : "    input: (ctx: Ctx) => ({",
   ];
-  lines.push(
-    pad(3) +
-      formatCall(style, 3, "url: ", "resolvePath", ["ctx", quoteStringLiteral(c.path, style)], ","),
-  );
+  if (query.length > 0) {
+    const resolver = query.some((p) => p.runtime);
+    if (resolver) used.add("resolveParameter");
+    lines.push(
+      pad(3) +
+        formatCall(
+          style,
+          3,
+          "url: await ",
+          "genUrl",
+          [
+            formatCall(style, 4, "", "resolvePath", ["ctx", quoteStringLiteral(c.path, style)], ""),
+            "ctx",
+            quoteStringLiteral(`${c.method.toUpperCase()} ${c.path}`, style),
+            `${request}.query`,
+            ...(resolver ? ["resolveParameter"] : []),
+          ],
+          ",",
+        ),
+    );
+  } else {
+    lines.push(
+      pad(3) +
+        formatCall(
+          style,
+          3,
+          "url: ",
+          "resolvePath",
+          ["ctx", quoteStringLiteral(c.path, style)],
+          ",",
+        ),
+    );
+  }
   lines.push(`${pad(3)}method: ${quoteStringLiteral(c.method.toUpperCase(), style)},`);
   if (c.auth === "none") {
     used.add("JSON_HEADERS");
     lines.push("      headers: JSON_HEADERS,");
   } else {
     used.add("headersFor");
-    lines.push(
-      pad(3) +
-        formatCall(
-          style,
-          3,
-          "headers: ",
-          "headersFor",
-          ["ctx", quoteStringLiteral(c.auth, style)],
-          ",",
-        ),
-    );
+    if (c.requestPlan?.alternatives.length) {
+      lines.push(
+        pad(3) +
+          formatCall(
+            style,
+            3,
+            "headers: ",
+            "genHeaders",
+            [
+              formatCall(
+                style,
+                4,
+                "",
+                "headersFor",
+                ["ctx", quoteStringLiteral(c.auth, style)],
+                "",
+              ),
+              `${request}.alternatives`,
+            ],
+            ",",
+          ),
+      );
+    } else {
+      lines.push(
+        pad(3) +
+          formatCall(
+            style,
+            3,
+            "headers: ",
+            "headersFor",
+            ["ctx", quoteStringLiteral(c.auth, style)],
+            ",",
+          ),
+      );
+    }
   }
   if (c.body !== undefined) {
     // A string literal is never wrappable, and `body` is below biome's
@@ -1755,6 +1829,7 @@ interface SkippedFlow {
 function deriveFlows(
   paths: Record<string, Record<string, Operation>>,
   scope: ScopeConfig,
+  blocked: Set<string>,
 ): { flows: FlowPlan[]; skipped: SkippedFlow[] } {
   const flows: FlowPlan[] = [];
   const skipped: SkippedFlow[] = [];
@@ -1769,20 +1844,44 @@ function deriveFlows(
       skipped.push({ template, reason: "flowOverrides.skip in the setup module" });
       continue;
     }
+    if (blocked.has(`POST ${template}`)) {
+      skipped.push({
+        template,
+        reason: `request plans unsupported for flow step(s): POST ${template}`,
+      });
+      continue;
+    }
 
     // Item template: `<template>/{param}` with at least one of GET/PUT/PATCH/
     // DELETE. First match in JSON key order — deterministic.
     let itemOps: ItemOps | null = null;
+    let itemTemplate = "";
     for (const k of templates) {
       if (!k.startsWith(template) || !/^\/\{[^/}]+\}$/.test(k.slice(template.length))) continue;
       const m = paths[k]!;
       const ops: ItemOps = { get: m.get, put: m.put, patch: m.patch, delete: m.delete };
       if (ops.get || ops.put || ops.patch || ops.delete) {
         itemOps = ops;
+        itemTemplate = k;
         break;
       }
     }
     if (!itemOps) continue;
+    const selectedMethods = [
+      ...(itemOps.get ? ["GET"] : []),
+      ...(itemOps.patch ? ["PATCH"] : itemOps.put ? ["PUT"] : []),
+      ...(itemOps.delete ? ["DELETE"] : []),
+    ];
+    const unsupportedSteps = selectedMethods
+      .map((method) => `${method} ${itemTemplate}`)
+      .filter((key) => blocked.has(key));
+    if (unsupportedSteps.length > 0) {
+      skipped.push({
+        template,
+        reason: `request plans unsupported for flow step(s): ${unsupportedSteps.join(", ")}`,
+      });
+      continue;
+    }
 
     // Only the scope param may appear in the collection template — a nested
     // collection's parent id is not derivable from the spec alone.
@@ -2120,13 +2219,55 @@ export async function generateFixtures(opts: GenerateOpts): Promise<GenerateResu
   const unsound: UnsoundOp[] = [];
   const bodyless: BodylessOp[] = [];
   const noMatrix: NoMatrixOp[] = [];
+  const requestUnsupported: { operation: string; assumption: string }[] = [];
+  let requestWithoutCases = 0;
+  const parameterSetup = setupMod as ParameterSetup;
+  validateParameterSetup(parameterSetup, new Set(specOperationKeys(spec)));
+  const blockedFlowOperations = new Set<string>();
   const byTag = new Map<string, GenCase[]>();
   for (const [path, methods] of Object.entries(spec.paths ?? {})) {
     for (const [method, op] of Object.entries(methods as Record<string, Operation>)) {
       if (!GEN_METHODS.includes(method)) continue;
+      const parameters = mergeParameters(
+        (methods as Record<string, unknown>).parameters,
+        (op as unknown as Record<string, unknown>).parameters,
+      );
+      const plan = planRequest(
+        spec,
+        op as unknown as Record<string, unknown>,
+        parameters,
+        `${method.toUpperCase()} ${path}`,
+        parameterSetup,
+        rawSpec,
+      );
+      if (plan.problems.length > 0) {
+        requestWithoutCases++;
+        for (const assumption of plan.problems) {
+          requestUnsupported.push({ operation: `${method.toUpperCase()} ${path}`, assumption });
+          log(`gen-fixtures: skipping ${method.toUpperCase()} ${path} — ${assumption}`);
+        }
+        blockedFlowOperations.add(`${method.toUpperCase()} ${path}`);
+        continue;
+      }
+      // The pipes flow emitter cannot carry query parameters or check selected security yet.
+      // Preserve the graph: filtering individual steps can silently remove cleanup.
+      if (plan.query.length > 0 || plan.explicitSecurity) {
+        blockedFlowOperations.add(`${method.toUpperCase()} ${path}`);
+        if (opts.flows !== false) {
+          requestUnsupported.push({
+            operation: `${method.toUpperCase()} ${path}`,
+            assumption:
+              "CRUD flow derivation omitted: query/security request plans require fixtures",
+          });
+        }
+      }
       const tag = op.tags?.[0] ?? "untagged";
       const arr = byTag.get(tag) ?? [];
-      arr.push(...deriveCases(path, method, op, scope, unsound, bodyless, noMatrix));
+      const derived = deriveCases(path, method, op, scope, unsound, bodyless, noMatrix, plan);
+      for (const c of derived) {
+        if (plan.query.length > 0 || plan.explicitSecurity) c.requestPlan = plan;
+      }
+      arr.push(...derived);
       byTag.set(tag, arr);
     }
   }
@@ -2154,7 +2295,7 @@ export async function generateFixtures(opts: GenerateOpts): Promise<GenerateResu
   // and each field is blamed on whoever is responsible. Where the spec allows no value at all the
   // notice says the SPEC contradicts itself, because "crust's own value" points a reader at the
   // wrong repo's issue tracker.
-  let withNoCases = 0;
+  let withNoCases = requestWithoutCases;
   for (const u of unsound) {
     log(
       `gen-fixtures: ${u.dropped} case(s) skipped for ${u.template} — ${blameClause(u.specFaults, u.crustFaults, "so a 400 from that body would name the wrong field")}`,
@@ -2224,13 +2365,56 @@ export async function generateFixtures(opts: GenerateOpts): Promise<GenerateResu
       });
     }
     const used = new Set<string>(["resolvePath", "shared"]);
-    const fixtures = cases.map((c) => emitFixture(c, used, style)).join("\n");
+    const requests = new Map<RequestPlan, string>();
+    const headerPlans = new Set<RequestPlan>();
+    let hasQuery = false;
+    for (const c of cases) {
+      const plan = c.requestPlan;
+      if (!plan) continue;
+      hasQuery ||= plan.query.length > 0;
+      const headers = c.auth !== "none" && plan.alternatives.length > 0;
+      if (headers) headerPlans.add(plan);
+      if ((plan.query.length > 0 || headers) && !requests.has(plan)) {
+        requests.set(plan, `r${requests.size}`);
+      }
+    }
+    const metadata = [...requests].map(([plan, name]) => {
+      const value = {
+        ...(plan.query.length > 0
+          ? {
+              query: plan.query.map(({ value, ...entry }) => ({
+                ...entry,
+                ...(value === undefined ? {} : { value }),
+              })),
+            }
+          : {}),
+        ...(headerPlans.has(plan) ? { alternatives: plan.alternatives } : {}),
+      };
+      return pad(1) + formatJsonProperty(style, name, value, 1);
+    });
+    const helpers = emitRequestHelpers(style, hasQuery, headerPlans.size > 0);
+    const declarations = [
+      ...(helpers ? [helpers] : []),
+      ...(metadata.length > 0 ? [`const requests = {\n${metadata.join("\n")}\n};`] : []),
+    ];
+    const fixtures = cases
+      .map((c) =>
+        emitFixture(
+          c,
+          used,
+          style,
+          c.requestPlan && requests.has(c.requestPlan)
+            ? `requests.${requests.get(c.requestPlan)}`
+            : undefined,
+        ),
+      )
+      .join("\n");
     const file = reindentTwoSpace(
       `// GENERATED by crust gen-fixtures — DO NOT EDIT.
 // Regenerate: gen-fixtures --swagger <spec> --out <dir> --setup <module>
 ${formatImport(style, sortSpecifiers(used, style), specifier)}
 
-type Ctx = Awaited<ReturnType<typeof shared>>;
+type Ctx = Awaited<ReturnType<typeof shared>>;${declarations.length > 0 ? `\n\n${declarations.join("\n\n")}` : ""}
 
 export default [
 ${fixtures}
@@ -2253,6 +2437,7 @@ ${fixtures}
     const { flows, skipped } = deriveFlows(
       (spec.paths ?? {}) as Record<string, Record<string, Operation>>,
       scope,
+      blockedFlowOperations,
     );
     for (const s of skipped) {
       log(`gen-fixtures: skipping flow for ${s.template} — ${s.reason}`);
@@ -2295,6 +2480,7 @@ ${fixtures}
       ...flowSkips.map((s) => ({ operation: s.template, reason: s.reason })),
     ],
     unsupported: [
+      ...requestUnsupported,
       ...bodyless.map((b) => ({
         operation: b.template,
         assumption:

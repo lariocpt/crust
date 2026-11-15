@@ -71,7 +71,9 @@ Canonical, version-pinned result-shape table: https://lariocpt.github.io/crust-w
   slots are skipped (never burst) and reported on stderr:
   `load: target 3000 ticks — emitted 2868, dropped 132 … achieved 95.6/s`.
   A drop report means the target rate was NOT sustained — raise `parallel N`
-  or lower the rate before quoting percentiles.
+  or lower the rate before claiming that target was sustained. Drops warn
+  on stderr; they are not an automatic failure or a stats-summary field.
+  A minimum-rate gate can pass despite drops.
 - Percentiles come only from timed records; they include body download (a
   route that drips its body over 100ms reports p50 102, not 0.4).
 - With `--every`, a slow request lands in the window it FINISHED in — and
@@ -99,14 +101,15 @@ latency budget held, and the achieved rate held. An empty run is refused by
 `assert` itself (`empty: true`), so "measured nothing" never passes.
 `rps` is the ACHIEVED rate — if the target was not sustained, stderr already
 said so (`emitted … dropped … achieved …`); a drop report means the number
-below the rate gate is the honest one.
+below the rate gate is the honest one. This 100/s scenario accepts more than
+80/s, so a passing gate is not proof that the full target was offered.
 
 Baseline gate — `--out` writes a versioned artifact
 (`{crustStats: 1, startedAt, urls, summary, windows?}`), an async assert
 reads it back:
 
 ```crust
-load 10s 100/s | parallel 50 | GET :3000/health | stats --out load/last.json | assert (async s => { const b = await Bun.file("load/baseline.json").json(); return s.p95 < 2 * b.summary.p95 })
+load 10s 100/s | parallel 50 | GET :3000/health | stats --out load/last.json | assert (s => s.status["200"] === s.count) | assert (async s => { const b = await Bun.file("load/baseline.json").json(); return s.p95 < 2 * b.summary.p95 })
 ```
 
 The artifact is written BEFORE the gate runs, so a failed gate still leaves
@@ -116,7 +119,7 @@ Soak with fail-fast windows (`--every N` emits `{window: k, …}` deltas then
 `{final: true, …}`; a bare predicate gates every one of them):
 
 ```crust
-load 60s 25/s | parallel 25 | GET :3000/health | stats --every 5 | assert (s => !s.window || s.p95 < 400)
+load 60s 25/s | parallel 25 | GET :3000/health | stats --every 5 | assert (s => s.status["200"] === s.count) | assert (s => !s.window || s.p95 < 400)
 ```
 
 Guard `!s.window ||` scopes a threshold to window objects, `!s.final ||` to
@@ -127,12 +130,17 @@ s.p95 < 0.1)` exits 0 with p95 at 4.2. Drop the guard when you drop `--every`.
 
 ## Warmup
 
-A separate line in the same script — its stats simply aren't gated:
+A separate line in the same script — gate successful statuses, but omit
+warmup performance thresholds:
 
 ```crust
-range(0, 99) | parallel 10 | GET :3000/health | stats
-load 30s 100/s | parallel 50 | GET :3000/health | stats | assert (s => s.p95 < 200)
+range(0, 99) | parallel 10 | GET :3000/health --timeout 2s | stats | assert (s => s.status["200"] === s.count)
+load 30s 100/s | parallel 50 | GET :3000/health --timeout 2s | stats | assert (s => s.status["200"] === s.count) | assert (s => s.p95 < 200)
 ```
+
+Connection refusals/timeouts are `status: 0` records, not exceptions.
+The warmup status gate stops a dead-service script before measurement;
+the measured status gate prevents fast failures satisfying the p95 budget.
 
 ## TS API equivalent
 

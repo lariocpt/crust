@@ -45,6 +45,11 @@ pipeline.
   and `README.md` against the live grammar, so stale examples fail the build.
   Never document behaviour you haven't run through `bun src/index.ts -c`.
 
+For coordinated usage, website, shipped-skill, and MCP documentation updates,
+use the [documentation release checklist](docs/DOCUMENTATION-RELEASE-CHECKLIST.md).
+It separates syntax/build evidence from runtime verification and publication
+approvals; preparing it does not authorize executing examples or releasing.
+
 Commits are conventional-ish (`fix:`, `feat:`, `docs:`, `perf:`) and the body is
 expected to explain *why*, not restate the diff.
 
