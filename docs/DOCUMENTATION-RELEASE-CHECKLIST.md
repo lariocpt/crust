@@ -1,176 +1,141 @@
 # Documentation release checklist
 
-Use this checklist for coordinated changes to Crust's usage documentation,
-the separate `crust-website` repository, shipped skills, and MCP help/tool
-descriptions. See [Contributing](../CONTRIBUTING.md) for general contribution
-guidance and [USAGE](USAGE.md) for the capability reference.
+## v0.3.9 release close-out
 
-Preparing this checklist does **not** authorize installs, upgrades, commits,
-pushes, tags, publishing, deployment, services, application/API/DB requests,
-fixture execution, or load. Examples below are validation instructions, not
-permission to execute them. Keep secrets, environment files, tokens, journals,
-and reports out of the review.
+**Production release status: complete.** Crust v0.3.9 is published and the
+coordinated public website deployment succeeded. The unchecked preparation
+template previously in this file did not represent outstanding deployment
+failures; this record replaces it with the completed gates and explicit
+limitations.
 
-## 1. Identify the release candidate
+See [Contributing](../CONTRIBUTING.md) for general contribution guidance and
+[USAGE](USAGE.md) for the capability reference.
 
-- [ ] Record the source revision and website revision, release owner, intended
-  channel, and intended publish date.
-- [ ] Choose the scope: website only, source documentation, packaged skills,
-  compiled MCP descriptions, or a coordinated release.
-- [ ] Review the complete candidate diff, including pre-existing work. Do not
-  label a candidate "documentation only" merely because this checklist was
-  prepared for documentation.
-- [ ] Preserve or explicitly account for the existing generator changes in
-  `src/genFixtures/generate.ts`, `src/genFixtures/requestPlan.ts`,
-  `src/genFixtures/baselineFormats.ts`, and
-  `tests/gen-fixtures-request-plan.test.ts`. Do not silently discard or include
-  them in a release.
-- [ ] Leave the QA sibling repository and its `973c6bb` baseline untouched.
-- [ ] Confirm dependency manifests, lockfiles, runtime configuration, and
-  unrelated files have no unintended changes.
+### Release identity and publication
 
-## 2. Review parity against the intended executable
+| Item | Released value |
+| --- | --- |
+| Crust version | `0.3.9` |
+| Source commit | `dbb3223ce8d96c06e79ae89b4a37e4a79903fe35` |
+| Website commit | `a9630019dfd51630d1dd642a27451718cfa6f7b0` |
+| GitHub release publication | `2026-11-16T00:02:14Z` |
+| Channel | Production: GitHub Releases, npm, GitHub Packages, GitHub Pages |
+| Authorization | Repository owner explicitly authorized commit/push/production release and existing workflow installs, full tests, Mongo probes, and live-site checks |
+| Named release owner | Not separately recorded in this checklist |
 
-- [ ] Keep [USAGE](USAGE.md), website overview/recipe pages, and the corresponding
-  [shipped skills](../skills/) consistent with reviewed source contracts.
-- [ ] Distinguish source-checkout examples from published executable behavior.
-  Relative source imports are not an npm library API; plain Bun scripts do not
-  automatically receive Crust globals.
-- [ ] Check generator security/query prerequisites, supported static baselines,
-  omitted operations/flows, output-directory deletion, and manifest provenance.
-  Generation is not execution or evidence of complete API coverage.
-- [ ] Check fixture JSON headers/body serialization, lazy setup and thunk
-  behavior, result/report shapes, and failure/empty-run exit handling.
-- [ ] Check status-first load gates, `--every`/`stats_every` for window/final
-  guards, optional MCP assertions, and the limits of dropped-slot warnings.
-  A passing minimum-rate gate does not prove the full target rate was offered.
-- [ ] Check the builtin inventory, executable variants, actual runtime APIs,
-  and installed-version compatibility. Do not invent APIs such as `Bun.jwt`.
-- [ ] Review [MCP source help](../src/mcp/server.ts),
-  [tool descriptions](../src/mcp/oneshot.ts), the
-  [MCP skill](../skills/crust-mcp/SKILL.md), and both website MCP pages together:
-  host-specific registration, accepted overrides, syntax-check limits,
-  error results, and teardown boundaries must agree.
-- [ ] Confirm changed MCP metadata did not alter handlers or schema structure
-  unless execution changes were separately intended and reviewed.
-- [ ] Keep standalone command fences runnable in shape. Mark fragments,
-  illustrative output, synopsis placeholders, and source-checkout snippets
-  accurately; syntax validation is not a runtime-success claim.
-- [ ] Confirm no example, skill, or release note grants execution permission
-  or embeds credentials or runtime parameter values that should remain private.
+- [x] Publish [Crust v0.3.9](https://github.com/lariocpt/crust/releases/tag/v0.3.9)
+  as a non-draft, non-prerelease production release.
+- [x] Publish `@lariocpt/crust` and `@lariocpt/crust-mongo` version `0.3.9` to
+  npm and GitHub Packages. Public npm metadata confirms both versions exist
+  and both `latest` tags resolve to `0.3.9`.
+- [x] Deploy the [production website](https://lariocpt.github.io/crust-website/).
+  A separate post-release homepage request returned HTTP 200.
+- [x] Confirm both release repositories are clean and synchronized with their
+  respective `origin/main` branches before this documentation close-out.
 
-## 3. Refresh bounded validation on the final candidate
+### Candidate review and documentation parity
 
-Use the already approved Bun installation on PATH. **Every local Bun validation
-must use `--config=/dev/null`**: the normal preload can create/prune reports.
-Do not install missing tools or expand test scope to satisfy this checklist.
+- [x] Review the complete source and website candidates, including generator
+  changes. This was not a documentation-only executable release.
+- [x] Include the reviewed request planning, security/query prerequisites,
+  conservative baseline/format proofs, operation/whole-flow omissions, and
+  offline generator regression tests.
+- [x] Coordinate USAGE, website overview/recipes, shipped skills, and MCP
+  help/tool descriptions against reviewed source contracts.
+- [x] Review fixture serialization/lazy setup, result and failure semantics,
+  status-first load gates, window guards, optional assertions, dropped-slot
+  limitations, builtin inventory, and executable/runtime distinctions.
+- [x] Review command examples, source-checkout boundaries, execution-permission
+  language, and credential safety.
+- [x] Confirm MCP metadata edits did not intentionally change handlers or
+  schema structure. An independent installed-host smoke check was not performed.
+- [x] Preserve the QA sibling at `973c6bb`, including its untracked
+  `crust/api-hand-rolled-docs/` directory. No QA files were changed.
+- [x] Keep LAN/Jenkins and unrelated application/API/DB/load work outside scope.
+  The approved CI Mongo probe is distinct from application database validation.
 
-### Source documentation
+### Validation and release ordering
 
-From the Crust repository:
+- [x] Pass local read-only Biome checks, TypeScript typecheck, and diff checks.
+- [x] Pass the targeted generator/docs tests: 61 passed, 0 failed, with
+  2,183 assertions before the final assertion-only CI repair.
+- [x] Pass full tests and typecheck on the final released source commit in the
+  [successful Crust workflow](https://github.com/lariocpt/crust/actions/runs/43777826030).
+- [x] Build eight platform/variant binaries and verify stamped version/commit
+  and Mongo variants in the approved production workflow.
+- [x] Publish eight binaries plus `SHA256SUMS`. Independently compare all eight
+  manifest checksums against GitHub's SHA-256 asset digests.
+- [x] Preserve binary-before-launcher publication and release Crust before
+  pushing the coordinated website candidate.
+- [x] Pass the local public website build: 33 pages, 1,579 internal links,
+  54 anchor links, and zero dead internal links.
+- [x] Pass the public build, grammar gate using the published executable,
+  public-output gate, deployment, and live-site link check in the
+  [successful website workflow](https://github.com/lariocpt/crust-website/actions/runs/43778175733).
+- [x] Obtain explicit approval for existing CI installs, full test scopes,
+  downloads, Mongo probes, publication, and live-site checks. Earlier
+  preparation-only restrictions did not remain a blocker after that approval.
 
-```bash
-CI=1 BUN_RUNTIME_TRANSPILER_CACHE_PATH=0 bun --config=/dev/null test tests/docs-lint.test.ts
-git diff --check
-```
+Every local Bun validation used `--config=/dev/null` to avoid the default
+preload's report creation/pruning. Existing production workflows ran under
+their separately approved configuration; that local safeguard is not claimed
+to have been inherited by CI. Syntax/example checks are not claims of runtime
+success for documented application scenarios.
 
-- [ ] Record the targeted docs-test result for the final candidate, including
-  the MCP skill's parser coverage.
-- [ ] Confirm parsing does not drain example pipelines. Shell syntax preflight
-  may launch `sh -n`; it is not a no-spawn guarantee.
-- [ ] Separately verify that MCP source still parses and, for metadata-only
-  edits, compare against the agreed baseline with only comments/documentation
-  literals ignored. Do not start the MCP server to prove a text-only change.
+### Failures, warnings, and limitations
 
-### Website builds and internal links
+- The first release attempt,
+  [run 43777684287](https://github.com/lariocpt/crust/actions/runs/43777684287),
+  failed because three MCP handshake assertions still expected old wording.
+  Release/package jobs were skipped. The assertion-only correction was
+  committed as `dbb3223`, and the subsequent complete production workflow passed.
+- Before retrying, GitHub and both npm packages were checked to confirm
+  `0.3.9` was unpublished. The failed tag was updated with an exact remote-value
+  lease. No already-published package version was replaced.
+- One immediate exact-version npm lookup returned HTTP 404. Subsequent full
+  package metadata confirmed both exact versions and integrity hashes;
+  both `latest` endpoints also confirmed `0.3.9`.
+- The local website build's unregistered `crust` Shiki language warning used
+  plaintext fallback. CI also reported runner-image/Node-action migration
+  notices. These did not fail the release or deployment.
+- No fresh LAN-mode build/link check was performed for this public-only
+  close-out, and no LAN/Jenkins deployment was performed.
+- No separate published-binary MCP/host smoke session or installed-package
+  skills/content comparison was performed. Successful packaging does not
+  establish any host's registration or tool exposure. The original MCP
+  investigation is ended; these are disclosed follow-ups, not active tasks.
+- No approved per-channel rollback destinations were recorded. Prior source
+  and website revisions are historical facts, not implicit rollback approval.
+  Do not unpublish packages, reuse published versions, move released tags, or
+  perform destructive Git operations as an improvised rollback.
+- No application API, production database, application fixture, or load
+  validation is claimed by this record.
 
-From the sibling `crust-website` repository, run each mode sequentially:
-both builds replace `dist/`, so finish one mode's link check before the next.
+### Historical documentation-parity evidence
 
-```bash
-env -u PUBLIC_SITE -u SITE_URL -u BASE_PATH CI=1 ASTRO_TELEMETRY_DISABLED=1 BUN_RUNTIME_TRANSPILER_CACHE_PATH=0 bun --config=/dev/null --bun run build
-env -u BASE_PATH BUN_RUNTIME_TRANSPILER_CACHE_PATH=0 bun --config=/dev/null scripts/check-links.mjs
+These results predate the immutable release candidate and remain historical;
+they must not be substituted for the final-candidate CI evidence above.
 
-env PUBLIC_SITE=1 SITE_URL=https://lariocpt.github.io BASE_PATH=/crust-website CI=1 ASTRO_TELEMETRY_DISABLED=1 BUN_RUNTIME_TRANSPILER_CACHE_PATH=0 bun --config=/dev/null --bun run build
-env BASE_PATH=/crust-website BUN_RUNTIME_TRANSPILER_CACHE_PATH=0 bun --config=/dev/null scripts/check-links.mjs
-
-CI=1 BUN_RUNTIME_TRANSPILER_CACHE_PATH=0 bun --config=/dev/null scripts/lint-examples.mjs ../crust/bin/crust
-git diff --check
-```
-
-- [ ] Record both build results and base-path-aware internal link/anchor counts.
-  These checks inspect generated files, not external URLs or live endpoints.
-- [ ] Record the existing executable's provenance from an approved source;
-  `../crust/bin/crust` must already exist. Do not invoke a downloading launcher
-  or rebuild it merely to complete the grammar check.
-- [ ] Record the website grammar result. It covers Bash/Crust command fences,
-  not TypeScript execution, imported fixture contents, or runtime correctness.
-- [ ] Confirm compatibility with the executable the publishing workflow will
-  use, not just the local executable. The Pages workflow obtains the latest
-  published release; the PR workflow deliberately omits its grammar check.
-- [ ] Inspect canonical/base-path handling, public-versus-LAN references, and
-  `.nojekyll` in the appropriate build output. Record any accepted warnings.
-- [ ] Mark broader typecheck, formatter/linter, full-suite, application, DB,
-  fixture, and load checks as **not run** unless separately authorized and
-  actually completed. A docs parser check does not substitute for them.
-
-## 4. Prior documentation-parity evidence
-
-The preceding documentation-parity pass recorded the results below. They were
-not rerun when this checklist was prepared, are not tied here to an immutable
-candidate revision, and must not be presented as fresh release evidence.
-
-| Check | Recorded result | Limit |
+| Check | Historical result | Limit |
 | --- | --- | --- |
 | Targeted source docs tests | 21 passed, 0 failed | Parse-only examples; no full suite |
-| Website command examples | 378 checked, 0 failed | Existing executable's syntax-check path |
+| Website command examples | 378 checked, 0 failed | Existing executable syntax-check path |
 | LAN website build and links | 33 pages; 1,545 internal links; 54 anchors; 0 dead | Generated files only |
-| Public-path build and links | 33 pages; 1,579 internal links; 54 anchors; 0 dead | Base `/crust-website`; generated files only |
+| Public-path build and links | 33 pages; 1,579 internal links; 54 anchors; 0 dead | Generated files only |
 | MCP source comparison | Documentation literals/comments only | Handlers and schema structure unchanged |
-| Diff checks | Passed in both repositories | Whitespace/patch checks, not runtime verification |
+| Diff checks | Passed in both repositories | Whitespace/patch checks only |
 
-The Shiki warning for the unregistered `crust` language fell back to plaintext
-and did not fail the builds. No application/API/DB/load tests, full suite,
-binary rebuild, package publication, or deployment was performed in that pass.
-Dependencies and lockfiles were unchanged.
+### Close-out disposition
 
-## 5. Obtain approval before publication
+- [x] Record immutable release identities, publication channels, workflow
+  evidence, failures, accepted warnings, and unverified follow-ups.
+- [x] Confirm production publication and the live website within the approved
+  network scope.
+- [x] Clean up release/deployment watcher processes.
+- [x] Close the production release task. The limitations above remain
+  explicitly unverified or outside scope; they are not represented as passed.
 
-- [ ] Obtain explicit approval for the exact repositories, candidate revisions,
-  channels, commit/push/tag actions, and deployment scope. Do not trigger a
-  workflow as a substitute for obtaining execution approval.
-- [ ] Review the current website `.github/workflows/pages.yml` and
-  `.github/workflows/pr-checks.yml`. A push to `main` or manual Pages dispatch
-  publishes; its pipeline also downloads an executable and performs a live
-  post-deploy link crawl. Local static validation does not authorize these.
-- [ ] Review the source [release workflow](../.github/workflows/release.yml).
-  A `v*` tag push or manual release dispatch runs tests/typecheck, builds
-  binaries, checks MongoDB variants, creates release assets, and publishes
-  launchers/skills. These are not permitted by the current docs-only scope.
-- [ ] Review CI runtime/configuration separately. Local `--config=/dev/null`
-  safeguards are not automatically inherited by existing workflows; their
-  installs, test scopes, downloads, and side effects need explicit approval.
-- [ ] Resolve release-order dependencies. If docs require unreleased behavior,
-  make the matching executable available before publishing those claims.
-  Source MCP text edits do not update an already compiled binary.
-- [ ] For an approved executable/package release, preserve the workflow's
-  binary-before-launcher order and verify version/commit provenance. Skills
-  shipped with packages and compiled MCP descriptions need their respective
-  packaging/build steps; a website-only deployment does not distribute them.
-- [ ] Record an approved rollback destination for each changed channel before
-  publishing. Do not improvise destructive Git operations or version reuse.
-
-## 6. Close out after an approved release
-
-- [ ] Record the published website revision and, where applicable, executable
-  version/commit and package version, with links to approved workflow runs.
-- [ ] Verify publication and live links only within the separately approved
-  network scope; do not infer permission to call application endpoints.
-- [ ] If MCP metadata shipped, verify it through an approved binary/host
-  session. Copilot registration does not establish another host's registration
-  or tool exposure. Server startup can load user initialization code.
-- [ ] Confirm the published skills and MCP descriptions match the intended
-  release rather than a stale installed artifact.
-- [ ] Record failed/skipped checks and accepted limitations explicitly.
-- [ ] Mark the release complete only when required gates and approvals are
-  satisfied; otherwise leave it pending with the owner and next action.
+This record does not grant new execution or rollback permissions. Future
+releases require their own candidate review, approvals, validation, and
+publication evidence. Keep secrets, environment files, tokens, journals, and
+reports out of release review.
