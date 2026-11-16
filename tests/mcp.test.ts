@@ -205,10 +205,10 @@ describe("mcp protocol", () => {
     // only reads `instructions` must learn static/execution/load/lifecycle
     // classes and that teardown does not touch remote or application state.
     const instructions: string = known.result.instructions;
-    expect(instructions).toContain("static check");
+    expect(instructions).toContain("syntax-only child");
     expect(instructions).toContain("real side effects");
-    expect(instructions).toContain("non-production targets only");
-    expect(instructions).toContain("does NOT delete remote/backend resources");
+    expect(instructions).toContain("bounded approved non-production targets");
+    expect(instructions).toContain("not application data or remote resources");
     const unknown = await c.rpc("initialize", {
       protocolVersion: "1999-01-01",
       capabilities: {},
