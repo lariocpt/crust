@@ -25,6 +25,11 @@ export const DiagnosticCodes = Object.freeze({
   "config.asset-name": "config.asset-name",
   "config.output-overlap": "config.output-overlap",
   "config.port": "config.port",
+  // The config FILE itself could not be loaded: the dynamic import threw, or
+  // the default export is not a defineSite() result. Distinct from every
+  // config.* validation code — those mean "the config loaded and is wrong";
+  // this means "there is no config to validate".
+  "config.load": "config.load",
   // A known key whose value has the wrong type/shape. Distinct from
   // config.unknown-key (the key itself is not in the schema) and from the
   // specific codes above; crust rule 1 — a wrong-typed value must be an error
@@ -105,6 +110,12 @@ export const DiagnosticCodes = Object.freeze({
   // or an empty path is rejected BEFORE any filesystem access; the
   // normalized path is recorded for the emitter's existence check.
   "public-asset.traversal": "public-asset.traversal",
+  // The emitter's existence check (chunk 7, promised by public-asset.traversal
+  // and the render.ts publicDir contract): a path a layout recorded via
+  // publicAsset() is not a readable file under assets.publicDirectory — the
+  // page would publish a dead reference (crust rule 1), so this is an error.
+  // No publicDirectory configured makes EVERY recorded path missing.
+  "public-asset.missing": "public-asset.missing",
   // readText.* — the config-directory text reader (render chunk). The
   // confinement contract: root = REALPATH of the config directory; the
   // FINAL realpath must stay inside it (a symlink never extends a
@@ -161,6 +172,24 @@ export const DiagnosticCodes = Object.freeze({
   // output.* — emit-time collisions (chunk 5 provides the detector, chunk 6
   // runs it): a public file that would overwrite a generated file.
   "output.collision": "output.collision",
+  // A discovered .md file could not be read at parse time (it vanished between
+  // discovery and reading, is unreadable, …). The file was FOUND by discovery,
+  // so silence here would be a false pass (crust rule 1) — always an error.
+  "content.read-failed": "content.read-failed",
+  // Defense in depth (chunk 7): a resolved write path left the staging
+  // directory. Routes are normalized long before emit, so this can only fire
+  // on an internal bug — but a write outside staging would escape the atomic
+  // publish contract, so it is caught at the write itself, never trusted to
+  // the upstream normalization.
+  "output.escape": "output.escape",
+  // build.* — the per-output build lock (chunk 7, emit.ts): a concurrent
+  // build of the same output is REFUSED rather than interleaving its
+  // publish renames with the holder's (a measured false-pass race: the
+  // second build's output rolled back by the first's restore while the
+  // second reported success). The message names the live holder's pid;
+  // dead holders' locks are reclaimed automatically, so a killed build
+  // never blocks the output forever.
+  "build.busy": "build.busy",
   // url.* — the URL policy (plan §1 url()): pre-parse rejects, scheme
   // allowlist, host/userinfo rules. Thrown by validateUrl; the fence quotes
   // the reason when a tracked value fails it (fence.url-attribute).

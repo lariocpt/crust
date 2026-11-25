@@ -41,6 +41,8 @@
  * widening are minor; renames/removals/narrowing are major; diagnostic codes
  * are never repurposed; narrow enums are typed as documented-open unions.
  */
+export type { BuildOptions, BuildPage, BuildResult } from "./build";
+export { build } from "./build";
 export const contractVersion = 1;
 
 export { checkOutputOverlap, defineSite, resolveConfigPaths } from "./config";
