@@ -271,6 +271,7 @@ describe("the lint can actually fail", () => {
     expect(await checkBuiltinLine("test-fixture", [])).toMatch(/missing its target/);
     expect(await checkBuiltinLine("verify-web-links", [])).toMatch(/missing its target/);
     expect(await checkBuiltinLine("gen-fixtures", ["--swagger"])).toMatch(/needs a value/);
+    expect(await checkBuiltinLine("site", ["--bogus"])).toMatch(/^site: unknown argument/);
   });
 
   test("a correct builtin invocation passes, in both the new and legacy spellings", async () => {
@@ -278,6 +279,8 @@ describe("the lint can actually fail", () => {
     expect(await checkBuiltinLine("test-pipes", ["--target", "smoke.pipes", "--bail"])).toBeNull();
     expect(await checkBuiltinLine("gen-fixtures", ["./openapi.json"])).toBeNull();
     expect(await checkBuiltinLine("dotenv", ["status"])).toBeNull();
+    expect(await checkBuiltinLine("site", ["build"])).toBeNull();
+    expect(await checkBuiltinLine("site", ["build", "./site.config.ts"])).toBeNull();
     // Builtins with no declarative spec are skipped rather than guessed at.
     expect(await checkBuiltinLine("cd", ["/tmp"])).toBeNull();
   });

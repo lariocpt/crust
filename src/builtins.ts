@@ -669,6 +669,21 @@ const runSkillsTool = async (argv: string[]): Promise<number> => {
 const skillsBuiltin: Builtin = async (rawArgs, _ctx) =>
   await runSkillsTool(splitArgs(rawArgs.trim()));
 
+// `site` is a REDIRECT, not a builder (src/builtinFns/site.ts): the site
+// generator ships as the @crust/site package run under plain Bun, and no
+// compiled binary can import a site's config from outside its own bundle
+// (measured — AGENTS.md), so every binary carries the stub. It answers with
+// the redirect and a NONZERO exit (never 0: this process does not build
+// sites), and its registration is what keeps the name out of `sh` — without
+// it, `crust site build` from a shell would exit 127 and read as "the binary
+// is not installed" while the binary is the thing that knows the answer.
+const runSiteTool = async (argv: string[]): Promise<number> => {
+  const { runSiteTool: runSite } = await import("./builtinFns/site");
+  return await runSite(argv);
+};
+
+const siteBuiltin: Builtin = (rawArgs, _ctx) => runSiteTool(splitArgs(rawArgs));
+
 const logsBuiltin: Builtin = async (rawArgs, ctx) => {
   // rawArgs stays UNSPLIT — the source spec is the rest of the line verbatim
   // (splitArgs would mangle procs({...}) literals and quoted commands).
@@ -695,6 +710,7 @@ export const builtins: Record<string, Builtin> = {
   "gen-fixtures": genFixturesBuiltin,
   "mock-server": mockServerBuiltin,
   "verify-web-links": verifyWebLinksBuiltin,
+  site: siteBuiltin,
   logs: logsBuiltin,
 };
 
@@ -723,6 +739,7 @@ export const standaloneTools: Record<string, (argv: string[]) => Promise<number>
   "gen-fixtures": runGenFixturesTool,
   "mock-server": runMockServerTool,
   "verify-web-links": runVerifyWebLinksTool,
+  site: runSiteTool,
 };
 
 /** A word that names a tool, whether or not it is reachable as a command. Used
@@ -775,6 +792,7 @@ const builtinSummaries: Record<string, string> = {
   "gen-fixtures": "generate fixture suites from an OpenAPI spec",
   "mock-server": "serve an OpenAPI spec's examples (optionally --stateful)",
   "verify-web-links": "crawl a site from its sitemap and verify every link",
+  site: "redirect to the @crust/site package (bunx @crust/site build|dev)",
   logs: "interactive search over a held live log stream",
 };
 

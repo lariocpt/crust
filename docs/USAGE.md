@@ -82,7 +82,7 @@ crust -c 'src/**/*.ts | wc -l'
 |---|---|
 | `crust` | Interactive REPL (default, when stdin is a TTY). |
 | `crust <file.crust> [args…]` | Run a script file and exit. Blank lines and `#` comments are skipped (so a `#!/usr/bin/env crust` shebang works), and execution is **fail-fast**: crust stops at the first failing line and exits with *its* code. Extra arguments are the script's **positional arguments** — `$0` is the path, `$1`…`$9` the rest, plus `$#`, `$@`/`$*` — expanded wherever an env var is ([Script arguments](#script-arguments)). A file is a script only when it is the **first** argument and no extra argument selects a command instead (next row). An unreadable file exits 127. A line ending in `\` continues on the next line (see [Continuing a line](#continuing-a-line)). This mode never reads stdin itself, so a shell stage inherits your pipe and consumes it — don't pipe data into a script that also wants it. |
-| `crust <tool> [args…]` | Run a **tool builtin** as a shell command: `crust skills install`, `crust mock-server openapi.yaml -p4000`, `crust test-fixture 'fixtures/*.crust.ts' -j8`. The flags are the ones documented under each builtin in [Builtins](#builtins), and `crust <tool> --help` prints them. The names that work are the ones that need nothing from a live session: `skills`, `test-fixture`, `test-pipes`, `gen-fixtures`, `mock-server`, `verify-web-links`. The session builtins (`cd`, `export`, `alias`, `unalias`, `source`, `dotenv`, `exit`, `help`, `history`) are deliberately **not** reachable this way — a one-shot process has no session to change, and a command that quietly does nothing is worse than one that refuses. `logs` is refused too, for a different reason: its argument is the rest of the line **verbatim** (a `procs({...})` literal), which argv cannot carry without re-lexing it. Either refusal is exit 2 and names the builtin — not `cannot read cd`, which in a binary printing its own name reads as a broken install. A file that exists wins when it is the only argument, so `crust skills` runs `./skills`; adding any flag selects the tool. |
+| `crust <tool> [args…]` | Run a **tool builtin** as a shell command: `crust skills install`, `crust mock-server openapi.yaml -p4000`, `crust test-fixture 'fixtures/*.crust.ts' -j8`. The flags are the ones documented under each builtin in [Builtins](#builtins), and `crust <tool> --help` prints them. The names that work are the ones that need nothing from a live session: `skills`, `test-fixture`, `test-pipes`, `gen-fixtures`, `mock-server`, `verify-web-links`, `site`. The session builtins (`cd`, `export`, `alias`, `unalias`, `source`, `dotenv`, `exit`, `help`, `history`) are deliberately **not** reachable this way — a one-shot process has no session to change, and a command that quietly does nothing is worse than one that refuses. `logs` is refused too, for a different reason: its argument is the rest of the line **verbatim** (a `procs({...})` literal), which argv cannot carry without re-lexing it. Either refusal is exit 2 and names the builtin — not `cannot read cd`, which in a binary printing its own name reads as a broken install. A file that exists wins when it is the only argument, so `crust skills` runs `./skills`; adding any flag selects the tool. |
 | `cmd \| crust` | With stdin piped, crust reads it to EOF and runs the lines exactly like a script file — same comment handling, same fail-fast exit codes, same `\` continuation. Because stdin is drained up front — **only in this mode** — shell stages inside the script see EOF on their stdin. Piping **data** (not a program) is the [`stdin` source](#reading-piped-stdin-stdin-source)'s job: `docker logs -f app \| crust -c 'stdin \| grep ERROR'`. |
 | `crust -c <line>` | Run one line and exit. Multi-line strings split on `\n`, skip blanks and `#` comments, honour `\` continuation, and are **fail-fast**: crust stops at the first failing line and exits with *its* code (previously a later success masked an earlier failure). |
 | `crust --env-file <path> …` | Load a `.env` file (same parser as the [`dotenv` builtin](#dotenv), overwrite mode) *before* any run mode — `-c`, a script, piped stdin, or the REPL — and before `init.ts`, so config code sees the vars. The "loaded" note goes to **stderr** (a `-c` pipeline's stdout stays clean), and a **missing file exits 2 loudly** — this flag exists to replace shell shims whose silent env failures made runs measure the wrong thing. Doesn't combine with `--check` (parse-only by contract). |
@@ -993,6 +993,7 @@ mock-server <spec> [-p N]       # serve an OpenAPI spec
 verify-web-links <url|sitemap>  # crawl a site for broken links, anchors, meta
 logs <source>                   # interactive log search over a held stream
 skills <list|install>           # install the embedded agent skills
+site <build|dev> [configFile]   # redirect — the generator ships as the @crust/site package (bunx @crust/site build)
 ```
 
 Builtins run in-process. They dispatch when the first token matches a tool
@@ -1319,6 +1320,7 @@ The TS-test ecosystem owns the name `expect`. Crust exports the API name as `exp
 | `mock-server <spec> [-p N] [-b addr] [--stateful] [--state <path\|url>] [--seed <file>] [--validate] [--strict] [--proxy <upstream> [--proxy-timeout ms] [--report path]]` | Boots a `Bun.serve` instance that mocks every operation in an OpenAPI 3.x spec; `--stateful` adds a CRUD layer, `--state` persists it to sqlite/postgres, `--seed` inserts boot data, `--validate` rejects spec-violating requests with 422, `--strict` also enforces literal `additionalProperties: false`, `--proxy` turns it into a validation proxy in front of a real upstream. See [mock-server](#mock-server). |
 | `verify-web-links <url\|sitemap> [-c N] [-t ms] [--fixtures g] [--exclude s]` | Crawls a site from its sitemap (or auto-discovers one from a base URL), verifying every link, anchor and redirect, and diffs Open Graph/meta tags against fixtures. See [verify-web-links](#verify-web-links). |
 | `skills <list\|install> [-g] [-f] [--all] [--select a,b]` | Claude agent skills shipped in the binary. `install` on a terminal asks which ones per scope. See [Agent skills](#agent-skills). |
+| `site <build\|dev> [configFile]` | Redirect stub, not a builder: the site generator ships as the `@crust/site` package (plain Bun), which no compiled binary can carry. Every build invocation answers with the redirect and a nonzero exit — never a silent 0, never `sh`'s 127 (`--help` is the one exit-0 answer, with the usage). See [site](#site). |
 | `logs [--buffer N] <source>` | Interactive log searcher: holds a `tail -F`/`procs(...)`/shell-command stream, buffers the last N items, and every typed line is a pipeline fragment run over the buffer then live. See [logs](#logs--interactive-log-searching). |
 | `exit [code]` | Exits crust with optional code (default 0). |
 | `help` | Lists builtins. |
@@ -2554,6 +2556,38 @@ iterating without restarting the source, not GB/s. And there is no
 Ctrl-Z/fg/bg — crust is not a shell, and a suspended session would silently
 gap the buffer while looking live, which is exactly the false picture
 `logs` refuses to paint.
+
+### site
+
+`site` is a **redirect, not a builder** — the one builtin in this table that
+deliberately does nothing. The site generator ships as the separate
+`@crust/site` package (`crust-site`), run under plain Bun: a compiled Bun
+binary cannot resolve packages from files outside its own bundle, and a
+site's `site.config.ts` and layouts are imported from disk at run time, so
+no binary carries the builder. Every binary carries the redirect instead —
+the line fails loudly (exit 1, never a silent 0, never `sh`'s 127) and says
+where the tool really is:
+
+```bash
+site                          # → the redirect (exit 1)
+site build                    # same — the argument shape is checked first
+site build ./site.config.ts   # same
+crust site dev                # from a shell: the same stub answers
+site --help                   # usage, exit 0
+```
+
+Run the real thing with the package, not the binary:
+
+```bash
+bunx @crust/site build ./site.config.ts    # render the site
+bunx @crust/site dev                       # dev server, rebuilds on change
+```
+
+`crust --check 'site build'` validates the stub's argument shape without
+running it (unknown flags and unknown subcommands are refused, as with every
+other builtin), which is how the examples above stay honest. Windows support
+means this package, not the binary: `@crust/site` runs under Bun on Windows;
+the prebuilt crust binaries stay linux/darwin-only.
 
 ### Built-in functions
 

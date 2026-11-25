@@ -1,0 +1,22 @@
+{
+  "name": "@crust/site",
+  "version": "0.1.0",
+  "description": "The crust site generator: an SSG with a fenced html template API, run under plain Bun (bunx @crust/site build).",
+  "license": "MIT",
+  "author": "Lario Borges",
+  "type": "module",
+  "bin": {
+    "crust-site": "./src/cli.ts"
+  },
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "markdown-it": "^14",
+    "yaml": "^2"
+  },
+  "devDependencies": {
+    "@types/markdown-it": "^14"
+  }
+}

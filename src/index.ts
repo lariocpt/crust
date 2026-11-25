@@ -31,7 +31,7 @@ usage:
   crust                    start interactive REPL
   crust <tool> <args…>     run one tool as a command (skills, mock-server,
                            verify-web-links, gen-fixtures, test-fixture,
-                           test-pipes) — the same verbs as at the REPL. The
+                           test-pipes, site) — the same verbs as at the REPL. The
                            session verbs (cd, export, alias, source, dotenv,
                            logs) are not: they need a running session.
   crust <file.crust>       run a script file and exit

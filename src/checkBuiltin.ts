@@ -24,6 +24,14 @@ interface BuiltinCheck {
    * as opposed to the no-argument subcommands above.
    */
   verb?: string;
+  /**
+   * A complete argv-level verdict shared with the CLI itself. For shapes the
+   * fields above cannot express — `site build|dev`, where the subcommand
+   * takes its own optional argument — this replaces the flag/requires checks
+   * below. Because linter and runtime call the SAME function, a documented
+   * invocation cannot lint clean and fail live.
+   */
+  validate?: (argv: string[]) => string | null;
 }
 
 async function specFor(name: string): Promise<BuiltinCheck | null> {
@@ -52,6 +60,13 @@ async function specFor(name: string): Promise<BuiltinCheck | null> {
         subcommands: ["list"],
         verb: "install",
       };
+    case "site": {
+      // The stub's own parse is the check: `site build [configFile]` is a
+      // subcommand with an optional argument, which `subcommands` (no-arg)
+      // and `requires` (single slot) cannot express.
+      const site = await import("./builtinFns/site");
+      return { spec: site.SITE_SPEC, validate: site.checkSiteArgv };
+    }
     default:
       // Builtins with no flag spec (cd, export, alias, source, exit, history,
       // help, logs) are not checked — there is nothing declarative to
@@ -80,6 +95,8 @@ export async function checkBuiltinLine(name: string, argv: string[]): Promise<st
   // `unexpected argument "install"` on the documented form.
   let flagArgs = argv;
   if (check.verb && argv.length > 0 && argv[0] === check.verb) flagArgs = argv.slice(1);
+
+  if (check.validate) return check.validate(flagArgs);
 
   try {
     const { values, rest, help } = parseFlags(flagArgs, check.spec);

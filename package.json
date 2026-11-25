@@ -24,6 +24,9 @@
     "cli"
   ],
   "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
   "bin": {
     "crust": "./bin/crust"
   },
@@ -42,6 +45,7 @@
   "devDependencies": {
     "@biomejs/biome": "^2.4.15",
     "@types/bun": "latest",
+    "bun-types": "1.3.14",
     "husky": "^9.1.7",
     "lint-staged": "^17.0.5",
     "mongodb": "^7.9.0",
