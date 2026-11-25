@@ -72,6 +72,29 @@ export function stagingDirFor(outputDir: string): string {
 }
 
 /**
+ * The DEV SERVER's staging directory (plan §4.4, chunk 9): a sibling of the
+ * output directory — same filesystem as the output, never /tmp — but with a
+ * DISTINCT name family (`.crust-dev-staging-`, never `.crust-staging-`).
+ *
+ * Why a distinct family (the "no collision with build lock semantics" rule):
+ *   - the dev server never renames its staging INTO the output (it serves it
+ *     in place and deletes it on swap/stop), so it takes NO build lock — the
+ *     lock's naming space (`.crust-out-lock-*`) stays exclusive to builds
+ *     that publish, and a dev process can neither claim nor be claimed by it;
+ *   - a dev tree must never be mistaken for a production staging or an
+ *     out-old tree: `cleanupStale`'s crash-recovery RESTORES out-old orphans
+ *     into the output, and the dev server must never be the tree a recovery
+ *     rename moves over the user's real output;
+ *   - orphans of a KILLED dev process ARE still swept: `cleanupStale`
+ *     extends to the dev family (dead pid → delete), so a kill leaves no
+ *     litter behind either.
+ */
+export function devStagingDirFor(outputDir: string): string {
+  const out = posix.resolve(toPosix(outputDir));
+  return posix.join(posix.dirname(out), `.crust-dev-staging-${process.pid}-${nonce()}`);
+}
+
+/**
  * The output directory's identity: sha256 of the resolved posix path, first
  * 16 hex chars. It tags the out-old trees and the lock file, so a killed
  * build's orphans are matchable by the next build of the SAME output — and
@@ -84,10 +107,28 @@ export function buildLockHash(outputDir: string): string {
 
 /** Staging dir left by a killed build: `.crust-staging-<pid>-<nonce>`. */
 const STAGING_RE = /^\.crust-staging-(\d+)-([0-9a-f]+)$/;
+/** Staging dir left by a killed DEV process (never published, own family). */
+const DEV_STAGING_RE = /^\.crust-dev-staging-(\d+)-([0-9a-f]+)$/;
 /** Moved-aside output: `.crust-out-old-<hash>-<pid>-<nonce>`. */
 const OUT_OLD_RE = /^\.crust-out-old-([0-9a-f]{16})-(\d+)-([0-9a-f]+)$/;
 /** Build-lock file: `.crust-out-lock-<hash>-<pid>-<nonce>` (empty file). */
 const LOCK_RE = /^\.crust-out-lock-([0-9a-f]{16})-(\d+)-([0-9a-f]+)$/;
+
+/**
+ * Is `name` one of the package's own custodial siblings (production staging,
+ * dev staging, out-old tree, lock file)? The dev server's watcher uses this
+ * to IGNORE them: they are created by builds of the SAME output (including
+ * the dev process itself), and reacting to them would turn the package's own
+ * file traffic into spurious rebuilds or worker restarts.
+ */
+export function isCustodianSibling(name: string): boolean {
+  return (
+    STAGING_RE.test(name) ||
+    DEV_STAGING_RE.test(name) ||
+    OUT_OLD_RE.test(name) ||
+    LOCK_RE.test(name)
+  );
+}
 
 /**
  * Is `pid` a live process? `kill(pid, 0)` probes without a signal: no throw
@@ -173,6 +214,16 @@ export async function cleanupStale(outputDir: string): Promise<void> {
       if (!pidAlive(Number(m[1]))) removable.push(name);
       continue;
     }
+    // A KILLED dev process leaves its serving tree behind. It is never
+    // published (so there is no recovery to run on it) — a dead pid's dev
+    // tree is simply stale litter. A live pid's is the running dev server's
+    // current or next tree and is kept, exactly like a live production
+    // staging (deleting it would clobber the server's swap source).
+    m = DEV_STAGING_RE.exec(name);
+    if (m !== null) {
+      if (!pidAlive(Number(m[1]))) removable.push(name);
+      continue;
+    }
     m = LOCK_RE.exec(name);
     if (m !== null) {
       if (!pidAlive(Number(m[2]))) removable.push(name);
@@ -205,6 +256,35 @@ export async function cleanupStale(outputDir: string): Promise<void> {
     await restoreOrphan(deadOrphans[0].lock, output);
     for (const o of deadOrphans.slice(1)) {
       await rm(o.lock, { recursive: true, force: true }).catch(() => {});
+    }
+  }
+}
+
+/**
+ * Delete the dev staging trees left by KILLED dev processes in the output
+ * directory's parent. The dev server's own startup calls this (a long dev
+ * session accumulates one orphan per worker restart — each restart's old
+ * tree belongs to a now-dead pid); a production `cleanupStale` runs the
+ * same rule as part of its full sweep, so the litter is bounded either way.
+ *
+ * Touches ONLY the dev family — never production staging, locks, or out-old
+ * trees: restoring an orphan into the output is a BUILD concern (crash
+ * recovery), and a dev process must never rename into the output. A LIVE
+ * pid's dev tree is always kept: it is a running dev server's current or
+ * in-flight tree, and deleting it would clobber its swap source.
+ */
+export async function sweepDeadDevStaging(outputDir: string): Promise<void> {
+  const parent = posix.dirname(posix.resolve(toPosix(outputDir)));
+  let entries: string[];
+  try {
+    entries = await readdir(parent);
+  } catch {
+    return; // no parent yet — nothing can be stale
+  }
+  for (const name of entries) {
+    const m = DEV_STAGING_RE.exec(name);
+    if (m !== null && !pidAlive(Number(m[1]))) {
+      await rm(posix.join(parent, name), { recursive: true, force: true }).catch(() => {});
     }
   }
 }

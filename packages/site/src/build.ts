@@ -5,6 +5,19 @@
 // them, staging is deleted, and the previous output is untouched (publish is
 // the last step and restores on any mid-swap failure). Warnings never fail.
 //
+// Two entry points share one pipeline (runBuild, mode-parameterized):
+//   - build() / buildInternal(): production. Drafts are NOT rendered;
+//     link.draft / link.broken are ERRORS (a published site 404s on them);
+//     the staging is the production sibling and the run ends with the
+//     publish rename under the per-output build lock.
+//   - devBuild(): the dev server's build (chunk 9, plan §4.4). Drafts ARE
+//     rendered — each with the DRAFT banner prepended to its body — and
+//     link.draft / link.broken are WARNINGS (the dev server serves them, so
+//     the link really resolves there — plan §5); It takes NO lock and runs NO
+//     cleanupStale (the dev process never renames into the output and must
+//     never restore an orphan into it), and it never publishes: the result's
+//     outputDirectory is the dev staging tree, served in place.
+//
 // Concurrency: the output is LOCKED for the run (emit.acquireBuildLock,
 // claimed after the startup cleanup and before the staging mkdir) — a
 // concurrent build of the same output is refused with build.busy before it
@@ -30,6 +43,7 @@ import { BuildError, compareStrings, type Diagnostic, sortDiagnostics } from "./
 import {
   acquireBuildLock,
   cleanupStale,
+  devStagingDirFor,
   type EmitFile,
   notFoundPage,
   publish,
@@ -39,6 +53,7 @@ import {
   writePages,
 } from "./emit";
 import { parseFrontmatter } from "./frontmatter";
+import { type Html, html, trustedHtml } from "./html";
 import { parsePage } from "./pages";
 import { collectUnusedAssets, renderAll, renderPage } from "./render";
 import { routeToFile } from "./routes";
@@ -93,10 +108,18 @@ export interface BuildResult {
 
 /**
  * INTERNAL (chunk 9's dev watcher): the BuildResult plus the per-page readText
- * reverse index (page sourcePath → realpath'd dependency files). Never part
- * of the public contract — `build()` projects it away.
+ * reverse index (page sourcePath → realpath'd dependency files) and the draft
+ * pages (dev mode only — a production build renders no drafts, so its
+ * `draftPages` is empty). Never part of the public contract — `build()`
+ * projects it away.
  */
 export interface BuildInternalResult extends BuildResult {
+  /**
+   * The DRAFT pages this run emitted, sorted by route (empty in a
+   * production build — drafts are rendered only in dev mode). Same shape as
+   * `pages`.
+   */
+  readonly draftPages: BuildPage[];
   readonly pageDeps: Readonly<Record<string, string[]>>;
 }
 
@@ -218,11 +241,20 @@ export async function verifyPublicAssets(
 // the pipeline
 // ---------------------------------------------------------------------------
 
+/**
+ * "build" = a production build: no drafts rendered, link.draft/link.broken are
+ * errors, the run ends with the publish rename. "dev" = the dev server's
+ * build: drafts rendered with the banner, link.draft/link.broken are warnings,
+ * no publish (the result's outputDirectory is the dev staging itself).
+ */
+type BuildMode = "build" | "dev";
+
 async function runBuild(
   resolved: ResolvedSite,
   staging: string,
   outputDir: string,
   started: number,
+  mode: BuildMode,
 ): Promise<BuildInternalResult> {
   const all: Diagnostic[] = [];
 
@@ -350,7 +382,14 @@ async function runBuild(
     configDir: resolved.configDir,
     publicDir: resolved.assets.publicDirectory,
   };
-  const rendered = await renderAll(table.pages, renderOpts);
+  // dev mode renders the drafts too (the dev server serves them, so their
+  // links are validated against the full table); each draft's body gets the
+  // DRAFT banner prepended — trusted engine markup, so the fence still runs
+  // over it like any other document bytes. Production renders no drafts.
+  const draftPages =
+    mode === "dev" ? table.drafts.map((p) => ({ ...p, body: draftBannerBody(p.body) })) : [];
+  const toRender = mode === "dev" ? [...table.pages, ...draftPages] : table.pages;
+  const rendered = await renderAll(toRender, renderOpts);
   for (const r of rendered.pages) all.push(...r.diagnostics);
 
   // The generated 404 (plan, "Locked decisions" 2): rendered through the same
@@ -366,7 +405,7 @@ async function runBuild(
   const pub = await copyPublicDir(resolved, staging);
   all.push(...pub.diagnostics);
   const generatedPaths = [
-    ...table.pages.map((p) => routeToFile(p.route)),
+    ...toRender.map((p) => routeToFile(p.route)),
     "404.html",
     ...(resolved.sitemap ? ["sitemap.xml"] : []),
     ...(resolved.robots !== undefined ? ["robots.txt"] : []),
@@ -433,7 +472,9 @@ async function runBuild(
   for (const p of table.drafts) {
     if (p.route !== "/404") knownRoutes.set(p.route, { draft: true });
   }
-  all.push(...validatePages({ mode: "build", pages: emitted, routes: knownRoutes }));
+  // mode passes through: "build" errors on draft/broken internal links, "dev"
+  // warns (plan §5 — the dev server serves drafts, so the links resolve there).
+  all.push(...validatePages({ mode, pages: emitted, routes: knownRoutes }));
   if (all.some((d) => d.severity === "error")) throw new BuildError(all);
 
   await writePages(staging, items);
@@ -443,15 +484,28 @@ async function runBuild(
   const robots = robotsTxt(resolved.site, resolved.robots, resolved.sitemap);
   if (robots !== null) await writeFileAt(staging, "robots.txt", robots);
 
-  await publish(staging, outputDir);
+  // The publish rename is the PRODUCTION tail. Dev never renames into the
+  // output directory (the dev staging is the served tree, owned by the
+  // dev server), so the "dev" mode simply stops here.
+  if (mode === "build") await publish(staging, outputDir);
 
   const pageDeps: Record<string, string[]> = {};
   for (const r of documents) pageDeps[r.page.sourcePath] = r.deps;
 
   return {
     contractVersion: 1,
-    outputDirectory: outputDir,
+    // dev: the result IS the staging tree (the dev server serves it in place
+    // and owns its lifetime); build: the published output directory.
+    outputDirectory: mode === "dev" ? staging : outputDir,
     pages: table.pages.map((p) => ({
+      route: p.route,
+      sourcePath: p.sourcePath,
+      file: routeToFile(p.route),
+    })),
+    // dev: the drafts this run emitted (banned in production, so this is
+    // always [] for mode "build" — the dev watcher and the dev CLI use the
+    // list to know which routes carry the banner).
+    draftPages: draftPages.map((p) => ({
       route: p.route,
       sourcePath: p.sourcePath,
       file: routeToFile(p.route),
@@ -471,20 +525,68 @@ async function writeFileAt(staging: string, file: string, contents: string): Pro
   await writeFile(posix.join(staging, file), contents);
 }
 
+// ---------------------------------------------------------------------------
+// the DRAFT banner (dev mode only)
+// ---------------------------------------------------------------------------
+
 /**
- * Run the pipeline and return the INTERNAL result (BuildResult + pageDeps).
- * Chunk 9's dev watcher imports this; authors use `build()`.
+ * The DRAFT banner, prepended to every draft page's BODY in dev mode only
+ * (plan §4.4). Engine-owned markup — not authored content, so it is a
+ * constant here (byte-stable across rebuilds, which is what keeps the
+ * no-lastmod/byte-identical-rebuild contract honest even while a draft
+ * exists) and it is trustedHtml (the fence still runs over it like any
+ * document bytes). It is static markup with no attributes the fence's
+ * url/style/attribute checks could trip on, no event handlers, and no
+ * dynamic values, so a draft's banner can never open a fence violation the
+ * page itself would not have. DEV ONLY: a production build never renders
+ * drafts at all, so the banner never reaches the output directory.
+ *
+ * Styled with one inline rule per element (no `<style>` block, no
+ * `style=` attribute — the fence's style-body rule is about `<style>`
+ * elements, but keeping the banner attribute-free keeps it trivially
+ * fence-safe and leaves the site's own CSS in charge of anything richer).
  */
-export async function buildInternal(options: BuildOptions): Promise<BuildInternalResult> {
-  const started = performance.now();
-  const raw = typeof options?.configFile === "string" ? options.configFile : "";
+export const DRAFT_BANNER_HTML = `<div data-crust-draft="true"
+  style="background:#fff8e1;color:#6d5300;border-bottom:1px solid #e0c05a;padding:8px 16px;font-family:system-ui,sans-serif;font-size:14px">
+<strong>DRAFT</strong> &mdash; this page is marked <code>draft: true</code> and will not be published
+</div>`;
+
+/**
+ * Wrap a draft page's rendered body with the banner: a template whose first
+ * value is the trusted banner and second is the page body. Both values are
+ * real Html, so the fence tracks them (the banner contributes no tracked
+ * ranges — it is trusted engine markup — while the body's markdown value
+ * ranges are tracked exactly as on a normal page).
+ */
+function draftBannerBody(body: Html): Html {
+  return html`${trustedHtml(DRAFT_BANNER_HTML)}${body}`;
+}
+
+/** A config file loaded, resolved and overlap-checked — ready for a run. */
+export interface LoadedConfig {
+  /** The config file's absolute posix path (the import specifier source). */
+  readonly configPath: string;
+  readonly site: Site;
+  readonly resolved: ResolvedSite;
+}
+
+/**
+ * Load + resolve + validate ONE config file. `buildInternal` and `devBuild`
+ * both go through this, so the overlap check runs for the dev server too: a
+ * config that `build` would refuse is refused by `dev` with the SAME
+ * diagnostics (a dev server happily serving an unbuildable site would be a
+ * false pass). Relative paths resolve against the process cwd (CLI convention);
+ * every stored path then resolves against the CONFIG FILE's directory.
+ */
+export async function loadResolvedConfig(configFile: string): Promise<LoadedConfig> {
+  const raw = typeof configFile === "string" ? configFile : "";
   if (raw === "") {
     throw new BuildError([
       {
         code: "config.load",
         severity: "error",
         sourcePath: "",
-        message: "build() requires a configFile path (e.g. ./site.config.ts)",
+        message: "a configFile path is required (e.g. ./site.config.ts)",
       },
     ]);
   }
@@ -494,7 +596,19 @@ export async function buildInternal(options: BuildOptions): Promise<BuildInterna
   const site = await loadSiteConfig(configPath);
   const resolved = resolveConfigPaths(site, posix.dirname(configPath));
   checkOutputOverlap(resolved);
+  return { configPath, site, resolved };
+}
 
+/**
+ * Run the pipeline and return the INTERNAL result (BuildResult + draftPages +
+ * pageDeps). Chunk 9's dev watcher imports `devBuild` (same pipeline, dev
+ * mode); authors use `build()`.
+ */
+export async function buildInternal(options: BuildOptions): Promise<BuildInternalResult> {
+  const started = performance.now();
+  const loaded = await loadResolvedConfig(options?.configFile ?? "");
+
+  const resolved = loaded.resolved;
   const outputDir = posix.resolve(resolved.output.directory);
   // startup cleanup (which restores a killed build's orphaned previous output
   // to the output path) FIRST, then the lock: a concurrent build of this
@@ -504,7 +618,7 @@ export async function buildInternal(options: BuildOptions): Promise<BuildInterna
   const staging = stagingDirFor(outputDir);
   try {
     await mkdir(staging, { recursive: true });
-    return await runBuild(resolved, staging, outputDir, started);
+    return await runBuild(resolved, staging, outputDir, started, "build");
   } finally {
     // success moved staging into place (it no longer exists); any failure path
     // — including a publish that restored the old output — leaves staging to
@@ -531,4 +645,74 @@ export async function build(options: BuildOptions): Promise<BuildResult> {
     durationMs: internal.durationMs,
     warnings: internal.warnings,
   };
+}
+
+/**
+ * The DEV server's build (plan §4.4, chunk 9). Same pipeline as `build()` in
+ * mode "dev": drafts ARE rendered (each with the DRAFT banner), and
+ * link.draft / link.broken are WARNINGS instead of errors. The differences
+ * from a production run, and why each one exists:
+ *   - the staging is the DEV family (`devStagingDirFor`, `.crust-dev-staging-`),
+ *     a sibling of the output directory (same filesystem, never /tmp) — the
+ *     dev server serves it IN PLACE and owns its lifetime;
+ *   - NO build lock: the dev process never renames into the output, so the
+ *     lock's naming space stays exclusive to publishing builds and a dev
+ *     process can neither claim nor be claimed by it;
+ *   - NO cleanupStale: that startup pass RESTORES orphaned out-old trees INTO
+ *     the output — a dev process must never write to the output directory,
+ *     so it never runs it;
+ *   - NO publish: there is nothing to swap in. The returned
+ *     `result.outputDirectory` is the dev staging tree itself.
+ *
+ * On failure the staging is deleted and the BuildError rethrown with every
+ * collected diagnostic (the caller — the dev server — formats and reports
+ * them, and keeps serving the last complete tree).
+ */
+export interface DevBuild {
+  /** The dev staging tree (`.crust-dev-staging-<pid>-<nonce>` beside the output). */
+  readonly staging: string;
+  readonly result: BuildInternalResult;
+  /** The resolved config the run used (the dev watcher watches its dirs). */
+  readonly resolved: ResolvedSite;
+  /** The config file's absolute posix path. */
+  readonly configPath: string;
+}
+
+/**
+ * INTERNAL (the dev server's watcher): re-run the mode-"dev" pipeline into
+ * `staging` with an ALREADY-loaded resolved config. The caller (dev.ts)
+ * creates `staging` via `devStagingDirFor` and owns its lifetime: on
+ * success it serves it, on failure it deletes it. This is deliberately NOT
+ * `devBuild`: a content change must rebuild with the config that was loaded
+ * when the dev process started — re-importing the config file here would
+ * silently apply a config edit in-process, which the dev server refuses to
+ * do (config changes mean a worker restart, never a partial reload).
+ */
+export async function devRebuild(
+  resolved: ResolvedSite,
+  staging: string,
+  outputDir: string,
+): Promise<BuildInternalResult> {
+  const started = performance.now();
+  try {
+    await mkdir(staging, { recursive: true });
+    return await runBuild(resolved, staging, outputDir, started, "dev");
+  } catch (e) {
+    await rm(staging, { recursive: true, force: true }).catch(() => {});
+    throw e;
+  }
+}
+
+export async function devBuild(options: { readonly configFile: string }): Promise<DevBuild> {
+  const loaded = await loadResolvedConfig(options?.configFile ?? "");
+  const resolved = loaded.resolved;
+  const outputDir = posix.resolve(resolved.output.directory);
+  const staging = devStagingDirFor(outputDir);
+  try {
+    const result = await devRebuild(resolved, staging, outputDir);
+    return { staging, result, resolved, configPath: loaded.configPath };
+  } catch (e) {
+    await rm(staging, { recursive: true, force: true }).catch(() => {});
+    throw e;
+  }
 }

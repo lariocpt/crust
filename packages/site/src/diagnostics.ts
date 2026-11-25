@@ -239,6 +239,12 @@ export const DiagnosticCodes = Object.freeze({
   // dead holders' locks are reclaimed automatically, so a killed build
   // never blocks the output forever.
   "build.busy": "build.busy",
+  // dev.* — the dev server (chunk 9). The configured port is already held
+  // by another process. v1 does NOT auto-increment: silently choosing a
+  // different port would serve the site somewhere the user is not looking
+  // (a false pass wearing a success exit) — the error names the port and
+  // the user picks (stop the other process, or set dev.port).
+  "dev.port-in-use": "dev.port-in-use",
   // url.* — the URL policy (plan §1 url()): pre-parse rejects, scheme
   // allowlist, host/userinfo rules. Thrown by validateUrl; the fence quotes
   // the reason when a tracked value fails it (fence.url-attribute).
@@ -333,4 +339,44 @@ export class BuildError extends Error {
     this.name = "BuildError";
     this.diagnostics = sorted;
   }
+}
+
+// ---------------------------------------------------------------------------
+// console formatting (CLI + dev server)
+// ---------------------------------------------------------------------------
+
+const RESET = "\x1b[0m";
+const RED = "\x1b[31m";
+const YELLOW = "\x1b[33m";
+
+/**
+ * The one console format for diagnostics, shared by the CLI (build failure)
+ * and the dev server (failed rebuilds). One block per diagnostic:
+ *
+ *   severity[code]: first message line
+ *    --> sourcePath[:line[:column]]
+ *   remaining message lines verbatim
+ *
+ * `color` (the caller checks `process.stdout.isTTY` / stderr) wraps
+ * `severity[code]` in red (error) or yellow (warning); plain output when
+ * false — the Windows table row "diagnostics degrade gracefully without
+ * ANSI" is satisfied by this single flag, never by sniffing the string.
+ */
+export function formatDiagnostics(diags: readonly Diagnostic[], opts: { color: boolean }): string {
+  const blocks: string[] = [];
+  for (const d of diags) {
+    const paint = (s: string): string =>
+      opts.color ? `${d.severity === "error" ? RED : YELLOW}${s}${RESET}` : s;
+    const lines = d.message.split("\n");
+    const block = [`${paint(`${d.severity}[${d.code}]`)}: ${lines[0]}`];
+    if (d.sourcePath !== undefined && d.sourcePath !== "") {
+      let at = d.sourcePath;
+      if (d.line !== undefined) at = `${at}:${d.line}`;
+      if (d.column !== undefined) at = `${at}:${d.column}`;
+      block.push(` --> ${at}`);
+    }
+    block.push(...lines.slice(1));
+    blocks.push(block.join("\n"));
+  }
+  return blocks.join("\n\n");
 }

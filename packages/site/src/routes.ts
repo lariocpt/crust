@@ -257,6 +257,58 @@ export function canonicalUrl(site: string, route: string): string {
 }
 
 /**
+ * The URL → path direction used by the dev server: the INVERSE of what a
+ * browser does to a canonical form when it sends it. Each segment is
+ * percent-decoded, NFKC-normalized and re-encoded with the SAME segment
+ * encoder the route table uses — so the result is exactly the form the
+ * on-disk files and the route table carry (non-ASCII letters stay literal,
+ * reserved characters stay percent-encoded: `/caf%C3%A9` round-trips to the
+ * literal `café` file name).
+ *
+ * Returns NULL (the request answers 404) when the path cannot be a route or
+ * a file name:
+ *   - no leading "/", or a query/fragment survived into the path;
+ *   - an EMPTY segment (double or trailing slash) — this is what pins
+ *     `"/a/"` → 404 (v1, plan §4.5);
+ *   - a segment that decodes to a slash or backslash (`%2F`, `%5C`), or to
+ *     `.`/`..`, or to a control/invisible format character, or to a
+ *     Windows drive-letter prefix;
+ *   - an invalid percent-escape or malformed UTF-8;
+ *   - a Windows-reserved name (con/nul/prn/aux/com1-9/lpt1-9, on the stem
+ *     before the first dot) — on WIN32 ONLY: off-Windows those are ordinary
+ *     file names and rejecting them would be a false 404 (the Windows table
+ *     row is about devices, and devices exist only there).
+ */
+export function normalizeRequestPath(input: string): string | null {
+  if (!input.startsWith("/")) return null;
+  if (input.includes("?") || input.includes("#")) return null;
+  if (input === "/") return "/";
+  const segments: string[] = [];
+  for (const raw of input.slice(1).split("/")) {
+    let decoded: string;
+    try {
+      decoded = decodeURIComponent(raw).normalize("NFKC");
+    } catch {
+      return null; // invalid percent-escape or malformed UTF-8
+    }
+    if (decoded === "" || decoded === "." || decoded === "..") return null;
+    if (decoded.includes("/") || decoded.includes("\\")) return null;
+    if (hasControlChars(decoded)) return null;
+    if (/^[A-Za-z]:/.test(decoded)) return null;
+    if (process.platform === "win32") {
+      const stem =
+        decoded
+          .toLowerCase()
+          .replace(/[ .]+$/, "")
+          .split(".")[0] ?? "";
+      if (RESERVED_NAMES.has(stem)) return null;
+    }
+    segments.push(encodeSegment(decoded));
+  }
+  return `/${segments.join("/")}`;
+}
+
+/**
  * Route-table collisions, both passes (plan, Windows table):
  * exact duplicates → route.duplicate, and the case-insensitive pass for
  * case-insensitive filesystems → route.case-collision. Every diagnostic names

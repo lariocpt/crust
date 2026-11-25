@@ -1,13 +1,14 @@
 // The scaffold contract (chunk 1 of the v1 build):
 //
 //  - the public module imports and pins contractVersion 1
-//  - the CLI shape is final: build/dev [configFile]
-//  - failures are HONEST: "not implemented" exits 1 (never 0 — a success exit
-//    for work that did not happen is the false pass this repo refuses),
-//    unknown subcommands exit 2 with the usage, --help exits 0.
+//  - the CLI argument contract is final: build/dev take at most one
+//    positional (configFile); unknown subcommands, extra positionals and
+//    flag-shaped args exit 2 with the usage; --help exits 0.
 //
-// The CLI is spawned as the shipped entry point (bun <package>/src/cli.ts),
-// so the contract is tested the way an installer would hit it.
+// The build/dev BEHAVIOUR (summary line, diagnostics, the dev loop) is
+// pinned by cli.test.ts. The CLI is spawned as the shipped entry point
+// (bun <package>/src/cli.ts), so the contract is tested the way an
+// installer would hit it.
 import { describe, expect, test } from "bun:test";
 
 const CLI = `${import.meta.dir}/../src/cli.ts`;
@@ -30,28 +31,6 @@ describe("the public module", () => {
   test("index.ts imports and pins contractVersion 1", async () => {
     const mod = await import("../src/index");
     expect(mod.contractVersion).toBe(1);
-  });
-});
-
-describe("crust-site build / dev", () => {
-  test("build exits 1 with the not-implemented message, never 0", async () => {
-    const r = await cli("build");
-    expect(r.code).toBe(1);
-    expect(r.stderr).toContain("crust-site: not implemented yet");
-    expect(r.stdout).toBe("");
-  });
-
-  test("dev exits 1 with the not-implemented message, never 0", async () => {
-    const r = await cli("dev");
-    expect(r.code).toBe(1);
-    expect(r.stderr).toContain("crust-site: not implemented yet");
-    expect(r.stdout).toBe("");
-  });
-
-  test("build accepts an optional configFile argument", async () => {
-    const r = await cli("build", "./site.config.ts");
-    expect(r.code).toBe(1);
-    expect(r.stderr).toContain("crust-site: not implemented yet");
   });
 });
 
