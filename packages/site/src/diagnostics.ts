@@ -98,6 +98,29 @@ export const DiagnosticCodes = Object.freeze({
   "fence.url-attribute": "fence.url-attribute",
   "fence.ping-attr": "fence.ping-attr",
   "fence.srcdoc-attr": "fence.srcdoc-attr",
+  // asset.* — the bundling pipeline (chunk 5, plan §4.2/§4.5). Exactly ONE
+  // emitted file per declared entrypoint is the invariant.
+  // entrypoint produced several files (imported assets, real chunks) — v1
+  // emits exactly one hashed file per entrypoint and refuses the rest.
+  "asset.entrypoint-chunked": "asset.entrypoint-chunked",
+  // Bun.build failed (thrown or returned failure) or emitted zero / an
+  // unrecognizable file; the bundler's own messages are folded in.
+  "asset.bundle-failed": "asset.bundle-failed",
+  // assets.publicDirectory is configured but unusable (absent, not a dir).
+  "asset.public-missing": "asset.public-missing",
+  // A symbolic link inside assets.publicDirectory. Never copied (a symlink
+  // could publish an arbitrary host tree or recurse forever — the package-wide
+  // "symlinks don't extend a boundary" rule) and never silently skipped (the
+  // author put the file there expecting it published — a silent skip is a
+  // false pass, crust rule 1). Always an error.
+  "asset.public-symlink": "asset.public-symlink",
+  // script()/stylesheet() name (or any manifest lookup) not declared in
+  // assets.scripts/assets.styles — a map-key typo is a build error, never a
+  // silently missing tag (plan §5).
+  "asset.unknown-entrypoint": "asset.unknown-entrypoint",
+  // output.* — emit-time collisions (chunk 5 provides the detector, chunk 6
+  // runs it): a public file that would overwrite a generated file.
+  "output.collision": "output.collision",
   // url.* — the URL policy (plan §1 url()): pre-parse rejects, scheme
   // allowlist, host/userinfo rules. Thrown by validateUrl; the fence quotes
   // the reason when a tracked value fails it (fence.url-attribute).
