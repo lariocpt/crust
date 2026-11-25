@@ -133,6 +133,7 @@ export function parseFrontmatter(text: string, sourcePath: string): FrontmatterR
 
   const frontmatter: PageFrontmatter = { title: "" };
   let hasTitle = false;
+  let dataLine: number | undefined;
   const badValue = (at: { line: number; column: number }, key: KnownKey, why: string): void => {
     errors.push({
       code: "frontmatter.bad-value",
@@ -210,6 +211,7 @@ export function parseFrontmatter(text: string, sourcePath: string): FrontmatterR
         else frontmatter.draft = value;
         break;
       case "data":
+        dataLine = keyPos.line;
         if (!isPlainObject(value))
           badValue(valPos, "data", "must be a plain object (a YAML mapping)");
         else frontmatter.data = value;
@@ -233,5 +235,6 @@ export function parseFrontmatter(text: string, sourcePath: string): FrontmatterR
     frontmatter,
     body: lines.slice(close + 1).join("\n"),
     bodyStartLine: close + 2,
+    ...(dataLine !== undefined ? { dataLine } : {}),
   };
 }

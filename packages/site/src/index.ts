@@ -15,7 +15,11 @@
 //
 // The kernel here is pure logic: no filesystem, no rendering, no bundling.
 // It deliberately imports NOTHING third-party except `yaml` (located
-// frontmatter positions); the renderer arrives with the render chunk.
+// frontmatter positions) and `markdown-it` (raw HTML disabled, the content
+// pipeline in markdown.ts/pages.ts/content.ts); the renderer arrives with
+// the render chunk. The content pipeline's types (Page, Heading,
+// InternalLink, RouteResolver) are public; its functions are internal wiring
+// until build() (chunk 6/8) exposes the pipeline as a whole.
 //
 // Packaging: this ships as a PLAIN npm package run under Bun
 // (`bunx @crust/site build`), not as a compiled binary. A compiled Bun binary
@@ -75,12 +79,17 @@ export type {
   ContentConfig,
   DevConfig,
   FrontmatterResult,
+  Heading,
+  InternalLink,
   LayoutFn,
   OutputConfig,
+  Page,
   PageFrontmatter,
   ResolvedSite,
   RobotsConfig,
   RouteEntry,
+  RouteResolution,
+  RouteResolver,
   Site,
   SiteConfig,
   TrailingSlash,

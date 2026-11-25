@@ -47,6 +47,38 @@ export const DiagnosticCodes = Object.freeze({
   // "parsed fine, but it is not a mapping" — conflating them would tell the
   // user their document has the wrong shape when it has a syntax error.
   "frontmatter.parse-error": "frontmatter.parse-error",
+  // description was absent and derived from the first paragraph; the message
+  // carries the derived value (plan §2 — a warning, not an error).
+  "frontmatter.derived-description": "frontmatter.derived-description",
+  // description was absent AND there was no text to derive from (empty body,
+  // or a first paragraph without text). The description stays "" and the
+  // page is otherwise legal — a warning, never an error. Distinct from
+  // derived-description: claiming a derivation that did not happen would be
+  // a false report (crust rule 1).
+  "frontmatter.missing-description": "frontmatter.missing-description",
+  // The content directory produced no NON-DRAFT pages: a production build
+  // would emit no content pages (only the generated 404 page). Suspicious
+  // but legal (a drafts-only site is a legitimate dev state) — a warning,
+  // never an error. The message distinguishes "zero pages at all" from
+  // "N drafts, zero production".
+  "content.no-pages": "content.no-pages",
+  // content.parseData threw, or returned something that is not a plain
+  // object. The thrown Error's message is folded into this diagnostic.
+  "frontmatter.data-invalid": "frontmatter.data-invalid",
+  // Neither frontmatter `route` nor content.route produced a route for the
+  // page. Distinct from route.invalid (a route EXISTS but is malformed).
+  "route.missing": "route.missing",
+  // frontmatter.layout (or defaultLayout) names a key that is not in the
+  // layouts registry; the message names the page and the available keys.
+  "layout.unknown": "layout.unknown",
+  // A markdown link/image destination failed the URL policy (url.ts), or an
+  // internal .md target is not a valid route shape. The offending
+  // destination is stripped from the emitted markup, so the output is inert
+  // even if the build is continued past the error.
+  "link.invalid": "link.invalid",
+  // markdown-it itself threw while rendering (it is otherwise error-tolerant
+  // and treats almost everything as text). Line is in FULL-FILE coordinates.
+  "markdown.parse-error": "markdown.parse-error",
   // render.* — the template value contract (plan §1: "never a false pass,
   // never a silent coercion"). All render.bad-value; the message says what
   // the value was. A value we cannot name a safe rendering for is a build

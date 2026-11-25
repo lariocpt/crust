@@ -1,8 +1,12 @@
 // Public types: the config input shape (what a user's `site.config.ts`
-// imports), the branded validated `Site`, the resolved view, and the
-// frontmatter contract. Input shapes are what defineSite TYPE-checkS against;
+// imports), the branded validated `Site`, the resolved view, the frontmatter
+// contract, and the content-pipeline shapes (pages, headings, internal
+// links). Input shapes are what defineSite TYPE-checkS against;
 // runtime validation in config.ts is independent (JS users get the same
 // diagnostics — crust rule 1, no silent pass).
+
+import type { Diagnostic } from "./diagnostics";
+import type { Html } from "./html";
 
 /**
  * Documented-open union (plan, "Locked decisions" 4): v1 accepts only
@@ -33,7 +37,14 @@ export interface ContentConfig {
    * (no auto-normalization, plan §2); a bad return is an error naming the page.
    */
   route?: (arg: { relativePath: string }) => string;
-  /** Hook for the later data layer; stored untouched in v1. */
+  /**
+   * Hook for the data layer. `parsePage` calls it with the page's RAW
+   * frontmatter `data` (or `{}` when absent) and the page's sourcePath; an
+   * async hook (a returned Promise) is awaited. It must RESOLVE to a plain
+   object — a throw or rejection becomes `frontmatter.data-invalid`, and a
+   non-object result is the same (never a silent pass). The resolved object
+   becomes `page.data`.
+   */
   parseData?: (value: unknown, ctx: { sourcePath: string }) => unknown;
 }
 
@@ -151,10 +162,89 @@ export interface FrontmatterResult {
   body: string;
   /** 1-based line of the first body line, in the FULL file's coordinates. */
   bodyStartLine: number;
+  /**
+   * 1-based line (FULL-file coordinates) of the `data` key, when the
+   * frontmatter has one — so a content.parseData failure can point at it.
+   */
+  dataLine?: number;
 }
 
 /** One row of the route table handed to `findRouteCollisions`. */
 export interface RouteEntry {
   route: string;
   sourcePath: string;
+}
+
+/**
+ * A heading as collected during render: `id` is the FINAL slug (collision
+ * suffixes applied in document order), `text` the plain text of the heading
+ * with markdown syntax stripped and entities decoded.
+ */
+export interface Heading {
+  level: number;
+  id: string;
+  text: string;
+}
+
+/**
+ * An internal link extracted during render — the input for chunk 7's link
+ * validation. `route` is the destination route (for a pure fragment link,
+ * the page's own route); `exists: false` means the destination looked like
+ * an internal page but was not in the route table (chunk 7 turns that into
+ * link.broken — chunk 4 only records). `line` is best-effort: block-level
+ * map info in FULL-file coordinates, `null` when no enclosing block carried
+ * a map.
+ */
+export interface InternalLink {
+  route: string;
+  fragment: string | null;
+  line: number | null;
+  exists: boolean;
+  isDraft: boolean;
+  kind: "page" | "fragment";
+}
+
+/**
+ * A route-table answer for an internal link candidate: the page entry,
+ * `"external"` (not an internal route at all — keep the destination and
+ * apply the URL policy), or `null` (looks internal, not found).
+ */
+export type RouteResolution =
+  | { route: string; exists: boolean; isDraft: boolean }
+  | "external"
+  | null;
+
+/**
+ * Resolves an internal link candidate — the destination path already
+ * resolved against the PAGE'S ROUTE and stripped of `.md` (never the
+ * source path, plan §2). Chunk 6 wires this to the real route table;
+ * chunk 4 defines the interface and tests it with a fake.
+ */
+export type RouteResolver = (candidateRoute: string) => RouteResolution;
+
+/**
+ * One parsed .md page. `route`/`canonicalUrl` are filled by the route-table
+ * step (buildRouteTable) — a page straight from parsePage carries only the
+ * frontmatter `route` when it had one. `diagnostics` carries every
+ * page-level problem found during parse/render (errors AND warnings);
+ * `warnings` is the warning-severity subset, for callers that only surface
+ * those.
+ */
+export interface Page {
+  readonly sourcePath: string;
+  /** posix, relative to content.directory, extension stripped (plan §2). */
+  readonly relativePath: string;
+  /** frontmatter route only; content.route() runs in buildRouteTable. */
+  readonly route?: string;
+  /** frontmatter layout only; defaultLayout fallback in buildRouteTable. */
+  readonly layout?: string;
+  readonly title: string;
+  readonly description: string;
+  readonly headings: Heading[];
+  readonly data: Record<string, unknown>;
+  readonly draft: boolean;
+  readonly body: Html;
+  readonly links: InternalLink[];
+  readonly warnings: Diagnostic[];
+  readonly diagnostics: Diagnostic[];
 }
