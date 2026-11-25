@@ -1,15 +1,21 @@
 // @crust/site — the crust site generator.
 //
-// Scaffold (chunk 1 of the v1 build; plan: ~/.opencode/plan/crust-site-v1.md).
-// This module is the public API the later chunks fill in:
+// The public API (plan: ~/.opencode/plan/crust-site-v1.md):
 //
-//   defineSite — the config contract (site URL, content, assets, output)
-//   html       — the fenced template runtime (value-range fence + escaping)
-//   build      — the SSG pipeline (Bun.build per entrypoint, render, emit,
-//                publish with the rename/copy contract)
+//   defineSite / resolveConfigPaths / checkOutputOverlap
+//                — the config contract (site URL, content, assets, output)
+//   normalizeRoute / routeToFile / canonicalUrl / findRouteCollisions
+//                — the route table: strict normalization, the URL↔file map,
+//                  duplicate + case-insensitive collision passes
+//   parseFrontmatter — the .md frontmatter contract, with diagnostics located
+//                in full-file coordinates
+//   html         — the fenced template runtime (value-range fence + escaping)
+//   build        — the SSG pipeline (Bun.build per entrypoint, render, emit,
+//                  publish with the rename/copy contract)
 //
-// It deliberately imports NOTHING third-party yet: the scaffold must typecheck
-// and test with the workspace installed but the renderer unused.
+// The kernel here is pure logic: no filesystem, no rendering, no bundling.
+// It deliberately imports NOTHING third-party except `yaml` (located
+// frontmatter positions); the renderer arrives with the render chunk.
 //
 // Packaging: this ships as a PLAIN npm package run under Bun
 // (`bunx @crust/site build`), not as a compiled binary. A compiled Bun binary
@@ -27,3 +33,31 @@
  * are never repurposed; narrow enums are typed as documented-open unions.
  */
 export const contractVersion = 1;
+
+export { checkOutputOverlap, defineSite, resolveConfigPaths } from "./config";
+export type { Diagnostic, DiagnosticCode, Severity } from "./diagnostics";
+export { BuildError, DiagnosticCodes, isDiagnostic, sortDiagnostics } from "./diagnostics";
+export { parseFrontmatter } from "./frontmatter";
+export {
+  canonicalUrl,
+  findRouteCollisions,
+  isNormalizedRoute,
+  normalizeRoute,
+  routeToFile,
+} from "./routes";
+
+export type {
+  AssetsConfig,
+  ContentConfig,
+  DevConfig,
+  FrontmatterResult,
+  LayoutFn,
+  OutputConfig,
+  PageFrontmatter,
+  ResolvedSite,
+  RobotsConfig,
+  RouteEntry,
+  Site,
+  SiteConfig,
+  TrailingSlash,
+} from "./types";
