@@ -47,6 +47,35 @@ export const DiagnosticCodes = Object.freeze({
   // "parsed fine, but it is not a mapping" — conflating them would tell the
   // user their document has the wrong shape when it has a syntax error.
   "frontmatter.parse-error": "frontmatter.parse-error",
+  // render.* — the template value contract (plan §1: "never a false pass,
+  // never a silent coercion"). All render.bad-value; the message says what
+  // the value was. A value we cannot name a safe rendering for is a build
+  // error, full stop — true/NaN/Infinity/thenables/Symbol/bigint/functions/
+  // objects throw BEFORE any toString/valueOf is invoked.
+  "render.bad-value": "render.bad-value",
+  // fence.* — the post-render document fence (chunk 3). Every violation is
+  // collected; finalizeDocument wraps them in one BuildError.
+  "fence.script-body": "fence.script-body",
+  "fence.style-body": "fence.style-body",
+  "fence.comment-value": "fence.comment-value",
+  "fence.dynamic-tag-name": "fence.dynamic-tag-name",
+  "fence.dynamic-attr-name": "fence.dynamic-attr-name",
+  "fence.event-handler": "fence.event-handler",
+  "fence.unquoted-attribute": "fence.unquoted-attribute",
+  "fence.unterminated": "fence.unterminated",
+  "fence.url-attribute": "fence.url-attribute",
+  "fence.ping-attr": "fence.ping-attr",
+  "fence.srcdoc-attr": "fence.srcdoc-attr",
+  // url.* — the URL policy (plan §1 url()): pre-parse rejects, scheme
+  // allowlist, host/userinfo rules. Thrown by validateUrl; the fence quotes
+  // the reason when a tracked value fails it (fence.url-attribute).
+  "url.control-char": "url.control-char",
+  "url.bad-char": "url.bad-char",
+  "url.entity-escape": "url.entity-escape",
+  "url.protocol-relative": "url.protocol-relative",
+  "url.scheme": "url.scheme",
+  "url.no-host": "url.no-host",
+  "url.userinfo": "url.userinfo",
 } as const);
 
 /** Every valid diagnostic code, as a union of the registry's strings. */

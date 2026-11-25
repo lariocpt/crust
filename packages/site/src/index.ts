@@ -38,6 +38,31 @@ export { checkOutputOverlap, defineSite, resolveConfigPaths } from "./config";
 export type { Diagnostic, DiagnosticCode, Severity } from "./diagnostics";
 export { BuildError, DiagnosticCodes, isDiagnostic, sortDiagnostics } from "./diagnostics";
 export { parseFrontmatter } from "./frontmatter";
+export type { Html, HtmlValue } from "./html";
+
+// The fenced template runtime (plan §1). Public surface:
+//
+//   html           — the tagged template. Values are escaped through ONE
+//                    escaper and their character ranges are tracked;
+//                    finalizeDocument runs the fence over the result.
+//   Html / HtmlValue — the opaque value type and what may be interpolated.
+//   finalizeDocument — render + fence in one; a violation throws a BuildError
+//                      carrying ALL fence diagnostics. The renderer (render
+//                      chunk) calls it per page.
+//   url            — the URL policy under its public name. It IS
+//                    validateUrl: one function, two names, so the plan's
+//                    `url()` reads naturally at the call site while the
+//                    explicit name stays available for search and for the
+//                    fence's cross-references. `ctx.url()` (render chunk)
+//                    wraps exactly this.
+//
+// NOT public: trustedHtml, renderToString, escapeHtml, the fence's scanner
+// (fence.ts), and the url internals — those are internal wiring for the
+// render chunk and the test-suite, not a contract for site authors.
+// trustedHtml, renderToString and escapeHtml stay OUT of this file on
+// purpose (task contract: exported from html.ts for internal use / tests
+// only, never part of the author-facing surface).
+export { finalizeDocument, html } from "./html";
 export {
   canonicalUrl,
   findRouteCollisions,
@@ -45,7 +70,6 @@ export {
   normalizeRoute,
   routeToFile,
 } from "./routes";
-
 export type {
   AssetsConfig,
   ContentConfig,
@@ -61,3 +85,5 @@ export type {
   SiteConfig,
   TrailingSlash,
 } from "./types";
+export type { UrlAttribute, UrlPolicyOptions } from "./url";
+export { validateUrl, validateUrl as url } from "./url";
