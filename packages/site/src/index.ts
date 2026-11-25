@@ -10,6 +10,11 @@
 //   parseFrontmatter — the .md frontmatter contract, with diagnostics located
 //                in full-file coordinates
 //   html         — the fenced template runtime (value-range fence + escaping)
+//   Layout/LayoutContext — the layout render engine's types (per-render head
+//                  sink, deep-frozen page); renderPage/renderAll are
+//                  exported INTERNAL wiring for build()/dev (chunks 7/8),
+//                  not an author-facing API — authors write layouts, they
+//                  never call the engine
 //   build        — the SSG pipeline (Bun.build per entrypoint, render, emit,
 //                  publish with the rename/copy contract)
 //
@@ -60,13 +65,30 @@ export type { Html, HtmlValue } from "./html";
 //                    fence's cross-references. `ctx.url()` (render chunk)
 //                    wraps exactly this.
 //
-// NOT public: trustedHtml, renderToString, escapeHtml, the fence's scanner
-// (fence.ts), and the url internals — those are internal wiring for the
-// render chunk and the test-suite, not a contract for site authors.
-// trustedHtml, renderToString and escapeHtml stay OUT of this file on
-// purpose (task contract: exported from html.ts for internal use / tests
-// only, never part of the author-facing surface).
+// NOT public: trustedHtml, renderToString, escapeHtml, isHtml (the brand
+// guard the render engine uses internally), the fence's scanner (fence.ts),
+// and the url internals — those are internal wiring for the render chunk
+// and the test-suite, not a contract for site authors. They stay OUT of
+// this file on purpose (task contract: exported from their own module for
+// internal use / tests only, never part of the author-facing surface).
 export { finalizeDocument, html } from "./html";
+// The layout render engine (plan §3). The TYPES are part of the public
+// contract (build()'s BuildResult references PageRender; a user's layout is
+// a Layout). renderPage/renderAll are exported so chunks 7/8 (emit, dev
+// server) can import them from the package entry, but they are NOT
+// advertised: site authors write layouts and never call the engine.
+export type {
+  AssetUsage,
+  DeepReadonly,
+  FrozenPage,
+  Layout,
+  LayoutContext,
+  PageRender,
+  RenderAllOptions,
+  RenderAllResult,
+  RenderPageOptions,
+} from "./render";
+export { collectUnusedAssets, renderAll, renderPage } from "./render";
 export {
   canonicalUrl,
   findRouteCollisions,

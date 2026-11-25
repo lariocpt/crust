@@ -62,11 +62,16 @@ export async function parsePage(input: ParsePageInput): Promise<Page> {
   // LF-only — the markdown renderer never sees a CRLF.
   const text = await Bun.file(absolutePath).text();
   const parsed = parseFrontmatter(text, sourcePath);
-  const siteOrigin = new URL(resolvedSite.site).origin;
+  // The URL policy's base is the FULL site URL — path prefix included — and
+  // markdown.ts combines it with `pageRoute`, so the base for a relative ref
+  // is exactly the page's canonical URL (url.ts: urlBase === canonicalUrl).
+  // Handing over `new URL(site).origin` here is the bug this line pins: for a
+  // prefixed site (https://x.dev/docs) an origin base silently drops the
+  // prefix from every relative-ref resolution.
   const md = renderMarkdown(parsed.body, {
     sourcePath,
     bodyStartLine: parsed.bodyStartLine,
-    siteOrigin,
+    siteUrl: resolvedSite.site,
     pageRoute: input.pageRoute,
     resolveInternal: input.routeResolver,
   });

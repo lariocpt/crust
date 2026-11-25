@@ -6,7 +6,9 @@ import { defineSite, resolveConfigPaths } from "../src/config.ts";
 import { BuildError } from "../src/diagnostics.ts";
 import { renderToString } from "../src/html.ts";
 import { parsePage } from "../src/pages.ts";
+import { canonicalUrl } from "../src/routes.ts";
 import type { Page, ResolvedSite } from "../src/types.ts";
+import { urlBase } from "../src/url.ts";
 
 async function fixture(files: Record<string, string> = {}, extraContent = {}) {
   const dir = await mkdtemp(join(tmpdir(), "crust-site-pages-"));
@@ -371,5 +373,76 @@ description: Given
     expect(renderToString(page.body)).not.toContain("\r");
     expect(renderToString(page.body)).toContain("<p>para <a>bad</a></p>");
     await rm(f.dir, { recursive: true, force: true });
+  });
+});
+
+describe("parsePage — a path-prefixed site (GH Pages /docs/)", () => {
+  // Regression for the chunk-6 flagged bug: parsePage used to pass
+  // `new URL(resolvedSite.site).origin` to the markdown renderer, so for a
+  // prefixed site the URL-policy base silently dropped the prefix while the
+  // page's canonical URL kept it. parsePage now hands the FULL site URL
+  // down (src/pages.ts pins the line), and the base it produces —
+  // site + pageRoute — must agree with canonicalUrl byte for byte.
+  //
+  // A note on observability: for RELATIVE refs the accept/reject decision
+  // cannot differ between the two bases (a relative ref cannot leave its
+  // origin), so the regression is pinned at the invariant level — the base
+  // the renderer uses must equal the page's canonical URL — plus the
+  // end-to-end behaviour (no spurious link.invalid, destinations intact).
+  test("relative refs validate against site+route = canonicalUrl; the origin base would disagree", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "crust-site-pages-pref-"));
+    await mkdir(join(dir, "content", "guides"), { recursive: true });
+    await writeFile(
+      join(dir, "content", "guides", "intro.md"),
+      `---
+title: Intro
+description: A page on a prefixed site
+route: /guides/intro
+layout: docs
+---
+[rel](sub/next) and [abs](https://x.dev/docs/other)
+`,
+    );
+    const resolvedSite = resolveConfigPaths(
+      defineSite({
+        site: "https://x.dev/docs",
+        content: {
+          directory: "content",
+          include: ["**/*.md"],
+          defaultLayout: "docs",
+        },
+        layouts: { docs: () => "" },
+        output: { directory: "dist" },
+      }),
+      dir,
+    );
+    const page = await parsePage({
+      absolutePath: join(dir, "content", "guides", "intro.md"),
+      relativePath: "guides/intro",
+      sourcePath: "content/guides/intro.md",
+      resolvedSite,
+      pageRoute: "/guides/intro",
+    });
+    // The relative ref is accepted (same-origin by construction) — a
+    // prefixed site must not produce spurious link.invalid diagnostics.
+    expect(page.diagnostics).toEqual([]);
+    // Destinations are emitted as written (the browser resolves them
+    // against the real page URL).
+    const rendered = renderToString(page.body);
+    expect(rendered).toContain('<a href="sub/next">rel</a>');
+    expect(rendered).toContain('<a href="https://x.dev/docs/other">abs</a>');
+    // The invariant the fix pins, with explicit bytes: the base the markdown
+    // renderer got (the full site, page route included) IS the canonical URL.
+    const base = urlBase({ siteUrl: resolvedSite.site, pageRoute: "/guides/intro" });
+    expect(base).toBe("https://x.dev/docs/guides/intro");
+    expect(base).toBe(canonicalUrl(resolvedSite.site, "/guides/intro"));
+    // Control — the old origin-based base would NOT agree. (URL resolution
+    // replaces the base's last path segment — the page, not a directory —
+    // so "sub/next" lands in the page's parent directory either way; the
+    // difference is the /docs prefix.)
+    const originBase = `${new URL(resolvedSite.site).origin}/guides/intro`;
+    expect(new URL("sub/next", originBase).href).toBe("https://x.dev/guides/sub/next");
+    expect(new URL("sub/next", base).href).toBe("https://x.dev/docs/guides/sub/next");
+    await rm(dir, { recursive: true, force: true });
   });
 });

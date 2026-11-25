@@ -16,10 +16,10 @@ import { describe, expect, test } from "bun:test";
 import { BuildError } from "../src/diagnostics";
 import { finalizeDocument, type Html, html, renderToString, trustedHtml } from "../src/html";
 
-const ORIGIN = "https://site.dev";
+const SITE = "https://site.dev";
 
 function render(doc: Html, pageRoute?: string): string {
-  return finalizeDocument(doc, { siteOrigin: ORIGIN, pageRoute });
+  return finalizeDocument(doc, { siteUrl: SITE, pageRoute });
 }
 
 /** Diagnostic codes of the thrown BuildError, or [] when the doc passes. */

@@ -15,12 +15,12 @@ import {
   trustedHtml,
 } from "../src/html";
 
-const ORIGIN = "https://site.dev";
+const SITE = "https://site.dev";
 
 /** Render + fence; returns the diagnostic codes of the thrown BuildError (or []). */
 function fenceCodes(doc: Html, pageRoute?: string): string[] {
   try {
-    finalizeDocument(doc, { siteOrigin: ORIGIN, pageRoute });
+    finalizeDocument(doc, { siteUrl: SITE, pageRoute });
     return [];
   } catch (e) {
     if (e instanceof BuildError) return e.diagnostics.map((d) => d.code);
@@ -169,9 +169,7 @@ describe("value semantics — unsafe values throw render.bad-value", () => {
   });
 
   test("the diagnostics are thrown, not returned (finalizeDocument propagates them)", () => {
-    expect(() =>
-      finalizeDocument(html`${true as unknown as Html}`, { siteOrigin: ORIGIN }),
-    ).toThrow();
+    expect(() => finalizeDocument(html`${true as unknown as Html}`, { siteUrl: SITE })).toThrow();
     expect(() => renderToString(html`${Number.NaN as unknown as Html}`)).toThrow();
   });
 });
@@ -328,7 +326,7 @@ describe("range tracking through arbitrary nesting", () => {
     expect(fenceCodes(html`<div>0123456789${trusted}</div>`)).toContain("fence.url-attribute");
     // and finalizeDocument accepts a trusted root with ranges directly
     expect(fenceCodes(trusted)).toContain("fence.url-attribute");
-    expect(finalizeDocument(trustedHtml("<p>ok</p>", [[0, 1]]), { siteOrigin: ORIGIN })).toBe(
+    expect(finalizeDocument(trustedHtml("<p>ok</p>", [[0, 1]]), { siteUrl: SITE })).toBe(
       "<p>ok</p>",
     );
   });
@@ -411,7 +409,7 @@ describe("trustedHtml — the internal factory for the markdown renderer", () =>
 describe("finalizeDocument — the per-page entry point", () => {
   test("a clean document returns its markup", () => {
     const doc = html`<!DOCTYPE html><html><head><title>t</title></head><body><a href="/x">x</a></body></html>`;
-    expect(finalizeDocument(doc, { siteOrigin: ORIGIN })).toBe(
+    expect(finalizeDocument(doc, { siteUrl: SITE })).toBe(
       `<!DOCTYPE html><html><head><title>t</title></head><body><a href="/x">x</a></body></html>`,
     );
   });
@@ -421,7 +419,7 @@ describe("finalizeDocument — the per-page entry point", () => {
     const doc = html`<a onclick="x" ping="/y"></a>`;
     let err: unknown;
     try {
-      finalizeDocument(doc, { siteOrigin: ORIGIN });
+      finalizeDocument(doc, { siteUrl: SITE });
     } catch (e) {
       err = e;
     }
@@ -435,7 +433,7 @@ describe("finalizeDocument — the per-page entry point", () => {
     const doc = html`<a onclick="x" ping="/y" srcdoc="z"></a>`;
     let err: unknown;
     try {
-      finalizeDocument(doc, { siteOrigin: ORIGIN });
+      finalizeDocument(doc, { siteUrl: SITE });
     } catch (e) {
       err = e;
     }
@@ -448,7 +446,7 @@ describe("finalizeDocument — the per-page entry point", () => {
     const doc = html`<script>bad()</script><!--${"in-comment"}--><a href="${"javascript:x"}">`;
     let err: unknown;
     try {
-      finalizeDocument(doc, { siteOrigin: ORIGIN });
+      finalizeDocument(doc, { siteUrl: SITE });
     } catch (e) {
       err = e;
     }

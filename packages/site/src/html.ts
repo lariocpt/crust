@@ -37,11 +37,13 @@
 //
 // `trustedHtml(markup, ranges)` builds an Html from trusted internal markup
 // (the markdown renderer, chunk 4, uses it to hand value ranges to the fence
-// without re-escaping). It is exported from THIS module for internal use but
-// deliberately NOT from index.ts.
+// without re-escaping), and `isHtml` is the brand guard the render engine
+// uses to recognize an Html. Both are exported from THIS module for
+// internal use but deliberately NOT from index.ts.
 
 import { BuildError, type Diagnostic } from "./diagnostics";
 import { type Range, runFence } from "./fence";
+import type { UrlPolicyOptions } from "./url";
 
 /**
  * The brand. A REAL unique symbol (a `declare const` would be type-only and
@@ -78,7 +80,13 @@ type Node =
       readonly ranges: readonly Range[];
     };
 
-function isHtml(value: unknown): value is Html {
+/**
+ * The brand guard, exported for INTERNAL use (the render engine needs to
+ * tell an Html from any other value without touching it). Not exported from
+ * index.ts: like trustedHtml/renderToString/escapeHtml, it is module wiring,
+ * not author-facing surface.
+ */
+export function isHtml(value: unknown): value is Html {
   return typeof value === "object" && value !== null && Object.hasOwn(value, htmlBrand);
 }
 
@@ -339,10 +347,7 @@ export function renderToString(root: Html): string {
  * renderer (render chunk) calls per page: a violation throws a BuildError
  * carrying ALL fence diagnostics (never the first one only).
  */
-export function finalizeDocument(
-  root: Html,
-  opts: { siteOrigin: string; pageRoute?: string },
-): string {
+export function finalizeDocument(root: Html, opts: UrlPolicyOptions): string {
   const rendered = renderRoot(root);
   const diagnostics = runFence(rendered.markup, rendered.ranges, opts);
   if (diagnostics.length > 0) throw new BuildError(diagnostics);

@@ -85,6 +85,42 @@ export const DiagnosticCodes = Object.freeze({
   // error, full stop — true/NaN/Infinity/thenables/Symbol/bigint/functions/
   // objects throw BEFORE any toString/valueOf is invoked.
   "render.bad-value": "render.bad-value",
+  // The layout function returned (or a Promise resolved to) something that
+  // is not an Html, without throwing. Page-attributed; the page's render is
+  // aborted (no output) while the rest of the build pass continues.
+  "render.bad-result": "render.bad-result",
+  // The layout — or the engine's own render/fence stage — threw something
+  // that is not a diagnostic. The message carries the error's message AND
+  // its stack; the page's render is aborted, the pass never crashes.
+  "render.threw": "render.threw",
+  // head() called a SECOND time within one render. The second call emits
+  // nothing (the document already has its title/canonical) and this
+  // diagnostic is what fails the build (plan §3: "a build error diagnostic,
+  // not a throw") — the page still renders.
+  "head.duplicate": "head.duplicate",
+  // public-asset.* — the public-directory URL helper (render chunk). The
+  // argument is a FILE PATH, not a URL: it is never percent-decoded (%2e%2e
+  // is a literal filename), so the only traversal vectors are literal ones.
+  // Any of `..` segments, a leading "/", a backslash, a drive letter, NUL
+  // or an empty path is rejected BEFORE any filesystem access; the
+  // normalized path is recorded for the emitter's existence check.
+  "public-asset.traversal": "public-asset.traversal",
+  // readText.* — the config-directory text reader (render chunk). The
+  // confinement contract: root = REALPATH of the config directory; the
+  // FINAL realpath must stay inside it (a symlink never extends a
+  // boundary); 10 MiB size cap; strict UTF-8.
+  // A path that escapes the root — either a literal traversal rejected
+  // BEFORE resolution (absolute, `..`, NUL, backslash, drive letter) or a
+  // resolution (a symlink or component) whose realpath lands outside — is
+  // read-text.escape; the message says which stage caught it.
+  "read-text.escape": "read-text.escape",
+  // The file is larger than the 10 MiB cap (checked via stat BEFORE the
+  // bytes are read). A file of EXACTLY the cap is legal.
+  "read-text.toobig": "read-text.toobig",
+  // The path stayed inside the root but is not a readable text file:
+  // missing, a directory, unreadable, or not valid UTF-8 — the message
+  // says which.
+  "read-text.failed": "read-text.failed",
   // fence.* — the post-render document fence (chunk 3). Every violation is
   // collected; finalizeDocument wraps them in one BuildError.
   "fence.script-body": "fence.script-body",
@@ -118,6 +154,10 @@ export const DiagnosticCodes = Object.freeze({
   // assets.scripts/assets.styles — a map-key typo is a build error, never a
   // silently missing tag (plan §5).
   "asset.unknown-entrypoint": "asset.unknown-entrypoint",
+  // A declared asset that no rendered page ever passed to script() or
+  // stylesheet() — declared but dead. A WARNING (not an error): the asset
+  // bundles and emits fine, the author simply never referenced it.
+  "asset.unused": "asset.unused",
   // output.* — emit-time collisions (chunk 5 provides the detector, chunk 6
   // runs it): a public file that would overwrite a generated file.
   "output.collision": "output.collision",

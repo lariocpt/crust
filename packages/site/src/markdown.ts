@@ -50,8 +50,13 @@ export interface MarkdownOptions {
   sourcePath: string;
   /** frontmatter's bodyStartLine: body line 0 is this file line. */
   bodyStartLine: number;
-  /** scheme+host(+port) of the site — the URL policy's base origin. */
-  siteOrigin: string;
+  /**
+   * The site's base URL, path prefix INCLUDED (e.g. `https://x.dev/docs`).
+   * The URL policy's base for relative refs is this plus `pageRoute`, which is
+   * exactly the page's canonical URL — never `new URL(site).origin`, which
+   * would drop the prefix (see url.ts).
+   */
+  siteUrl: string;
   /** The page's normalized route; base for relative .md resolution. */
   pageRoute?: string;
   /** Route-table lookup for internal .md links (chunk 6 wires the real one). */
@@ -234,7 +239,7 @@ function buildRenderer(opts: MarkdownOptions, state: RenderState): MarkdownIt {
     };
     const checkUrl = (): void => {
       try {
-        validateUrl(raw, { siteOrigin: opts.siteOrigin, pageRoute: opts.pageRoute });
+        validateUrl(raw, { siteUrl: opts.siteUrl, pageRoute: opts.pageRoute });
       } catch (d) {
         if (!isDiagnostic(d)) throw d;
         reject(d.message);

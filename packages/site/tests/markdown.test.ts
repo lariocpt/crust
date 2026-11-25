@@ -22,7 +22,7 @@ import type { RouteResolver } from "../src/types";
 const BASE = {
   sourcePath: "docs/page.md",
   bodyStartLine: 1,
-  siteOrigin: "https://site.dev",
+  siteUrl: "https://site.dev",
   pageRoute: "/guides/page",
 };
 
@@ -471,7 +471,7 @@ describe("escaping — no decode/encode round-trip may lose or invent data", () 
     expect(out).not.toContain("<script>");
     expect(out).not.toContain("<!--");
     // The fence must not mistake the escaped content for a comment/script body:
-    expect(() => finalizeDocument(r.html, { siteOrigin: "https://site.dev" })).not.toThrow();
+    expect(() => finalizeDocument(r.html, { siteUrl: "https://site.dev" })).not.toThrow();
   });
 
   test("html:false: self-closing <img src=x onerror=1> renders as escaped text", () => {
@@ -482,7 +482,7 @@ describe("escaping — no decode/encode round-trip may lose or invent data", () 
     const out = renderToString(r.html);
     expect(out).toContain("&lt;img src=x onerror=1&gt;");
     expect(out).not.toContain("<img ");
-    expect(() => finalizeDocument(r.html, { siteOrigin: "https://site.dev" })).not.toThrow();
+    expect(() => finalizeDocument(r.html, { siteUrl: "https://site.dev" })).not.toThrow();
   });
 
   test("html:false: a paragraph containing <!-- is escaped (no raw comment for the fence)", () => {
@@ -509,7 +509,7 @@ describe("trusted body inside a template attribute (author error is safe, pinned
   test("body without quotes in a QUOTED attribute: fence passes, value is the body", () => {
     const body = render("plain para", BASE).html;
     const out = finalizeDocument(html`<div title="${body}">rest</div>`, {
-      siteOrigin: "https://site.dev",
+      siteUrl: "https://site.dev",
     });
     // No fence violation: inside a quoted attribute value, < and > are data.
     expect(out).toBe(`<div title="<p>plain para</p>\n">rest</div>`);
@@ -522,7 +522,7 @@ describe("trusted body inside a template attribute (author error is safe, pinned
     // markup, so nothing structural can escape. Pinned exactly.
     const body = render("```ts\nx\n```", BASE).html;
     const out = finalizeDocument(html`<div title="${body}">rest`, {
-      siteOrigin: "https://site.dev",
+      siteUrl: "https://site.dev",
     });
     expect(out).toBe('<div title="<pre><code class="language-ts">x\n</code></pre>\n">rest');
   });
@@ -532,7 +532,7 @@ describe("trusted body inside a template attribute (author error is safe, pinned
     let err: unknown;
     try {
       finalizeDocument(html`<div title=${body}>rest</div>`, {
-        siteOrigin: "https://site.dev",
+        siteUrl: "https://site.dev",
       });
     } catch (e) {
       err = e;
@@ -550,7 +550,7 @@ describe("trusted body inside a template attribute (author error is safe, pinned
     let err: unknown;
     try {
       finalizeDocument(html`<div title="${body}`, {
-        siteOrigin: "https://site.dev",
+        siteUrl: "https://site.dev",
       });
     } catch (e) {
       err = e;

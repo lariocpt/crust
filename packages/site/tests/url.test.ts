@@ -12,11 +12,12 @@ import { describe, expect, test } from "bun:test";
 import type { Diagnostic } from "../src/diagnostics";
 import { isDiagnostic } from "../src/diagnostics";
 import { decodeEntities } from "../src/fence";
-import { validateUrl } from "../src/url";
+import { canonicalUrl } from "../src/routes";
+import { urlBase, validateUrl } from "../src/url";
 
-const ORIGIN = "https://site.dev";
-const OPTS = { siteOrigin: ORIGIN };
-const OPTS_PAGE = { siteOrigin: ORIGIN, pageRoute: "/a/b" };
+const SITE = "https://site.dev";
+const OPTS = { siteUrl: SITE };
+const OPTS_PAGE = { siteUrl: SITE, pageRoute: "/a/b" };
 
 /** [value, opts, expected return] — expected return is always the input. */
 const ACCEPT: [string, typeof OPTS | typeof OPTS_PAGE][] = [
@@ -230,7 +231,7 @@ describe("validateUrl — policy decisions", () => {
   test("an unparseable site base is a diagnostic, never a raw throw", () => {
     let thrown: unknown;
     try {
-      validateUrl("/x", { siteOrigin: "not a url" });
+      validateUrl("/x", { siteUrl: "not a url" });
     } catch (e) {
       thrown = e;
     }
@@ -257,5 +258,55 @@ describe("validateUrl — policy decisions", () => {
     // controls: the proper authority form still passes
     expect(validateUrl("https://evil.com", OPTS)).toBe("https://evil.com");
     expect(validateUrl("https://site.dev/x", OPTS)).toBe("https://site.dev/x");
+  });
+});
+
+describe("the base invariant — relative resolution agrees with canonicalUrl", () => {
+  // Regression for the chunk-6 flagged bug: pages.ts computed
+  // `new URL(site).origin` and handed THAT to the markdown renderer, so for a
+  // path-prefixed site (GH Pages `https://x.dev/docs`) the prefix silently
+  // dropped out of every relative-ref resolution while the page's canonical
+  // URL kept it. The fix hands the FULL site URL down (pages.ts → markdown.ts
+  // → validateUrl; render.ts's ctx.url() and the fence take the same base).
+  // The invariant every caller relies on — pinned here with EXPLICIT bytes,
+  // not just self-consistency, so a drift in EITHER side is red:
+  //
+  //     urlBase({ siteUrl: site, pageRoute: route }) === canonicalUrl(site, route)
+  const PREF = "https://x.dev/docs";
+
+  test("urlBase({siteUrl, pageRoute}) === canonicalUrl(site, route), pinned byte for byte", () => {
+    expect(canonicalUrl(PREF, "/")).toBe("https://x.dev/docs/");
+    expect(canonicalUrl(PREF, "/a")).toBe("https://x.dev/docs/a");
+    expect(canonicalUrl(PREF, "/a/b")).toBe("https://x.dev/docs/a/b");
+    expect(urlBase({ siteUrl: PREF, pageRoute: "/" })).toBe("https://x.dev/docs/");
+    expect(urlBase({ siteUrl: PREF, pageRoute: "/a" })).toBe("https://x.dev/docs/a");
+    expect(urlBase({ siteUrl: PREF, pageRoute: "/a/b" })).toBe("https://x.dev/docs/a/b");
+    // no pageRoute: the site root — prefix kept, one slash added
+    expect(urlBase({ siteUrl: PREF })).toBe("https://x.dev/docs/");
+    for (const route of ["/", "/a", "/a/b"]) {
+      expect(urlBase({ siteUrl: PREF, pageRoute: route })).toBe(canonicalUrl(PREF, route));
+    }
+    // a prefix-less site: origin === full site, the invariant holds trivially
+    // (and this is the case that MASKED the bug in the first place)
+    expect(urlBase({ siteUrl: "https://x.dev", pageRoute: "/a/b" })).toBe("https://x.dev/a/b");
+  });
+
+  test("a relative ref resolves identically against urlBase and canonicalUrl", () => {
+    for (const ref of ["x", "./x", "../x", "../../x", "/abs", "x?q=1#f", "?q=1"]) {
+      expect(new URL(ref, urlBase({ siteUrl: PREF, pageRoute: "/a/b" })).href).toBe(
+        new URL(ref, canonicalUrl(PREF, "/a/b")).href,
+      );
+    }
+  });
+
+  test("control: the ORIGIN base (the old bug) does NOT agree with canonicalUrl", () => {
+    // `new URL(site).origin` is "https://x.dev" — the /docs prefix is gone.
+    // A relative ref then resolves to a URL the site can never serve.
+    const originBase = new URL(PREF).origin + "/a/b"; // "https://x.dev/a/b"
+    const canonical = canonicalUrl(PREF, "/a/b"); // "https://x.dev/docs/a/b"
+    expect(originBase).toBe("https://x.dev/a/b");
+    expect(new URL("x", originBase).href).toBe("https://x.dev/a/x");
+    expect(new URL("x", canonical).href).toBe("https://x.dev/docs/a/x");
+    expect(new URL("x", originBase).href).not.toBe(new URL("x", canonical).href);
   });
 });

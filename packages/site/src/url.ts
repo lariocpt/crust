@@ -30,13 +30,40 @@ export const URL_ATTRIBUTES = [
 export type UrlAttribute = (typeof URL_ATTRIBUTES)[number];
 
 /**
- * Options for URL resolution. `siteOrigin` is the site's absolute http(s)
- * origin (scheme + host + port). `pageRoute` is the current page's normalized
- * route, used as the relative base; when omitted the base is the site root.
+ * Options for URL resolution.
+ *
+ * `siteUrl` is the site's configured base URL — the FULL value from the
+ * config, **path prefix included** (`https://x.dev/docs`), no trailing slash
+ * (defineSite enforces). It is NOT `new URL(site).origin`: for a path-prefixed
+ * site (GH Pages under `/docs/`) an origin base silently drops the prefix from
+ * every relative-ref resolution.
+ *
+ * `pageRoute` is the current page's normalized route (prefix NOT included —
+ * routes are prefix-less, see routes.canonicalUrl). When given, relative refs
+ * resolve against `siteUrl + pageRoute`; when omitted, against the site root.
+ *
+ * The invariant every caller relies on (and that tests/render.test.ts pins):
+ *
+ *     urlBase({ siteUrl: site, pageRoute: route }) === canonicalUrl(site, route)
+ *
+ * i.e. the base a relative ref resolves against is exactly the page's
+ * canonical URL. markdown link validation (pages.ts → markdown.ts), `ctx.url()`
+ * and the fence all derive their options the same way, so a relative link and
+ * a canonical URL can never disagree.
  */
 export interface UrlPolicyOptions {
-  siteOrigin: string;
+  siteUrl: string;
   pageRoute?: string;
+}
+
+/**
+ * The ONE base a relative reference resolves against (see UrlPolicyOptions).
+ * Derived here and nowhere else so the markdown checker, `ctx.url()`, the
+ * fence and the emitter cannot drift apart. Internal helper: exported from
+ * this module for the render chunk and the tests, not from index.ts.
+ */
+export function urlBase(opts: UrlPolicyOptions): string {
+  return opts.pageRoute ? `${opts.siteUrl}${opts.pageRoute}` : `${opts.siteUrl}/`;
 }
 
 function urlDiagnostic(code: DiagnosticCode, value: string, message: string): Diagnostic {
@@ -145,14 +172,14 @@ export function validateUrl(value: string, opts: UrlPolicyOptions): string {
 
   let siteOrigin: URL;
   try {
-    siteOrigin = new URL(opts.siteOrigin);
+    siteOrigin = new URL(opts.siteUrl);
   } catch {
     // A caller that hands over an unparseable base is a caller bug, not a
     // value problem — but the function must stay total (never a raw throw).
     throw urlDiagnostic(
       "url.scheme",
       value,
-      `the base ${JSON.stringify(opts.siteOrigin)} is not a parseable URL`,
+      `the base ${JSON.stringify(opts.siteUrl)} is not a parseable URL`,
     );
   }
 
@@ -166,7 +193,7 @@ export function validateUrl(value: string, opts: UrlPolicyOptions): string {
   // is a relative or root-relative ref.
   const SCHEME = /^[A-Za-z][A-Za-z0-9+.-]*:/;
   if (!SCHEME.test(value)) {
-    const base = opts.pageRoute ? `${opts.siteOrigin}${opts.pageRoute}` : `${opts.siteOrigin}/`;
+    const base = urlBase(opts);
     let resolved: URL;
     try {
       resolved = new URL(value, base);
@@ -175,6 +202,8 @@ export function validateUrl(value: string, opts: UrlPolicyOptions): string {
     }
     // A relative ref can only leave the site if the base is not the site —
     // re-check the origin anyway (defense in depth against base misuse).
+    // NOTE this compares the ORIGIN of the (possibly prefixed) site base, so
+    // a path prefix in `siteUrl` neither weakens nor strengthens the check.
     if (
       (resolved.protocol === "http:" || resolved.protocol === "https:") &&
       resolved.origin !== siteOrigin.origin
