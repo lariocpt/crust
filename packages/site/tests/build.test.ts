@@ -6,8 +6,10 @@
 // on failure in BOTH directions, copy fallback, the EINVAL reason for the
 // sibling layout), the crash-recovery contract (a build killed between its
 // two publish renames must not lose the previous output), the concurrent-
-// build lock (build.busy), the public-vs-generated collision e2e, and the
-// publicAsset existence check's traversal bypass.
+// build lock (build.busy), the public-vs-generated collision e2e, the
+// chunk-8 link-validation e2e (a .md link to a nonexistent page and a link to
+// a draft each fail a production build with the line named, the previous
+// output untouched), and the publicAsset existence check's traversal bypass.
 //
 // Honest-failure pattern: the sitemap draft-exclusion, the publish restore,
 // the collision guard, the 404 asset audit, and the lock are exercised by
@@ -74,6 +76,10 @@ interface ConfigOptions {
   publicDirectory?: boolean;
   /** false omits the robots key from the generated config entirely. */
   robots?: boolean;
+  /** When set, route()/parseData() append one line per call to this file. */
+  countFile?: string;
+  /** When true, content.route throws for every page (pre-pass attribution). */
+  routeThrows?: boolean;
 }
 
 function configSource(opts: ConfigOptions = {}): string {
@@ -83,14 +89,42 @@ function configSource(opts: ConfigOptions = {}): string {
       : `${"$"}{ctx.publicAsset(${JSON.stringify(opts.publicAsset)})}`;
   const pubDir = opts.publicDirectory === false ? "" : ' publicDirectory: "public",';
   const robots = opts.robots === false ? "" : `  robots: { indexable: ${opts.indexable ?? true} },`;
+  // route()/parseData() variants: the counting form appends one line per
+  // call so a test can prove each hook fires EXACTLY once per page (the
+  // pre-pass must not double-fire user callbacks).
+  const routeLine = opts.routeThrows
+    ? '    route: () => { throw new Error("route boom"); },'
+    : opts.countFile === undefined
+      ? '    route: ({ relativePath }) => (relativePath === "index" ? "/" : "/" + relativePath),'
+      : [
+          "    route: ({ relativePath }) => {",
+          '      appendFileSync(COUNTER, "route " + relativePath + "\\n");',
+          '      return relativePath === "index" ? "/" : "/" + relativePath;',
+          "    },",
+        ].join("\n");
+  const parseDataLine =
+    opts.countFile === undefined
+      ? ""
+      : [
+          "    parseData: (data, ctx) => {",
+          '      appendFileSync(COUNTER, "parseData " + ctx.sourcePath + "\\n");',
+          "      return data ?? {};",
+          "    },",
+        ].join("\n");
+  const counterImport =
+    opts.countFile === undefined
+      ? ""
+      : `import { appendFileSync } from "node:fs";\nconst COUNTER = ${JSON.stringify(opts.countFile)};`;
   return [
     `import { defineSite, html } from ${JSON.stringify(SRC_INDEX)};`,
+    counterImport,
     "export default defineSite({",
     `  site: ${JSON.stringify(opts.site ?? SITE)},`,
     "  content: {",
     '    directory: "content",',
     '    defaultLayout: "base",',
-    '    route: ({ relativePath }) => (relativePath === "index" ? "/" : "/" + relativePath),',
+    routeLine,
+    parseDataLine,
     "  },",
     "  layouts: {",
     "    base: (ctx) => html`<!doctype html>",
@@ -116,7 +150,7 @@ async function makeSite(root: string, config?: string): Promise<string> {
   await writeFile(
     join(root, "content", "index.md"),
     "---\ntitle: Home\ndescription: The home page\n---\n\n# Hello\n\nWelcome to crust.\n\n" +
-      "[draft](draft.md) and [b](a/b.md).\n",
+      "[b](a/b.md#b) and [top](#hello).\n",
   );
   await writeFile(
     join(root, "content", "a", "b.md"),
@@ -211,10 +245,13 @@ describe("build — happy path", () => {
     expect(index).toContain(`<link rel="stylesheet" href="${SITE}/assets/site-`);
     expect(index).toContain(`<script defer src="${SITE}/assets/app-`);
     expect(index).toContain("<h1");
-    // the relative .md links keep their written destination (chunk 8 rewrites
-    // and validates them); a link to a draft passes chunk 4 untouched.
-    // TODO(chunk 8): link.draft must turn this into an error in prod builds.
-    expect(index).toContain('href="draft.md"');
+    // chunk 8: the relative .md link rewrites against the route table
+    // (a/b.md#b → /a/b#b) and the pure fragment keeps the page's own route
+    // (#hello). Both destinations resolve and carry the fragment's id, so
+    // step 7 passes them silently — the failure modes (a link to a missing
+    // page, a link to a draft) are pinned in the "link validation" block.
+    expect(index).toContain('href="/a/b#b"');
+    expect(index).toContain('href="#hello"');
     expect(t["a/b.html"].toString("utf8")).toContain("<title>B</title>");
 
     // the generated 404: rendered through the default layout, fixed title.
@@ -416,6 +453,170 @@ describe("build — failure contract", () => {
     // the previous output is untouched (by hash), and no litter remains.
     expect(treeHash(await tree(join(root, "dist")))).toBe(before);
     expect((await readdir(root)).filter((n) => n.startsWith(".crust-"))).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// link validation (chunk 8): the real route table as the link resolver, and
+// step 7's link.broken / link.draft as build-blocking errors
+// ---------------------------------------------------------------------------
+
+describe("build — link validation (chunk 8)", () => {
+  test("a .md link to a nonexistent page is link.broken (source + line + destination); previous output untouched", async () => {
+    const root = await tmp("crust-site-link-broken-");
+    const cfg = await makeSite(root);
+    await build({ configFile: cfg });
+    const before = treeHash(await tree(join(root, "dist")));
+
+    // the link paragraph sits on file line 6 (4 frontmatter lines + blank)
+    await writeFile(
+      join(root, "content", "index.md"),
+      "---\ntitle: Home\ndescription: The home page\n---\n\n[nope](missing.md)\n",
+    );
+    let error: unknown;
+    try {
+      await build({ configFile: cfg });
+    } catch (e) {
+      error = e;
+    }
+    expect(error).toBeInstanceOf(BuildError);
+    const diagnostics = (error as BuildError).diagnostics;
+    // exactly one problem in the whole run: the broken link
+    expect(diagnostics).toEqual([
+      {
+        code: "link.broken",
+        severity: "error",
+        sourcePath: "content/index.md",
+        line: 6,
+        message:
+          'internal link on line 6 of "content/index.md" points at "/missing": ' +
+          "that route is not a page of this site (not in the route table, not a draft)",
+      },
+    ]);
+    // the previous output is untouched (by hash), and no litter remains
+    expect(treeHash(await tree(join(root, "dist")))).toBe(before);
+    expect((await readdir(root)).filter((n) => n.startsWith(".crust-"))).toEqual([]);
+  });
+
+  test("a .md link to a draft page is link.draft (ERROR in a production build); previous output untouched", async () => {
+    const root = await tmp("crust-site-link-draft-");
+    const cfg = await makeSite(root);
+    await build({ configFile: cfg });
+    const before = treeHash(await tree(join(root, "dist")));
+
+    // the draft exists (content/draft.md, draft: true) but is excluded from
+    // the production build — the link resolves (the resolver saw it) and
+    // step 7 must turn it into an error, never let it pass silently.
+    await writeFile(
+      join(root, "content", "index.md"),
+      "---\ntitle: Home\ndescription: The home page\n---\n\n[work](draft.md)\n",
+    );
+    let error: unknown;
+    try {
+      await build({ configFile: cfg });
+    } catch (e) {
+      error = e;
+    }
+    expect(error).toBeInstanceOf(BuildError);
+    const diagnostics = (error as BuildError).diagnostics;
+    expect(diagnostics).toEqual([
+      {
+        code: "link.draft",
+        severity: "error",
+        sourcePath: "content/index.md",
+        line: 6,
+        message:
+          'internal link on line 6 of "content/index.md" points at the draft page "/draft": ' +
+          "drafts are not published — the link would 404 on the production site",
+      },
+    ]);
+    // the previous output is untouched (by hash), and no litter remains
+    expect(treeHash(await tree(join(root, "dist")))).toBe(before);
+    expect((await readdir(root)).filter((n) => n.startsWith(".crust-"))).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// pre-pass discipline (chunk 8): one read + one frontmatter parse per file,
+// user hooks fired exactly once, broken pages diagnosed once and never routed,
+// a throwing content.route attributed to its page.
+// ---------------------------------------------------------------------------
+
+describe("build — pre-pass and hook discipline (chunk 8)", () => {
+  test("route() and parseData() fire EXACTLY once per page (pre-pass must not double-fire user hooks)", async () => {
+    const root = await tmp("crust-site-hooks-");
+    const counter = join(root, "calls.log");
+    const cfg = await makeSite(root, configSource({ countFile: counter }));
+    await build({ configFile: cfg });
+    const lines = (await readFile(counter, "utf8")).trim().split("\n").sort();
+    // 3 content pages (index, a/b, draft): route() once each in the pre-pass
+    // (the route table REPLAYS the decisions, never re-derives), parseData
+    // once each in parsePage (the pre-pass never renders markdown).
+    expect(lines.filter((l) => l.startsWith("route "))).toEqual([
+      "route a/b",
+      "route draft",
+      "route index",
+    ]);
+    expect(lines.filter((l) => l.startsWith("parseData "))).toEqual([
+      "parseData content/a/b.md",
+      "parseData content/draft.md",
+      "parseData content/index.md",
+    ]);
+    // nothing else called the hooks
+    expect(lines).toHaveLength(6);
+  });
+
+  test("a page failing the frontmatter pre-pass is diagnosed ONCE and never routed", async () => {
+    const root = await tmp("crust-site-badfm-");
+    const cfg = await makeSite(root);
+    await writeFile(join(root, "content", "bad.md"), "---\ntitle: [unclosed\n---\n\nbody\n");
+    let error: unknown;
+    try {
+      await build({ configFile: cfg });
+    } catch (e) {
+      error = e;
+    }
+    expect(error).toBeInstanceOf(BuildError);
+    const diagnostics = (error as BuildError).diagnostics;
+    // the frontmatter failure surfaces EXACTLY once — the pre-pass reports
+    // it and parsePage is never called for the file (no double-fire).
+    expect(diagnostics.filter((d) => d.sourcePath === "content/bad.md")).toEqual([
+      {
+        code: "frontmatter.parse-error",
+        severity: "error",
+        sourcePath: "content/bad.md",
+        line: 2,
+        column: 17,
+        message: expect.stringContaining("frontmatter YAML is not parseable"),
+      },
+    ]);
+    // the page was never routed (no Page, no table entry). Its broken link
+    // is NOT additionally reported: the pre-existing error gate throws before
+    // step 7 whenever any earlier error exists ("emit only reached
+    // error-free") — the build fails either way, never a false pass. The
+    // link.broken path itself is pinned by the missing.md e2e above.
+    expect(diagnostics.map((d) => d.code).filter((c) => c.startsWith("link."))).toEqual([]);
+  });
+
+  test("a throwing content.route is attributed to each page exactly once (pre-pass), never re-thrown by the table", async () => {
+    const root = await tmp("crust-site-routethrow-");
+    const cfg = await makeSite(root, configSource({ routeThrows: true }));
+    let error: unknown;
+    try {
+      await build({ configFile: cfg });
+    } catch (e) {
+      error = e;
+    }
+    expect(error).toBeInstanceOf(BuildError);
+    const invalid = (error as BuildError).diagnostics.filter((d) => d.code === "route.invalid");
+    // one per page — the pre-pass caught the throw with the page's
+    // sourcePath, and the route table replayed (never re-derived) it.
+    expect(invalid.map((d) => d.sourcePath).sort()).toEqual([
+      "content/a/b.md",
+      "content/draft.md",
+      "content/index.md",
+    ]);
+    expect(invalid.every((d) => d.message.includes("route boom"))).toBe(true);
   });
 });
 

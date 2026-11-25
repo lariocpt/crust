@@ -75,6 +75,73 @@ export interface RoutedPage extends Page {
   layout: string;
 }
 
+/**
+ * One page's route decision (chunk 8). A page's internal .md links must
+ * resolve against the FULL route table, but the table is built from parsed
+ * pages — so every page's route has to be known BEFORE the first markdown
+ * render. The decision needs only the frontmatter (`route`/`draft`) plus
+ * `content.route`, all of which the pre-pass has from the frontmatter parse
+ * alone: that is why this function takes them as plain values, not a Page.
+ * `buildRouteTable` reuses the same helper for callers that do not pre-pass
+ * decisions, so the derivation logic (and its diagnostics) has one home.
+ */
+export interface PrecomputedRoute {
+  /** The final normalized route; undefined when the derivation failed. */
+  readonly route?: string;
+  /** The frontmatter `draft` flag (the link resolver and the table need it). */
+  readonly draft: boolean;
+  /** The decision's diagnostics (route.missing / route.invalid / …). */
+  readonly diagnostics: Diagnostic[];
+}
+
+export function derivePageRoute(args: {
+  /** The frontmatter `route` (already normalized at parse time), when present. */
+  frontmatterRoute?: string;
+  relativePath: string;
+  sourcePath: string;
+  routeFn?: (arg: { relativePath: string }) => string;
+  draft: boolean;
+}): PrecomputedRoute {
+  const { frontmatterRoute, relativePath, sourcePath, routeFn, draft } = args;
+  let candidate: unknown = frontmatterRoute;
+  if (candidate === undefined) {
+    if (!routeFn) {
+      return {
+        draft,
+        diagnostics: [
+          {
+            code: "route.missing",
+            severity: "error",
+            sourcePath,
+            message: `page ${sourcePath} has no route: no frontmatter "route" and content.route is not configured`,
+          },
+        ],
+      };
+    }
+    try {
+      candidate = routeFn({ relativePath });
+    } catch (e) {
+      return {
+        draft,
+        diagnostics: [
+          {
+            code: "route.invalid",
+            severity: "error",
+            sourcePath,
+            message: `content.route threw for page ${sourcePath}: ${e instanceof Error ? e.message : String(e)}`,
+          },
+        ],
+      };
+    }
+  }
+  try {
+    return { route: normalizeRoute(candidate, { sourcePath }), draft, diagnostics: [] };
+  } catch (d) {
+    if (!isDiagnostic(d)) throw d;
+    return { draft, diagnostics: [d] };
+  }
+}
+
 export interface RouteTable {
   /** Production pages (drafts excluded), in lexicographic route order. */
   pages: RoutedPage[];
@@ -108,7 +175,11 @@ export interface RouteTable {
  *    generated 404 page. The message names the draft count in the
  *    drafts-only case.
  */
-export function buildRouteTable(pages: readonly Page[], resolvedSite: ResolvedSite): RouteTable {
+export function buildRouteTable(
+  pages: readonly Page[],
+  resolvedSite: ResolvedSite,
+  precomputed?: ReadonlyMap<string, PrecomputedRoute>,
+): RouteTable {
   const diagnostics: Diagnostic[] = [];
   const routed: RoutedPage[] = [];
   const routeFn = resolvedSite.content.route;
@@ -116,40 +187,36 @@ export function buildRouteTable(pages: readonly Page[], resolvedSite: ResolvedSi
 
   for (const page of pages) {
     diagnostics.push(...page.diagnostics);
+
+    // Route derivation. The build's pre-pass (chunk 8) computes every route
+    // BEFORE the first markdown render — a page's .md links resolve against
+    // the full table, so the table's contents must already exist when the
+    // links are written. Callers with a pre-pass hand the decisions over and
+    // the table REUSES them (replaying the same diagnostics, never
+    // re-deriving: a second derivation would double-report, or re-invoke a
+    // throwing content.route). Pre-pass decisions replay UNCONDITIONALLY —
+    // even for a page that already failed: the pre-pass already ran (it
+    // already called content.route), so dropping its diagnostics would
+    // silently swallow a real problem the run paid for. Without a pre-pass
+    // the same helper derives on the spot, and only for pages that have not
+    // failed (the historical behaviour: no spurious route.* follow-ups on a
+    // broken page, no user callback invoked for it).
+    const pre = precomputed?.get(page.sourcePath);
+    if (pre) diagnostics.push(...pre.diagnostics);
     // a page that already failed validation is never routed
     if (page.diagnostics.some((d) => d.severity === "error")) continue;
-
-    let candidate: unknown = page.route;
-    if (candidate === undefined) {
-      if (!routeFn) {
-        diagnostics.push({
-          code: "route.missing",
-          severity: "error",
-          sourcePath: page.sourcePath,
-          message: `page ${page.sourcePath} has no route: no frontmatter "route" and content.route is not configured`,
-        });
-        continue;
-      }
-      try {
-        candidate = routeFn({ relativePath: page.relativePath });
-      } catch (e) {
-        diagnostics.push({
-          code: "route.invalid",
-          severity: "error",
-          sourcePath: page.sourcePath,
-          message: `content.route threw for page ${page.sourcePath}: ${e instanceof Error ? e.message : String(e)}`,
-        });
-        continue;
-      }
-    }
-    let route: string;
-    try {
-      route = normalizeRoute(candidate, { sourcePath: page.sourcePath });
-    } catch (d) {
-      if (!isDiagnostic(d)) throw d;
-      diagnostics.push(d);
-      continue;
-    }
+    const decision =
+      pre ??
+      derivePageRoute({
+        frontmatterRoute: page.route,
+        relativePath: page.relativePath,
+        sourcePath: page.sourcePath,
+        routeFn,
+        draft: page.draft,
+      });
+    if (!pre) diagnostics.push(...decision.diagnostics);
+    if (decision.route === undefined) continue;
+    const route = decision.route;
 
     const layout = page.layout ?? resolvedSite.content.defaultLayout;
     if (!Object.hasOwn(resolvedSite.layouts, layout)) {

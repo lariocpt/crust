@@ -84,6 +84,48 @@ export const DiagnosticCodes = Object.freeze({
   // markdown-it itself threw while rendering (it is otherwise error-tolerant
   // and treats almost everything as text). Line is in FULL-FILE coordinates.
   "markdown.parse-error": "markdown.parse-error",
+  // An internal link whose destination is not a page of the site (not in the
+  // route table, and not the /404 special case which has its own wording).
+  // ERROR in a production build, WARNING in dev (plan §5: broken internal
+  // links are demoted in dev so the dev server can still show the rest of
+  // the site — never silently dropped). The diagnostic names the source
+  // page, the (best-effort) line, and the destination route.
+  "link.broken": "link.broken",
+  // An internal link whose destination is a DRAFT page. Drafts are excluded
+  // from a production build, so the link would 404 on the published site:
+  // ERROR in build mode, WARNING in dev (where drafts are rendered and the
+  // link actually resolves — plan §5).
+  "link.draft": "link.draft",
+  // A link carrying a #fragment whose destination page's FINAL EMITTED html
+  // contains no id="fragment" (checked against the ids collected from the
+  // emitted bytes, same-page fragments included). Always an error: a dead
+  // anchor publishes a link that scrolls nowhere.
+  "link.missing-fragment": "link.missing-fragment",
+  // metadata.* — the per-emitted-page metadata validation (plan §3: head()
+  // emits title/description/canonical/og:* but NEVER charset; the layout
+  // hand-writes <meta charset>, and this step errors when the contract is
+  // broken). All are errors in every mode: a page missing its charset or
+  // its head block is broken output, in dev as much as in prod.
+  // The emitted document carries no <meta charset> at all.
+  "metadata.charset-missing": "metadata.charset-missing",
+  // More than one <meta charset> (a layout that both hand-writes one and
+  // calls head() is the only way head() could contribute a second — it never
+  // emits charset, so in practice this is a layout duplicating its own tag).
+  "metadata.charset-duplicate": "metadata.charset-duplicate",
+  // No <title> in the emitted document: the layout never included head()
+  // (head() is the only <title> producer in v1).
+  "metadata.title-missing": "metadata.title-missing",
+  // More than one <title>: head() emitted one and the layout hand-wrote
+  // another.
+  "metadata.title-duplicate": "metadata.title-duplicate",
+  // More than one rel="canonical": head() emitted one and the layout added
+  // another. (Zero is reported as metadata.head-missing, not a separate
+  // canonical-missing code: in v1 head() is the ONLY canonical producer, so
+  // an absent canonical IS "head() never called".)
+  "metadata.canonical-duplicate": "metadata.canonical-duplicate",
+  // No rel="canonical" in the emitted document — the detection for "the
+  // layout never called head()" (head() is the only canonical producer).
+  "metadata.head-missing": "metadata.head-missing",
   // render.* — the template value contract (plan §1: "never a false pass,
   // never a silent coercion"). All render.bad-value; the message says what
   // the value was. A value we cannot name a safe rendering for is a build
@@ -176,6 +218,13 @@ export const DiagnosticCodes = Object.freeze({
   // discovery and reading, is unreadable, …). The file was FOUND by discovery,
   // so silence here would be a false pass (crust rule 1) — always an error.
   "content.read-failed": "content.read-failed",
+  // A throw that is NOT a read failure: the pre-pass already read the file
+  // before parseFrontmatter ran, or parsePage threw with the frontmatter
+  // already provided (renderMarkdown contains its own throws and parseData
+  // is caught inside it) — either way it is an engine bug, not a read
+  // problem. Labeled distinct from content.read-failed so the code stays
+  // true (crust rule 1).
+  "content.parse-failed": "content.parse-failed",
   // Defense in depth (chunk 7): a resolved write path left the staging
   // directory. Routes are normalized long before emit, so this can only fire
   // on an internal bug — but a write outside staging would escape the atomic

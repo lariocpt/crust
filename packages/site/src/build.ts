@@ -1,5 +1,5 @@
 // The SSG pipeline (plan §4): config → content → route table → assets →
-// render → emit → publish, and nothing else. Every stage COLLECTS diagnostics
+// render → validate → emit → publish, and nothing else. Every stage COLLECTS diagnostics
 // instead of dying on the first problem (the config.ts convention), so one run
 // reports every problem; the build rejects with a BuildError carrying ALL of
 // them, staging is deleted, and the previous output is untouched (publish is
@@ -20,7 +20,12 @@ import { resolve as nativeResolve, posix } from "node:path";
 import { pathToFileURL } from "node:url";
 import { buildAssets, copyPublicDir, publicCollisions } from "./assets";
 import { checkOutputOverlap, resolveConfigPaths } from "./config";
-import { buildRouteTable, discoverContent } from "./content";
+import {
+  buildRouteTable,
+  derivePageRoute,
+  discoverContent,
+  type PrecomputedRoute,
+} from "./content";
 import { BuildError, compareStrings, type Diagnostic, sortDiagnostics } from "./diagnostics";
 import {
   acquireBuildLock,
@@ -33,10 +38,12 @@ import {
   stagingDirFor,
   writePages,
 } from "./emit";
+import { parseFrontmatter } from "./frontmatter";
 import { parsePage } from "./pages";
 import { collectUnusedAssets, renderAll, renderPage } from "./render";
 import { routeToFile } from "./routes";
-import type { Page, ResolvedSite, Site } from "./types";
+import type { FrontmatterResult, Page, ResolvedSite, RouteResolver, Site } from "./types";
+import { type EmittedPage, type KnownRoute, validatePages } from "./validate";
 
 function toPosix(p: string): string {
   return p.replace(/\\/g, "/");
@@ -85,7 +92,7 @@ export interface BuildResult {
 }
 
 /**
- * INTERNAL (chunk 8's dev watcher): the BuildResult plus the per-page readText
+ * INTERNAL (chunk 9's dev watcher): the BuildResult plus the per-page readText
  * reverse index (page sourcePath → realpath'd dependency files). Never part
  * of the public contract — `build()` projects it away.
  */
@@ -219,13 +226,86 @@ async function runBuild(
 ): Promise<BuildInternalResult> {
   const all: Diagnostic[] = [];
 
-  // content: discover → parse. parsePage throws BuildError for frontmatter
-  // problems (chunk 2's contract); fold them into the collected set instead of
-  // dying, so one run reports every broken page.
+  // content: discover → pre-pass → parse. The pre-pass reads each file ONCE
+  // and parses its frontmatter, so every page's route (frontmatter `route`
+  // ?? content.route(relativePath), normalized) and draft flag are known
+  // BEFORE the first markdown render: a page's relative .md links must
+  // resolve against the FULL route table, which only exists once every
+  // page's route is derived. Frontmatter problems fold into the collected
+  // set (the parse loop skips the file — no Page is created for it) instead
+  // of dying, so one run reports every broken page.
   const files = await discoverContent(resolved);
+  const frontmatters = new Map<string, FrontmatterResult>();
+  const precomputed = new Map<string, PrecomputedRoute>();
+  for (const file of files) {
+    const sourcePath = posix.relative(resolved.configDir, file.absolutePath);
+    let text: string;
+    try {
+      text = await Bun.file(file.absolutePath).text();
+    } catch (e) {
+      all.push({
+        code: "content.read-failed",
+        severity: "error",
+        sourcePath,
+        message: `reading ${JSON.stringify(sourcePath)} failed: ${messageOf(e)}`,
+      });
+      continue;
+    }
+    let parsed: FrontmatterResult;
+    try {
+      parsed = parseFrontmatter(text, sourcePath);
+    } catch (e) {
+      // A frontmatter problem is the located BuildError chunk 2 raises —
+      // folded into the collected set. A NON-BuildError here is an engine
+      // bug, and the read already succeeded, so labeling it
+      // content.read-failed would be a lie — content.parse-failed keeps
+      // the code true (crust rule 1).
+      if (e instanceof BuildError) {
+        all.push(...e.diagnostics);
+      } else {
+        all.push({
+          code: "content.parse-failed",
+          severity: "error",
+          sourcePath,
+          message: `parsing ${JSON.stringify(sourcePath)} failed: ${messageOf(e)}`,
+        });
+      }
+      continue;
+    }
+    frontmatters.set(sourcePath, parsed);
+    precomputed.set(
+      sourcePath,
+      derivePageRoute({
+        frontmatterRoute: parsed.frontmatter.route,
+        relativePath: file.relativePath,
+        sourcePath,
+        routeFn: resolved.content.route,
+        draft: parsed.frontmatter.draft === true,
+      }),
+    );
+  }
+  // The link resolver answers .md candidates from the pre-pass decisions —
+  // the route set the route table will replay, with the drafts INCLUDED: the
+  // PRODUCTION table excludes drafts, but link resolution must see them so a
+  // link to a draft resolves (and step 7 reports link.draft with the right
+  // destination) instead of passing silently. A candidate no file derives is
+  // null (recorded exists:false — step 7 turns it into link.broken).
+  // "external" is never returned: a candidate reaching the resolver is an
+  // already-normalized route, and a route is never an external URL.
+  const preRoutes = new Map<string, boolean>();
+  for (const decision of precomputed.values()) {
+    if (decision.route !== undefined) preRoutes.set(decision.route, decision.draft);
+  }
+  const routeResolver: RouteResolver = (candidate) => {
+    const draft = preRoutes.get(candidate);
+    return draft === undefined ? null : { route: candidate, exists: true, isDraft: draft };
+  };
+
   const pages: Page[] = [];
   for (const file of files) {
     const sourcePath = posix.relative(resolved.configDir, file.absolutePath);
+    const frontmatter = frontmatters.get(sourcePath);
+    if (frontmatter === undefined) continue; // diagnosed in the pre-pass; no Page
     try {
       pages.push(
         await parsePage({
@@ -233,25 +313,31 @@ async function runBuild(
           relativePath: file.relativePath,
           sourcePath,
           resolvedSite: resolved,
+          frontmatter,
+          pageRoute: precomputed.get(sourcePath)?.route,
+          routeResolver,
         }),
       );
     } catch (e) {
-      if (e instanceof BuildError) all.push(...e.diagnostics);
-      else
+      // With a provided frontmatter parsePage performs no file I/O
+      // (renderMarkdown contains its own throws, parseData is caught inside
+      // it), so a throw here is an engine bug, not a read failure — recorded,
+      // never fatal, and labeled distinct from content.read-failed so the
+      // code stays true (crust rule 1).
+      if (e instanceof BuildError) {
+        all.push(...e.diagnostics);
+      } else {
         all.push({
-          code: "content.read-failed",
+          code: "content.parse-failed",
           severity: "error",
           sourcePath,
-          message: `reading ${JSON.stringify(sourcePath)} failed: ${messageOf(e)}`,
+          message: `parsing ${JSON.stringify(sourcePath)} failed: ${messageOf(e)}`,
         });
+      }
     }
   }
-  // TODO(chunk 8): pass pageRoute + a route-table RouteResolver into parsePage
-  // and validate page.links (link.broken / link.draft, error in prod / warning
-  // in dev). Until then relative .md links are recorded exists:false and a
-  // link to a draft passes silently — chunk 8 turns that red.
 
-  const table = buildRouteTable(pages, resolved);
+  const table = buildRouteTable(pages, resolved, precomputed);
   all.push(...table.diagnostics);
 
   const assets = await buildAssets(resolved, staging);
@@ -305,6 +391,7 @@ async function runBuild(
   // emit (only reached error-free: every render carried a document)
   const documents = [...rendered.pages, notFoundRender];
   const items: EmitFile[] = [];
+  const emitted: EmittedPage[] = [];
   for (const r of documents) {
     if (r.html === null) {
       // renderPage's contract is "null html ⟺ an error diagnostic", and no
@@ -321,7 +408,32 @@ async function runBuild(
       continue;
     }
     items.push({ route: r.page.route, file: routeToFile(r.page.route), html: r.html });
+    // step 7's input: the final emitted document plus the links the markdown
+    // pass recorded (internal destinations only — external URLs are never
+    // in there, so they are never link- or fragment-checked).
+    emitted.push({
+      route: r.page.route,
+      sourcePath: r.page.sourcePath,
+      html: r.html,
+      links: r.page.links,
+    });
   }
+  // step 7 (plan §4.7): link/fragment/metadata validation over the FINAL
+  // emitted documents, BEFORE anything lands in staging — the fragment check
+  // needs the bytes about to be written, and a failed validation must block
+  // the publish, not clean up after it. The route set is the production
+  // pages AND the drafts, excluding the generated /404 (a link to it is
+  // link.broken — the 404 page is not a link target). Errors fall through
+  // to the gate below (nothing is published); warnings join
+  // BuildResult.warnings.
+  const knownRoutes = new Map<string, KnownRoute>();
+  for (const p of table.pages) {
+    if (p.route !== "/404") knownRoutes.set(p.route, { draft: false });
+  }
+  for (const p of table.drafts) {
+    if (p.route !== "/404") knownRoutes.set(p.route, { draft: true });
+  }
+  all.push(...validatePages({ mode: "build", pages: emitted, routes: knownRoutes }));
   if (all.some((d) => d.severity === "error")) throw new BuildError(all);
 
   await writePages(staging, items);
@@ -361,7 +473,7 @@ async function writeFileAt(staging: string, file: string, contents: string): Pro
 
 /**
  * Run the pipeline and return the INTERNAL result (BuildResult + pageDeps).
- * Chunk 8's dev watcher imports this; authors use `build()`.
+ * Chunk 9's dev watcher imports this; authors use `build()`.
  */
 export async function buildInternal(options: BuildOptions): Promise<BuildInternalResult> {
   const started = performance.now();

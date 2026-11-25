@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { defineSite, resolveConfigPaths } from "../src/config.ts";
-import { buildRouteTable, discoverContent } from "../src/content.ts";
+import { buildRouteTable, discoverContent, type PrecomputedRoute } from "../src/content.ts";
 import type { Diagnostic } from "../src/diagnostics.ts";
 import { trustedHtml } from "../src/html.ts";
 import type { Page, ResolvedSite, SiteConfig } from "../src/types.ts";
@@ -402,6 +402,42 @@ describe("buildRouteTable", () => {
     expect(result.diagnostics.map((d) => d.code)).toEqual(["content.no-pages", "link.invalid"]);
     expect(result.routeIndex.size).toBe(0);
     expect(result.pages).toHaveLength(0);
+  });
+
+  test("precomputed route diagnostics replay even when the page already failed (one run reports every problem)", () => {
+    // The build's pre-pass has ALREADY derived the route (and called
+    // content.route) before parsePage can fail the page — dropping the
+    // decision's diagnostics for an already-failing page would silently
+    // swallow a real problem the pre-pass paid for.
+    const page: Page = {
+      ...pageWith("a.md"),
+      diagnostics: [
+        {
+          severity: "error",
+          code: "link.invalid",
+          message: "blocked destination",
+          sourcePath: "content/a.md",
+          line: 3,
+        },
+      ],
+    };
+    const routeDiag: Diagnostic = {
+      severity: "error",
+      code: "route.invalid",
+      message: "content.route threw for page content/a.md: boom",
+      sourcePath: "content/a.md",
+    };
+    const pre = new Map<string, PrecomputedRoute>([
+      ["content/a.md", { draft: false, diagnostics: [routeDiag] }],
+    ]);
+    const result = buildRouteTable([page], site(), pre);
+    // line-less route.invalid sorts before the lined link.invalid
+    expect(result.diagnostics.map((d) => d.code)).toEqual([
+      "content.no-pages",
+      "route.invalid",
+      "link.invalid",
+    ]);
+    expect(result.routeIndex.size).toBe(0);
   });
 
   test("a failing page is excluded from collision detection (it can never go live)", () => {

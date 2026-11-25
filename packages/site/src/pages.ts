@@ -8,7 +8,7 @@
 import type { Diagnostic } from "./diagnostics";
 import { parseFrontmatter } from "./frontmatter";
 import { renderMarkdown } from "./markdown";
-import type { Page, ResolvedSite, RouteResolver } from "./types";
+import type { FrontmatterResult, Page, ResolvedSite, RouteResolver } from "./types";
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
@@ -47,6 +47,14 @@ export interface ParsePageInput {
   pageRoute?: string;
   /** Route-table lookup handed to the markdown renderer (chunk 6 wires it). */
   routeResolver?: RouteResolver;
+  /**
+   * Already-parsed frontmatter (chunk 8's pre-pass reads the file and parses
+   * the frontmatter ONCE, then hands it over so parsePage skips its own
+   * read+parse — a frontmatter problem is diagnosed exactly once, and the
+   * file is read exactly once). Without it, parsePage reads and parses as
+   * before.
+   */
+  frontmatter?: FrontmatterResult;
 }
 
 /**
@@ -59,9 +67,12 @@ export async function parsePage(input: ParsePageInput): Promise<Page> {
   const { absolutePath, relativePath, sourcePath, resolvedSite } = input;
   // Bun.file().text() hands back the raw bytes decoded; parseFrontmatter
   // normalizes CRLF/CR and strips a BOM, and the body it returns is already
-  // LF-only — the markdown renderer never sees a CRLF.
-  const text = await Bun.file(absolutePath).text();
-  const parsed = parseFrontmatter(text, sourcePath);
+  // LF-only — the markdown renderer never sees a CRLF. A caller that already
+  // parsed the frontmatter (chunk 8's pre-pass) passes the result, and the
+  // file is not re-read: the frontmatter — and its diagnostics — are
+  // produced exactly once.
+  const parsed =
+    input.frontmatter ?? parseFrontmatter(await Bun.file(absolutePath).text(), sourcePath);
   // The URL policy's base is the FULL site URL — path prefix included — and
   // markdown.ts combines it with `pageRoute`, so the base for a relative ref
   // is exactly the page's canonical URL (url.ts: urlBase === canonicalUrl).
