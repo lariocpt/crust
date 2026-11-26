@@ -4,6 +4,81 @@ Notable changes to crust. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project is
 pre-1.0, so minor versions may carry breaking changes.
 
+## [Unreleased]
+
+### Fixed
+
+- **gen-fixtures: a negative case is emitted only when its mutation is proven to
+  violate the schema.** The generator read its own validator's "no violations" as "this
+  body is valid". That validator passes every keyword it does not judge, so five mutation
+  families shipped as `-> 400` against servers that correctly answer `200`: an `enum`
+  containing the sentinel crust injects, a `pattern: "^.*$"` that matches the
+  pattern-violation sentinel, `minimum: 1e20` where `minimum - 1` rounds straight back to
+  the minimum, an `enum` branch beside an unrestricted `string` alternative, and an
+  "unexpected property" whose name the schema declares. A strict proof layer
+  (`src/genFixtures/proof.ts`) now answers proven-invalid / proven-valid / cannot-tell,
+  and it also judges `multipleOf`, `const`, `uniqueItems`, `not` and `oneOf`'s
+  exactly-one, which the permissive validator passes untouched. A mutation proven
+  still-valid is dropped and named on stdout and in the manifest; a rejection proven only
+  at the object (a union branch that demands the field) keeps its status assertion and
+  gives up the location it cannot earn.
+- **gen-fixtures: an item-path validation matrix now needs a resource that exists.**
+  `resolvePath` fills `{itemId}` with a random uuid — the same call the unknown-id
+  `-> 404` family uses — so `PUT /items/{itemId} too short 'name' -> 400` sent an invalid
+  body to a resource that does not exist, and a server that resolves the resource before
+  reading the body answered 404. Measured against a correct implementation, 3 of the 4
+  cases that spec generated failed, for a reason no spec states. The matrix is emitted
+  only where the setup module can name a resource that exists; otherwise the cases are
+  dropped and named, with the fix in the notice.
+- **gen-fixtures: configured statuses are 4xx.** `expectations.validationStatus` and
+  `operations[*].validationStatus`/`errorStatus` accepted 5xx while the error said "only
+  client-error statuses". A fixture cannot hold a server to "this request makes it
+  fail": a `500` expectation plus an error-shaped body turns a crash into a passing
+  negative test. The bound is now 400–499, with `serverErrorStatus: true` as the explicit
+  opt-in that widens it to 400–599 and prints a notice on every generation that uses it.
+- **gen-fixtures: a spec that admits no value is blamed on the spec.** `specDeadEnd`
+  recognised only the enum spelling of "no value satisfies this field", so
+  `{integer, minimum: 1.5, maximum: 1.9}`, `{string, minLength: 5, maxLength: 2}`,
+  `{array, minItems: 3, maxItems: 1}` and `uniqueItems` demanding more distinct members
+  than `items` can supply were invisible: no notice, and every case built on that body
+  asserted a violation on a field that can never be valid. Where a notice did appear it
+  blamed crust's sampled value for a contradiction the spec wrote. A case that *removes*
+  the unsatisfiable field survives — with the field absent the contradiction is absent.
+- **gen-fixtures: CRUD flows prove identity, change and persistence.** The read step
+  asked whether the captured id appeared anywhere in the body
+  (`JSON.stringify(j).includes(id)`, which `{"id":"wrong","note":"<id>"}` satisfied, and
+  with the variable unset the `?? " "` fallback passed any body containing a space); it
+  now compares the id field at the captured location. A PATCH sent one property
+  regardless of the operation's own `required`, so the step 400'd against a correct
+  server; the update value was the same deterministic value as the create body, proving
+  only that the endpoint accepts a body; and nothing read the change back. A
+  `flowOverrides` entry also certified an unsound create body instead of fixing it.
+- **test-fixture: `output.schema` enforces `additionalProperties: false`.** It was
+  validated with the mock server's permissive defaults, which leave that keyword
+  unsupported, so a fixture whose response schema forbade extra fields passed while the
+  server returned them. The runner validates in strict mode now — the mock must not
+  reject live traffic because a server added a field, but `output.schema` is an assertion
+  the user wrote. Composed nodes stay exempt and a schema that omits the keyword is
+  unaffected.
+
+### Added
+
+- **`resolveKnownPath(ctx, template)`** — optional setup export, and the only way to get
+  a validation matrix on an item path. Same job as `resolvePath`, but every non-scope
+  `{param}` is filled with the id of a resource `shared()` created. Cases that need it are
+  emitted through it and the manifest records `known-resource:<param>` instead of
+  `resource:<param>`.
+- **`expectations.validationErrorTypes`** — maps a crust constraint name (`required`,
+  `type`, `enum`, `pattern`, `minLength`, `maxLength`, `minimum`, `maximum`,
+  `additionalProperties`) to the error code this API emits for it, which upgrades a
+  `fastapi` matcher from "an error named this field" to "this rule failed". Attribution is
+  earned by configuration, never guessed: an unmapped constraint stays field-attributed,
+  and the crust envelope — which carries no machine-readable rule code — stays
+  field-attributed by construction.
+- **`validationOracle.constraint` and `validationOracle.attribution`** in the manifest, so
+  a reader can see how strong each emitted matcher is (`status`, `field` or `constraint`)
+  without reading the generated predicate.
+
 ## [0.4.0]
 
 ### Release milestone
