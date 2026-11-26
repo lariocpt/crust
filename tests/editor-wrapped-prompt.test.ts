@@ -17,8 +17,8 @@ import * as editor from "../src/editor";
 import * as interrupt from "../src/interrupt";
 
 const CSI = "\x1b[";
-const climb = (rows: number): string => CSI + rows + "A";
-const eraseBelow = "\r" + CSI + "J";
+const climb = (rows: number): string => `${CSI}${rows}A`;
+const eraseBelow = `\r${CSI}J`;
 
 /**
  * Does the stream contain a cursor-up? Splitting on the CSI constant keeps the
@@ -120,8 +120,8 @@ describe("a wrapped prompt line is repainted from its first row (G31)", () => {
     // erase-to-bottom, and CSI K stays the whole erase.
     const out = await drive({ feeds: ["e", "c", "h", "o", "\r"], columns: 80 });
     expect(cursorMovesUp(out)).toBe(false);
-    expect(out).not.toContain(CSI + "J");
-    expect(out).toContain(CSI + "K");
+    expect(out).not.toContain(`${CSI}J`);
+    expect(out).toContain(`${CSI}K`);
   });
 
   test("the repair never opens a line with a newline (that is how a prompt eats scrollback)", async () => {
@@ -131,7 +131,7 @@ describe("a wrapped prompt line is repainted from its first row (G31)", () => {
       feeds: ["e", "c", "h", "o", "space", "t", "e", "x", "t", "\r"],
       columns: 30,
     });
-    expect(out.split("\n")[0]).toContain(CSI + "J");
+    expect(out.split("\n")[0]).toContain(`${CSI}J`);
   });
 
   test("a prompt of exactly N×width is known to be flush, so search entry adds no newline", async () => {

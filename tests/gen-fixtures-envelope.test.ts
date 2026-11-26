@@ -44,6 +44,7 @@ import {
   generateFixtures,
 } from "../src/genFixtures/generate";
 import { runFixtures } from "../src/testFixture/runner";
+import { required } from "./support/required";
 
 // Shared tmpdir root; the helper above and every nested describe resolve
 // their trees under it, and the outer beforeAll/afterAll owns its lifetime.
@@ -577,7 +578,7 @@ describe("gen-fixtures — validationEnvelope (configured validation-response en
       const expectTarget = (caseName: string, loc: string[], kind: string) => {
         const c = byName.get(caseName);
         expect(c).toBeDefined();
-        expect(c!.validationOracle?.target).toEqual({ loc, kind });
+        expect(required(c).validationOracle?.target).toEqual({ loc, kind });
       };
       expectTarget(
         "POST /api/legacy missing required 'name' -> 400",
@@ -819,7 +820,7 @@ describe("gen-fixtures — validationEnvelope (configured validation-response en
       const { result, manifest } = await generate("env-tt", SPEC, MAIN_EXPECTATIONS);
       const fastapiFile = result.files.find((f) => f.includes("fastapi.gen.crust.ts"));
       expect(fastapiFile).toBeDefined();
-      const mod = (await import(fastapiFile!)) as { default: FixtureLite[] };
+      const mod = (await import(required(fastapiFile))) as { default: FixtureLite[] };
       expect(mod.default.length).toBe(13);
       const oracles = new Map(manifest.cases.map((c) => [c.case, c.validationOracle]));
       const msg = "boom";
@@ -827,7 +828,7 @@ describe("gen-fixtures — validationEnvelope (configured validation-response en
       for (const fx of mod.default) {
         const oracle = oracles.get(fx.name);
         expect(oracle).toBeDefined();
-        const loc = oracle!.target.loc;
+        const loc = required(oracle).target.loc;
         const data = fx.output.data;
         // Positives — the exact location; msg/type CONTENT is never read.
         expect(data({ detail: [{ loc, msg, type }] })).toBe(true);
@@ -902,11 +903,11 @@ describe("gen-fixtures — validationEnvelope (configured validation-response en
       const input = [fastapiNoTarget, fastapiWithTarget, crustNoTarget, fastapiNonValidation];
       const { kept, dropped } = dropUnattributable(input);
       expect(dropped.length).toBe(1);
-      expect(dropped[0]!.operation).toBe("POST /x");
+      expect(dropped[0].operation).toBe("POST /x");
       // The disclosed assumption names the envelope and the refusal to be
       // permissive — the manifest is where a reviewer sees the loss.
-      expect(dropped[0]!.assumption).toContain("fastapi");
-      expect(dropped[0]!.assumption).toContain("matched permissively");
+      expect(dropped[0].assumption).toContain("fastapi");
+      expect(dropped[0].assumption).toContain("matched permissively");
       expect(kept.map((c) => c.name)).toEqual([
         "fastapi with target",
         "crust without target",
@@ -941,7 +942,7 @@ describe("gen-fixtures — validationEnvelope (configured validation-response en
           lastFastapiBody = {
             error: "Validation failed",
             code: "validation",
-            fieldErrors: { [errs[0]!.loc[1] ?? "body"]: errs[0]!.msg },
+            fieldErrors: { [errs[0].loc[1] ?? "body"]: errs[0].msg },
           };
           return jsonBody(lastFastapiBody, 422);
         }
@@ -1147,8 +1148,8 @@ describe("gen-fixtures — validationEnvelope (configured validation-response en
     test("two configured generations are byte-identical", async () => {
       expect(a.files.length).toBe(b.files.length);
       for (let i = 0; i < a.files.length; i++) {
-        const fa = a.files[i]!;
-        const fb = join(join(dir, "det-b"), fa.split("/").pop()!);
+        const fa = a.files[i];
+        const fb = join(join(dir, "det-b"), required(fa.split("/").pop()));
         expect(await Bun.file(fb).text()).toBe(await Bun.file(fa).text());
       }
       expect(await Bun.file(b.manifestPath).text()).toBe(await Bun.file(a.manifestPath).text());

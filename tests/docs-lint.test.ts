@@ -29,11 +29,11 @@ interface OpenState {
 export function scanLine(line: string, open: OpenState): string {
   let out = "";
   for (let i = 0; i < line.length; i++) {
-    const c = line[i]!;
+    const c = line[i];
     if (open.q) {
       out += c;
       if (open.q === '"' && c === "\\" && i + 1 < line.length) {
-        out += line[++i]!;
+        out += line[++i];
         continue;
       }
       if (c === open.q) open.q = null;
@@ -89,7 +89,7 @@ export async function shStageProblem(stageText: string): Promise<string | null> 
 function crustLines(markdown: string): string[] {
   const lines: string[] = [];
   for (const m of markdown.matchAll(/```(?:bash|crust)\n([\s\S]*?)```/g)) {
-    const body = m[1]!;
+    const body = m[1];
     // Heredocs are shell payloads, not crust lines.
     if (body.includes("<<")) continue;
     const open: OpenState = { q: null, depth: 0 };

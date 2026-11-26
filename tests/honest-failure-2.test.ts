@@ -17,6 +17,7 @@ import { Pipeline } from "../src/pipeline";
 import { readLines } from "../src/sources";
 import { statsStage } from "../src/transforms";
 import type { Context } from "../src/types";
+import { required } from "./support/required";
 
 const ENTRY = `${import.meta.dir}/../src/index.ts`;
 
@@ -199,7 +200,7 @@ describe("sql binds the piped item", () => {
       [item, ...args].map(String).join("/"),
     );
     const out: unknown[] = [];
-    for await (const item of parse('range(3,3) | (n => `s${n}`) | join3 "a" "b"')(c).lines()) {
+    for await (const item of parse("range(3,3) | (n => `s$" + '{n}`) | join3 "a" "b"')(c).lines()) {
       out.push(item);
     }
     expect(out).toEqual(["s3/a/b"]);
@@ -283,7 +284,7 @@ describe("stats percentiles stay honest under the histogram", () => {
       Number(((i % 400) * 0.5 + 0.2).toFixed(2)),
     );
     const sorted = [...latencies].sort((a, b) => a - b);
-    const exact = (p: number) => sorted[Math.max(0, Math.ceil((p / 100) * n) - 1)]!;
+    const exact = (p: number) => sorted[Math.max(0, Math.ceil((p / 100) * n) - 1)];
     const exactMean = latencies.reduce((a, b) => a + b, 0) / n;
 
     // Feed the stage directly — embedding 20k samples in a lambda source would
@@ -297,14 +298,14 @@ describe("stats percentiles stay honest under the histogram", () => {
       .lines()) {
       out.push(item as Record<string, number>);
     }
-    const s = out[out.length - 1]!;
+    const s = out[out.length - 1];
 
     for (const p of [50, 95, 99] as const) {
       // Reported value is the bucket's upper bound: never faster than reality.
-      expect(s[`p${p}`]!).toBeGreaterThanOrEqual(exact(p));
-      expect(s[`p${p}`]! - exact(p)).toBeLessThan(1.0);
+      expect(s[`p${p}`]).toBeGreaterThanOrEqual(exact(p));
+      expect(s[`p${p}`] - exact(p)).toBeLessThan(1.0);
     }
-    expect(Math.abs(s.meanMs! - exactMean)).toBeLessThan(0.1);
+    expect(Math.abs(s.meanMs - exactMean)).toBeLessThan(0.1);
   });
 
   test("p99 of 100 samples is no longer just the maximum", async () => {
@@ -313,7 +314,7 @@ describe("stats percentiles stay honest under the histogram", () => {
       string,
       number
     >[];
-    const s = out[out.length - 1]!;
+    const s = out[out.length - 1];
     expect(s.p99).toBeLessThan(100);
     expect(s.p99).toBeGreaterThanOrEqual(99);
   });
@@ -328,7 +329,7 @@ describe("jwt verify mid-pipeline", () => {
   beforeAll(async () => {
     const r = await cli(`jwt sign '{"sub":"42"}' --secret k`);
     expect(r.code).toBe(0);
-    token = r.stdout.trim().split("\n").pop()!;
+    token = required(r.stdout.trim().split("\n").pop());
   });
 
   test("verifies the piped token instead of signing it", async () => {
@@ -432,7 +433,7 @@ describe("empty stages (a `|` with nothing on one side)", () => {
       ]);
       await proc.exited;
       expect(proc.exitCode, line).toBe(1);
-      expect(out + err, line).toContain("in: " + line);
+      expect(out + err, line).toContain(`in: ${line}`);
     }
   });
 
@@ -544,7 +545,7 @@ describe("a trailing backslash continues the line", () => {
       new Response(proc.stderr).text(),
     ]);
     await proc.exited;
-    expect((proc.exitCode ?? -1) + out + err, out + err).toBe(0 + "ok: 1 line(s) parse\n");
+    expect((proc.exitCode ?? -1) + out + err, out + err).toBe("0ok: 1 line(s) parse\n");
   });
 
   test("CONTROL: an escaped backslash is not a continuation", async () => {

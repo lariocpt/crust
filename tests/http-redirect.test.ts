@@ -17,11 +17,9 @@ import { classify } from "../src/lexer";
 import { parse } from "../src/parser";
 import { runFixtures } from "../src/testFixture/runner";
 import { runPipes } from "../src/testPipes/runner";
-import type { Context, StageKind } from "../src/types";
+import type { StageKind } from "../src/types";
 
 const ENTRY = `${import.meta.dir}/../src/index.ts`;
-
-const ctx = () => ({ aliases: new Map(), functions: new Map(), history: [] }) as unknown as Context;
 
 // A real line through the real entry: exit code + combined output.
 async function check(line: string) {
@@ -180,9 +178,9 @@ describe("test-pipes: --redirect end to end", () => {
     );
     const report = await runPipes({ target: join(dir, "redir.pipes") });
     expect(report.totals).toEqual({ pass: 1, fail: 1, files: 1 });
-    expect(report.results[0]!.status).toBe("pass");
-    expect(report.results[1]!.status).toBe("fail");
-    expect(report.results[1]!.error).toContain("redirect refused (--redirect error)");
+    expect(report.results[0].status).toBe("pass");
+    expect(report.results[1].status).toBe("fail");
+    expect(report.results[1].error).toContain("redirect refused (--redirect error)");
   });
 });
 
@@ -199,7 +197,7 @@ describe("test-fixture: input.redirect", () => {
     );
     const report = await runFixtures({ target: file, threads: 1 });
     expect(report.totals.fail).toBe(0);
-    expect(report.results[0]!.status).toBe("pass");
+    expect(report.results[0].status).toBe("pass");
   });
 
   test("error refuses with the field named", async () => {
@@ -213,8 +211,8 @@ describe("test-fixture: input.redirect", () => {
       };\n`,
     );
     const report = await runFixtures({ target: file, threads: 1 });
-    expect(report.results[0]!.status).toBe("error");
-    expect(report.results[0]!.error?.message).toContain(
+    expect(report.results[0].status).toBe("error");
+    expect(report.results[0].error?.message).toContain(
       'redirect refused (input.redirect: "error")',
     );
   });
@@ -230,8 +228,8 @@ describe("test-fixture: input.redirect", () => {
       };\n`,
     );
     const report = await runFixtures({ target: file, threads: 1 });
-    expect(report.results[0]!.status).toBe("error");
-    expect(report.results[0]!.error?.message).toContain(
+    expect(report.results[0].status).toBe("error");
+    expect(report.results[0].error?.message).toContain(
       "fixture input.redirect: expected follow, error or manual",
     );
   });

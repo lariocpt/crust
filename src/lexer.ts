@@ -9,14 +9,14 @@ export function tokenize(line: string): Token[] {
   let quote: '"' | "'" | null = null;
 
   for (let i = 0; i < line.length; i++) {
-    const c = line[i]!;
+    const c = line[i];
 
     if (quote) {
       // Inside double quotes a backslash escapes the next char, so JSON
       // bodies with embedded escaped quotes ({"size":"6\" nominal"}) stay
       // one stage. Single quotes stay sh-like: no escapes.
       if (quote === '"' && c === "\\" && i + 1 < line.length) {
-        buf += c + line[i + 1]!;
+        buf += c + line[i + 1];
         i++;
         continue;
       }
@@ -71,7 +71,7 @@ export function redirectTail(text: string): string | null {
   let depth = 0;
   let quote: string | null = null;
   for (let i = 0; i < text.length; i++) {
-    const c = text[i]!;
+    const c = text[i];
     if (quote) {
       // Same escape rule as tokenize: inside `"` a backslash takes the next
       // char, so `{"note":"say \"hi\" > x"}` stays one quoted run.
@@ -138,10 +138,9 @@ export function rejectRedirect(text: string, kind: string): void {
  */
 export function substitutionSpans(text: string): string[] {
   const out: string[] = [];
-  let depth = 0;
   let quote: string | null = null;
   for (let i = 0; i < text.length; i++) {
-    const c = text[i]!;
+    const c = text[i];
     if (quote) {
       if (quote === '"' && c === "\\" && i + 1 < text.length) {
         i++;
@@ -155,11 +154,9 @@ export function substitutionSpans(text: string): string[] {
       continue;
     }
     if (c === "(" || c === "[") {
-      depth++;
       continue;
     }
     if (c === ")" || c === "]") {
-      depth--;
       continue;
     }
     if (c === "$" && text[i + 1] === "(") {
@@ -169,7 +166,7 @@ export function substitutionSpans(text: string): string[] {
       let pdepth = 1;
       let q: string | null = null;
       while (j < text.length && pdepth > 0) {
-        const d = text[j]!;
+        const d = text[j];
         if (q) {
           if (q === '"' && d === "\\" && j + 1 < text.length) {
             j++;
@@ -377,20 +374,20 @@ function classifyStage(text: string): StageKind {
 
   const timeMatch = t.match(/^time\s+(?:"([^"]*)"|'([^']*)')\s*$/);
   if (timeMatch) {
-    return { kind: "time", label: (timeMatch[1] ?? timeMatch[2])! };
+    return { kind: "time", label: timeMatch[1] ?? timeMatch[2] };
   }
 
   const httpMatch = t.match(/^(GET|POST|PUT|PATCH|DELETE)\s+(.+)$/);
   if (httpMatch) {
     // Tail is `<url> [-H "Key: value"]... [--timeout <dur>] [--redirect <mode>]`
     // — split quote-aware so header values may contain spaces and colons.
-    const parts = splitArgs(httpMatch[2]!);
+    const parts = splitArgs(httpMatch[2]);
     const url = parts[0] ?? "";
     const headers: string[] = [];
     let timeoutMs: number | undefined;
     let redirect: "follow" | "error" | "manual" | undefined;
     for (let i = 1; i < parts.length; i++) {
-      const p = parts[i]!;
+      const p = parts[i];
       if (p === "-H") {
         // A missing value used to fall off the end of the loop and vanish,
         // taking the header with it.
@@ -457,21 +454,21 @@ function classifyStage(text: string): StageKind {
 
   const assertMatch = t.match(/^assert\s+(\(.+)$/);
   if (assertMatch) {
-    return { kind: "assert", source: assertMatch[1]! };
+    return { kind: "assert", source: assertMatch[1] };
   }
 
   // `filter (l => ...)` — keeps items whose predicate is truthy. Without a
   // lambda it falls through to shell, so a real /usr/bin/filter still works.
   const filterMatch = t.match(/^filter\s+(\(.+)$/);
   if (filterMatch) {
-    return { kind: "filter", source: filterMatch[1]! };
+    return { kind: "filter", source: filterMatch[1] };
   }
 
   // `capture NAME (r => r.id)` — lambda optional; a name that isn't a valid
   // env identifier falls through to shell like any other word.
   const captureMatch = t.match(/^capture\s+([A-Za-z_][A-Za-z0-9_]*)\s*(\(.+)?$/);
   if (captureMatch) {
-    return { kind: "capture", name: captureMatch[1]!, source: captureMatch[2] ?? null };
+    return { kind: "capture", name: captureMatch[1], source: captureMatch[2] ?? null };
   }
 
   const readMatch = t.match(/^read(?:\s+(.+))?$/);
@@ -509,14 +506,14 @@ function classifyStage(text: string): StageKind {
 
   const parallelMatch = t.match(/^parallel\s+(\d+)$/);
   if (parallelMatch) {
-    const n = parseInt(parallelMatch[1]!, 10);
+    const n = parseInt(parallelMatch[1], 10);
     if (n < 1) throw new Error(`parallel: N must be >= 1 — got ${n}`);
     return { kind: "parallel", n };
   }
 
   const expectMatch = t.match(/^expect\s+(\d{3}|[1-5]xx)$/);
   if (expectMatch) {
-    const m = expectMatch[1]!;
+    const m = expectMatch[1];
     return { kind: "expect", matcher: /^\d{3}$/.test(m) ? parseInt(m, 10) : m };
   }
 
@@ -532,7 +529,7 @@ function classifyStage(text: string): StageKind {
   // bare `load` still shells out.
   const loadMatch = t.match(/^load\s+(.+)$/);
   if (loadMatch) {
-    const phases = loadMatch[1]!.split(",").map((s) => s.trim());
+    const phases = loadMatch[1].split(",").map((s) => s.trim());
     const parsed: { durMs: number; rps: number }[] = [];
     for (const ph of phases) {
       const m = ph.match(/^(\d+(?:\.\d+)?)(ms|s|m)\s+(\d+(?:\.\d+)?)\/(s|m)$/);
@@ -541,8 +538,8 @@ function classifyStage(text: string): StageKind {
           `load: expected "<dur> <rate>[, <dur> <rate>…]" e.g. \`load 30s 100/s\` — got "${ph}"`,
         );
       }
-      const durMs = parseFloat(m[1]!) * (m[2] === "ms" ? 1 : m[2] === "s" ? 1000 : 60_000);
-      const rps = parseFloat(m[3]!) / (m[4] === "m" ? 60 : 1);
+      const durMs = parseFloat(m[1]) * (m[2] === "ms" ? 1 : m[2] === "s" ? 1000 : 60_000);
+      const rps = parseFloat(m[3]) / (m[4] === "m" ? 60 : 1);
       if (durMs <= 0 || rps <= 0) {
         throw new Error(`load: duration and rate must be > 0 — got "${ph}"`);
       }
@@ -555,12 +552,12 @@ function classifyStage(text: string): StageKind {
   if (rangeMatch) {
     return {
       kind: "range",
-      start: parseInt(rangeMatch[1]!, 10),
-      end: parseInt(rangeMatch[2]!, 10),
+      start: parseInt(rangeMatch[1], 10),
+      end: parseInt(rangeMatch[2], 10),
     };
   }
 
-  const firstToken = t.split(/\s+/)[0]!;
+  const firstToken = t.split(/\s+/)[0];
   if (/[*?]/.test(firstToken) || /\[[^\]]+\]/.test(firstToken)) {
     return { kind: "glob", pattern: firstToken };
   }
@@ -595,7 +592,7 @@ function classifyGrep(t: string): StageKind | null {
   let ere = false;
   const positionals: string[] = [];
   for (let i = 1; i < parts.length; i++) {
-    const p = parts[i]!;
+    const p = parts[i];
     if (p === "-i") ignoreCase = true;
     else if (p === "-v") invert = true;
     else if (p === "-F") fixed = true;
@@ -606,7 +603,7 @@ function classifyGrep(t: string): StageKind | null {
   }
   if (positionals.length !== 1) return null; // 2+ positionals = file grep
   if (fixed && ere) return null; // grep errors on -F -E; let it
-  const pattern = positionals[0]!;
+  const pattern = positionals[0];
   if (!fixed) {
     // Regex dialects diverge exactly where escapes, POSIX classes, GNU open
     // intervals ("{,5}" — literal in JS), and JS-only groups ("(?=…)" — an
@@ -636,16 +633,16 @@ function classifyStats(t: string): StageKind | null {
   let everySec: number | undefined;
   let out: string | undefined;
   for (let i = 1; i < parts.length; i++) {
-    const p = parts[i]!;
+    const p = parts[i];
     const everyEq = p.match(/^--every=(\d+)s?$/);
     if (everyEq) {
-      everySec = parseInt(everyEq[1]!, 10);
+      everySec = parseInt(everyEq[1], 10);
       continue;
     }
     if (p === "--every") {
       const next = (parts[++i] ?? "").match(/^(\d+)s?$/);
       if (!next) return null;
-      everySec = parseInt(next[1]!, 10);
+      everySec = parseInt(next[1], 10);
       continue;
     }
     if (p.startsWith("--out=")) {
@@ -672,7 +669,7 @@ function classifyTail(
   t: string,
 ): { kind: "tail"; paths: string[]; lines: number; follow: boolean } | null {
   const m = t.match(/^tail(?:\s+(.+))?$/);
-  if (!m || !m[1]) return null;
+  if (!m?.[1]) return null;
 
   const parts = m[1].trim().split(/\s+/);
   let lines = 10;
@@ -680,7 +677,7 @@ function classifyTail(
   const paths: string[] = [];
 
   for (let i = 0; i < parts.length; i++) {
-    const p = parts[i]!;
+    const p = parts[i];
     if (p === "-F" || p === "-f") {
       follow = true;
     } else if (p === "-n" || p === "--lines") {

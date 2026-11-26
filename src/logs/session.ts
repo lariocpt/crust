@@ -37,7 +37,7 @@ export class ViewQueue {
 
   async *stream(): AsyncGenerator<unknown> {
     while (true) {
-      while (this.items.length > 0) yield this.items.shift()!;
+      while (this.items.length > 0) yield this.items.shift();
       if (this.ended) return;
       await new Promise<void>((res) => {
         this.waiter = res;
@@ -431,7 +431,7 @@ export class LogsSession {
   private maybeStatsHint(fragment: string): void {
     try {
       const toks = tokenize(fragment);
-      const last = classify(toks[toks.length - 1]!.text);
+      const last = classify(toks[toks.length - 1].text);
       if (last.kind === "stats" && last.everySec === undefined) {
         this.opts.writeErr(
           "hint: bare `stats` prints once when the view ends (Ctrl-C) — `stats --every 5` for rolling output\n",

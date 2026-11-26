@@ -59,9 +59,9 @@ describe("args helpers", () => {
     expect(splitArgs("a 'b c' d")).toEqual(["a", "b c", "d"]);
   });
 
-  test("expandEnv handles $NAME, ${NAME}, and missing vars", () => {
+  test(`expandEnv handles $NAME, ${"$"}{NAME}, and missing vars`, () => {
     process.env.CRUST_TEST_VAR = "yes";
-    expect(expandEnv("v=$CRUST_TEST_VAR/${CRUST_TEST_VAR}/$CRUST_NOPE!")).toBe("v=yes/yes/!");
+    expect(expandEnv(`v=$CRUST_TEST_VAR/${"$"}{CRUST_TEST_VAR}/$CRUST_NOPE!`)).toBe("v=yes/yes/!");
   });
 
   test("stripTrailingComment cuts an unquoted word-start #", () => {
@@ -247,20 +247,22 @@ describe("assert on empty upstream", () => {
   });
 });
 
-describe("expandEnv ${NAME:-default}", () => {
+describe(`expandEnv ${"$"}{NAME:-default}`, () => {
   test("unset and empty fall back to the default; set wins (POSIX :-)", () => {
     delete process.env.CRUST_DEF_TEST;
-    expect(expandEnv("${CRUST_DEF_TEST:-http://localhost:3001}/x")).toBe("http://localhost:3001/x");
+    expect(expandEnv(`${"$"}{CRUST_DEF_TEST:-http://localhost:3001}/x`)).toBe(
+      "http://localhost:3001/x",
+    );
     process.env.CRUST_DEF_TEST = "";
-    expect(expandEnv("${CRUST_DEF_TEST:-fallback}")).toBe("fallback");
+    expect(expandEnv(`${"$"}{CRUST_DEF_TEST:-fallback}`)).toBe("fallback");
     process.env.CRUST_DEF_TEST = "http://real:4747";
-    expect(expandEnv("${CRUST_DEF_TEST:-fallback}/api")).toBe("http://real:4747/api");
+    expect(expandEnv(`${"$"}{CRUST_DEF_TEST:-fallback}/api`)).toBe("http://real:4747/api");
     delete process.env.CRUST_DEF_TEST;
   });
 
   test("defaults may contain URLs with colons and slashes; plain forms unchanged", () => {
     delete process.env.CRUST_DEF_TEST;
-    expect(expandEnv("${CRUST_DEF_TEST:-}")).toBe(""); // empty default is legal
+    expect(expandEnv(`${"$"}{CRUST_DEF_TEST:-}`)).toBe(""); // empty default is legal
     expect(expandEnv("a $CRUST_DEF_TEST b")).toBe("a  b"); // bare form: still ""
     expect(expandEnv("id = $1")).toBe("id = "); // $N is a positional (G05): "" outside script mode
   });

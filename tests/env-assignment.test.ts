@@ -115,7 +115,7 @@ describe("a bare assignment line is session state", () => {
 describe("which $ in a value expands, and which does not", () => {
   test("$NAME expands, braced and plain", async () => {
     const N = v();
-    const r = await run(`G04_SRC=inner\n${N}=$G04_SRC-${"${G04_SRC}"}\necho "[${N}=$${N}]"`);
+    const r = await run(`G04_SRC=inner\n${N}=$G04_SRC-${"$"}{G04_SRC}\necho "[${N}=$${N}]"`);
     expect(r.stdout.trim()).toBe(`[${N}=inner-inner]`);
   });
 
@@ -296,7 +296,7 @@ describe("parseAssignWords", () => {
   });
 
   test("a value may contain =", () => {
-    expect(words("A=b=c")[0]!.value).toBe("b=c");
+    expect(words("A=b=c")[0].value).toBe("b=c");
   });
 
   test("a bare name parses as mark-for-export (value: null)", () => {

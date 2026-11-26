@@ -63,7 +63,7 @@ export type KeyName =
 export function parseKeys(chunk: string): KeyName[] {
   const keys: KeyName[] = [];
   for (let i = 0; i < chunk.length; i++) {
-    const ch = chunk[i]!;
+    const ch = chunk[i];
     if (ch === "\x03") {
       keys.push("cancel");
       continue;
@@ -76,7 +76,7 @@ export function parseKeys(chunk: string): KeyName[] {
         // all/none. A sequence cut in half by a chunk boundary resolves to
         // "other" plus inert characters — a dropped keypress, never a wrong one.
         let j = i + 2;
-        while (j < chunk.length && chunk[j]! >= "@" && chunk[j]! <= "~") j++;
+        while (j < chunk.length && chunk[j] >= "@" && chunk[j] <= "~") j++;
         const final = chunk.slice(i + 2, j);
         if (final === "A") keys.push("up");
         else if (final === "B") keys.push("down");

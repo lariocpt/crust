@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { builtins, isBuiltin } from "../src/builtins";
 import type { Context } from "../src/types";
+import { required } from "./support/required";
 
 function mkCtx(): Context {
   return {
@@ -34,6 +35,12 @@ describe("isBuiltin", () => {
     expect(isBuiltin("ls")).toBe(false);
     expect(isBuiltin("git")).toBe(false);
   });
+
+  test("rejects inherited object properties", () => {
+    for (const name of ["constructor", "toString", "__proto__", "hasOwnProperty"]) {
+      expect(isBuiltin(name)).toBe(false);
+    }
+  });
 });
 
 describe("cd", () => {
@@ -49,7 +56,7 @@ describe("cd", () => {
   });
 
   test("changes directory to argument", async () => {
-    const code = await builtins.cd!(dir, mkCtx());
+    const code = await builtins.cd(dir, mkCtx());
     expect(code).toBe(0);
     expect(process.cwd()).toBe(dir);
   });
@@ -57,20 +64,20 @@ describe("cd", () => {
   test("cd - returns to OLDPWD", async () => {
     const ctx = mkCtx();
     const startCwd = process.cwd();
-    await builtins.cd!(dir, ctx);
-    await builtins.cd!("-", ctx);
+    await builtins.cd(dir, ctx);
+    await builtins.cd("-", ctx);
     expect(process.cwd()).toBe(startCwd);
   });
 
   test("cd with no arg goes to $HOME", async () => {
-    const code = await builtins.cd!("", mkCtx());
+    const code = await builtins.cd("", mkCtx());
     expect(code).toBe(0);
-    const home = await realpath(process.env.HOME!);
+    const home = await realpath(required(process.env.HOME));
     expect(await realpath(process.cwd())).toBe(home);
   });
 
   test("returns nonzero for nonexistent target", async () => {
-    const code = await builtins.cd!("/this/does/not/exist-xyz", mkCtx());
+    const code = await builtins.cd("/this/does/not/exist-xyz", mkCtx());
     expect(code).not.toBe(0);
   });
 });
@@ -78,19 +85,19 @@ describe("cd", () => {
 describe("alias", () => {
   test("sets alias from single-quoted value", async () => {
     const ctx = mkCtx();
-    await builtins.alias!("ll='ls -la'", ctx);
+    await builtins.alias("ll='ls -la'", ctx);
     expect(ctx.aliases.get("ll")).toBe("ls -la");
   });
 
   test("sets alias from double-quoted value", async () => {
     const ctx = mkCtx();
-    await builtins.alias!('g="git"', ctx);
+    await builtins.alias('g="git"', ctx);
     expect(ctx.aliases.get("g")).toBe("git");
   });
 
   test("sets alias from unquoted value", async () => {
     const ctx = mkCtx();
-    await builtins.alias!("g=git", ctx);
+    await builtins.alias("g=git", ctx);
     expect(ctx.aliases.get("g")).toBe("git");
   });
 });
@@ -99,7 +106,7 @@ describe("unalias", () => {
   test("removes an existing alias", async () => {
     const ctx = mkCtx();
     ctx.aliases.set("ll", "ls -la");
-    await builtins.unalias!("ll", ctx);
+    await builtins.unalias("ll", ctx);
     expect(ctx.aliases.has("ll")).toBe(false);
   });
 });
@@ -107,14 +114,14 @@ describe("unalias", () => {
 describe("export", () => {
   test("sets env var via KEY=value", async () => {
     const ctx = mkCtx();
-    await builtins.export!("CRUST_TEST_EXPORT=hello", ctx);
+    await builtins.export("CRUST_TEST_EXPORT=hello", ctx);
     expect(process.env.CRUST_TEST_EXPORT).toBe("hello");
     delete process.env.CRUST_TEST_EXPORT;
   });
 
   test("sets multiple env vars in one call", async () => {
     const ctx = mkCtx();
-    await builtins.export!("CRUST_A=1 CRUST_B=2", ctx);
+    await builtins.export("CRUST_A=1 CRUST_B=2", ctx);
     expect(process.env.CRUST_A).toBe("1");
     expect(process.env.CRUST_B).toBe("2");
     delete process.env.CRUST_A;
@@ -123,7 +130,7 @@ describe("export", () => {
 
   test("quoted value with spaces stays one var", async () => {
     const ctx = mkCtx();
-    await builtins.export!('CRUST_Q="a b" CRUST_R=2', ctx);
+    await builtins.export('CRUST_Q="a b" CRUST_R=2', ctx);
     expect(process.env.CRUST_Q).toBe("a b");
     expect(process.env.CRUST_R).toBe("2");
     delete process.env.CRUST_Q;
@@ -132,7 +139,7 @@ describe("export", () => {
 
   test("a value that is itself quote-wrapped keeps its quotes", async () => {
     const ctx = mkCtx();
-    await builtins.export!("CRUST_QQ='\"quoted\"'", ctx);
+    await builtins.export(`CRUST_QQ='"quoted"'`, ctx);
     expect(process.env.CRUST_QQ).toBe('"quoted"');
     delete process.env.CRUST_QQ;
   });
@@ -143,7 +150,7 @@ describe("tool builtins strip quotes from --target globs", () => {
     const dir = await realpath(await mkdtemp(join(tmpdir(), "crust-glob-")));
     try {
       await Bun.write(join(dir, "ok.pipes"), "range(0, 1) | assert (n => n >= 0)\n");
-      const code = await builtins["test-pipes"]!(`--target '${dir}/*.pipes'`, mkCtx());
+      const code = await builtins["test-pipes"](`--target '${dir}/*.pipes'`, mkCtx());
       expect(code).toBe(0);
     } finally {
       await rm(dir, { recursive: true, force: true });
@@ -160,7 +167,7 @@ describe("exit", () => {
         captured = c;
       }) as Context["exit"],
     };
-    await builtins.exit!("42", ctx);
+    await builtins.exit("42", ctx);
     expect(captured).toBe(42);
   });
 
@@ -172,7 +179,7 @@ describe("exit", () => {
         captured = c;
       }) as Context["exit"],
     };
-    await builtins.exit!("", ctx);
+    await builtins.exit("", ctx);
     expect(captured).toBe(0);
   });
 });
@@ -203,13 +210,13 @@ describe("dotenv", () => {
     track("CRUST_DOTENV_B");
     await Bun.write(`${dir}/.env`, "CRUST_DOTENV_A=hello\nCRUST_DOTENV_B=world\n");
     const ctx = mkCtx();
-    const code = await builtins.dotenv!("", ctx);
+    const code = await builtins.dotenv("", ctx);
     expect(code).toBe(0);
     expect(process.env.CRUST_DOTENV_A).toBe("hello");
     expect(process.env.CRUST_DOTENV_B).toBe("world");
     expect(ctx.dotenv.history).toHaveLength(1);
-    expect(ctx.dotenv.history[0]!.mode).toBe("overwrite");
-    expect(ctx.dotenv.history[0]!.keys).toEqual(["CRUST_DOTENV_A", "CRUST_DOTENV_B"]);
+    expect(ctx.dotenv.history[0].mode).toBe("overwrite");
+    expect(ctx.dotenv.history[0].keys).toEqual(["CRUST_DOTENV_A", "CRUST_DOTENV_B"]);
   });
 
   test("strips single, double quotes and 'export ' prefix", async () => {
@@ -220,7 +227,7 @@ describe("dotenv", () => {
       `${dir}/.env`,
       `CRUST_DOTENV_Q1="double quoted"\nCRUST_DOTENV_Q2='single quoted'\nexport CRUST_DOTENV_Q3=exported\n`,
     );
-    await builtins.dotenv!("", mkCtx());
+    await builtins.dotenv("", mkCtx());
     expect(process.env.CRUST_DOTENV_Q1).toBe("double quoted");
     expect(process.env.CRUST_DOTENV_Q2).toBe("single quoted");
     expect(process.env.CRUST_DOTENV_Q3).toBe("exported");
@@ -233,10 +240,10 @@ describe("dotenv", () => {
       "\n# a comment\n  # indented comment\n1BAD=skip\nCRUST_DOTENV_VALID=ok\n",
     );
     const ctx = mkCtx();
-    await builtins.dotenv!("", ctx);
+    await builtins.dotenv("", ctx);
     expect(process.env.CRUST_DOTENV_VALID).toBe("ok");
     expect(process.env["1BAD"]).toBeUndefined();
-    expect(ctx.dotenv.history[0]!.keys).toEqual(["CRUST_DOTENV_VALID"]);
+    expect(ctx.dotenv.history[0].keys).toEqual(["CRUST_DOTENV_VALID"]);
   });
 
   test("strips inline comments from unquoted values, keeps # inside quotes", async () => {
@@ -246,7 +253,7 @@ describe("dotenv", () => {
       `${dir}/.env`,
       `CRUST_DOTENV_NOCOMMENT=plain # trailing comment\nCRUST_DOTENV_HASH="value # not a comment"\n`,
     );
-    await builtins.dotenv!("", mkCtx());
+    await builtins.dotenv("", mkCtx());
     expect(process.env.CRUST_DOTENV_NOCOMMENT).toBe("plain");
     expect(process.env.CRUST_DOTENV_HASH).toBe("value # not a comment");
   });
@@ -255,7 +262,7 @@ describe("dotenv", () => {
     track("CRUST_DOTENV_OVR");
     process.env.CRUST_DOTENV_OVR = "old";
     await Bun.write(`${dir}/.env`, "CRUST_DOTENV_OVR=new\n");
-    await builtins.dotenv!("", mkCtx());
+    await builtins.dotenv("", mkCtx());
     expect(process.env.CRUST_DOTENV_OVR).toBe("new");
   });
 
@@ -265,17 +272,17 @@ describe("dotenv", () => {
     process.env.CRUST_DOTENV_KEEP = "keep";
     await Bun.write(`${dir}/.env`, "CRUST_DOTENV_KEEP=other\nCRUST_DOTENV_NEW=fresh\n");
     const ctx = mkCtx();
-    await builtins.dotenv!("--append", ctx);
+    await builtins.dotenv("--append", ctx);
     expect(process.env.CRUST_DOTENV_KEEP).toBe("keep");
     expect(process.env.CRUST_DOTENV_NEW).toBe("fresh");
-    expect(ctx.dotenv.history[0]!.mode).toBe("append");
-    expect(ctx.dotenv.history[0]!.keys).toEqual(["CRUST_DOTENV_NEW"]);
+    expect(ctx.dotenv.history[0].mode).toBe("append");
+    expect(ctx.dotenv.history[0].keys).toEqual(["CRUST_DOTENV_NEW"]);
   });
 
   test("--config <path> reads custom file", async () => {
     track("CRUST_DOTENV_CFG");
     await Bun.write(`${dir}/custom.env`, "CRUST_DOTENV_CFG=zzz\n");
-    const code = await builtins.dotenv!(`--config ./custom.env`, mkCtx());
+    const code = await builtins.dotenv(`--config ./custom.env`, mkCtx());
     expect(code).toBe(0);
     expect(process.env.CRUST_DOTENV_CFG).toBe("zzz");
   });
@@ -283,25 +290,25 @@ describe("dotenv", () => {
   test("--config=<path> form also works", async () => {
     track("CRUST_DOTENV_EQ");
     await Bun.write(`${dir}/eq.env`, "CRUST_DOTENV_EQ=v\n");
-    await builtins.dotenv!(`--config=./eq.env`, mkCtx());
+    await builtins.dotenv(`--config=./eq.env`, mkCtx());
     expect(process.env.CRUST_DOTENV_EQ).toBe("v");
   });
 
   test("missing file returns 1 without mutating state", async () => {
     const ctx = mkCtx();
-    const code = await builtins.dotenv!("--config ./nope.env", ctx);
+    const code = await builtins.dotenv("--config ./nope.env", ctx);
     expect(code).toBe(1);
     expect(ctx.dotenv.history).toHaveLength(0);
     expect(ctx.dotenv.snapshot).toBeNull();
   });
 
   test("unknown flag returns 2", async () => {
-    const code = await builtins.dotenv!("--banana", mkCtx());
+    const code = await builtins.dotenv("--banana", mkCtx());
     expect(code).toBe(2);
   });
 
   test("status reports no loads when empty", async () => {
-    const code = await builtins.dotenv!("status", mkCtx());
+    const code = await builtins.dotenv("status", mkCtx());
     expect(code).toBe(0);
   });
 
@@ -309,9 +316,9 @@ describe("dotenv", () => {
     track("CRUST_DOTENV_CLR1");
     await Bun.write(`${dir}/.env`, "CRUST_DOTENV_CLR1=x\n");
     const ctx = mkCtx();
-    await builtins.dotenv!("", ctx);
+    await builtins.dotenv("", ctx);
     expect(process.env.CRUST_DOTENV_CLR1).toBe("x");
-    await builtins.dotenv!("clear", ctx);
+    await builtins.dotenv("clear", ctx);
     expect(process.env.CRUST_DOTENV_CLR1).toBeUndefined();
     expect(ctx.dotenv.snapshot).toBeNull();
     expect(ctx.dotenv.history).toHaveLength(0);
@@ -322,9 +329,9 @@ describe("dotenv", () => {
     process.env.CRUST_DOTENV_CLR2 = "orig";
     await Bun.write(`${dir}/.env`, "CRUST_DOTENV_CLR2=new\n");
     const ctx = mkCtx();
-    await builtins.dotenv!("", ctx);
+    await builtins.dotenv("", ctx);
     expect(process.env.CRUST_DOTENV_CLR2).toBe("new");
-    await builtins.dotenv!("clear", ctx);
+    await builtins.dotenv("clear", ctx);
     expect(process.env.CRUST_DOTENV_CLR2).toBe("orig");
   });
 
@@ -332,10 +339,10 @@ describe("dotenv", () => {
     track("CRUST_DOTENV_S");
     await Bun.write(`${dir}/.env`, "CRUST_DOTENV_S=first\n");
     const ctx = mkCtx();
-    await builtins.dotenv!("", ctx);
+    await builtins.dotenv("", ctx);
     const firstSnap = ctx.dotenv.snapshot;
     await Bun.write(`${dir}/.env`, "CRUST_DOTENV_S=second\n");
-    await builtins.dotenv!("", ctx);
+    await builtins.dotenv("", ctx);
     expect(ctx.dotenv.snapshot).toBe(firstSnap);
     expect(ctx.dotenv.history).toHaveLength(2);
   });
@@ -353,33 +360,31 @@ describe("defaultPrompt env marker", () => {
 });
 
 describe("tool builtin args are env-expanded", () => {
-  test("test-fixture expands $VAR and ${VAR:-default} in its args", async () => {
+  test(`test-fixture expands $VAR and ${"$"}{VAR:-default} in its args`, async () => {
     // An expanded-but-nonexistent glob exits 2 with the EXPANDED path in the
     // message — proving expansion ran before the CLI saw the args.
     process.env.CRUST_BUILTIN_EXP = "/definitely/not/here";
     const errs: string[] = [];
-    const origWrite = process.stderr.write.bind(process.stderr);
-    // biome-ignore lint/suspicious/noExplicitAny: capture stderr for assertion
-    (process.stderr as any).write = (s: string) => {
+    const origWrite = process.stderr.write;
+    process.stderr.write = (s: string | Uint8Array) => {
       errs.push(String(s));
       return true;
     };
     try {
-      const code = await builtins["test-fixture"]!(
+      const code = await builtins["test-fixture"](
         "--target $CRUST_BUILTIN_EXP/*.crust.ts",
         mkCtx(),
       );
       expect(code).toBe(2);
       expect(errs.join("")).toContain("/definitely/not/here/*.crust.ts");
-      const code2 = await builtins["test-fixture"]!(
-        "--target ${CRUST_NOT_SET_ANYWHERE:-/from/default}/*.crust.ts",
+      const code2 = await builtins["test-fixture"](
+        `--target ${"$"}{CRUST_NOT_SET_ANYWHERE:-/from/default}/*.crust.ts`,
         mkCtx(),
       );
       expect(code2).toBe(2);
       expect(errs.join("")).toContain("/from/default/*.crust.ts");
     } finally {
-      // biome-ignore lint/suspicious/noExplicitAny: restore
-      (process.stderr as any).write = origWrite;
+      process.stderr.write = origWrite;
       delete process.env.CRUST_BUILTIN_EXP;
     }
   });

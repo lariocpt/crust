@@ -76,7 +76,7 @@ export function matchRoute(routes: Route[], method: string, pathname: string): R
 }
 
 export function paramNames(template: string): string[] {
-  return [...template.matchAll(/\{([^/}]+)\}/g)].map((m) => m[1]!);
+  return [...template.matchAll(/\{([^/}]+)\}/g)].map((m) => m[1]);
 }
 
 /** Percent-decode a path segment; malformed sequences fall back to the raw text. */
@@ -95,7 +95,7 @@ function extractParams(route: Route, m: RegExpExecArray): Record<string, string>
     // Decode before validation/stateful lookups — query params arrive decoded
     // via URLSearchParams, and path params must match that (an encoded id like
     // %C3%A9 would otherwise fail enum/pattern checks and miss store entries).
-    params[names[i]!] = safeDecode(m[i + 1] ?? "");
+    params[names[i]] = safeDecode(m[i + 1] ?? "");
   }
   return params;
 }

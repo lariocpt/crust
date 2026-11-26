@@ -34,7 +34,7 @@ const cdBuiltin: Builtin = (rawArgs, _ctx) => {
     target = process.env.HOME;
   } else if (arg === "-") {
     target = process.env.OLDPWD;
-    if (target) process.stdout.write(target + "\n");
+    if (target) process.stdout.write(`${target}\n`);
   } else if (arg.startsWith("~/")) {
     target = (process.env.HOME ?? "") + arg.slice(1);
   } else {
@@ -192,9 +192,10 @@ function sniffMultiLineShell(text: string): boolean {
   for (const raw of text.split("\n")) {
     const t = raw.trim();
     if (!t || t.startsWith("#")) continue;
-    const first = t.split(/\s+/)[0]!;
-    if (first in BASH_OPENERS) {
-      if (!BASH_OPENERS[first]!.test(t)) return true;
+    const first = t.split(/\s+/)[0];
+    const closer = Object.hasOwn(BASH_OPENERS, first) ? BASH_OPENERS[first] : undefined;
+    if (closer) {
+      if (!closer.test(t)) return true;
     } else if (first === "do" || first === "done" || first === "fi" || first === "esac") {
       return true;
     }
@@ -249,7 +250,7 @@ async function crustFileParses(text: string): Promise<boolean> {
     const t = raw.trim();
     if (!t) continue;
     if (t.startsWith("#")) continue;
-    const head = t.split(/\s+/)[0]!;
+    const head = t.split(/\s+/)[0];
     // Builtin lines execute in-process, one line each — nothing spans lines
     // through them, so they can't be mangled line-by-line.
     if (isBuiltin(head)) continue;
@@ -281,7 +282,7 @@ async function crustFileParses(text: string): Promise<boolean> {
 // an `=` cannot be split — that is refused loudly, never truncated.
 async function sourceShellScript(path: string, text: string): Promise<number> {
   const shebang = shebangShell(text);
-  const wanted = shebang ?? (/\.(bash|zsh)$/.test(path) ? path.match(/\.([a-z]+)$/)![1] : null);
+  const wanted = shebang ?? path.match(/\.(bash|zsh)$/)?.[1] ?? null;
   const bin = await resolveShellBin(wanted);
   if (wanted && bin === "sh" && wanted !== "sh") {
     process.stderr.write(
@@ -379,7 +380,7 @@ const sourceBuiltin: Builtin = async (rawArgs, ctx) => {
 
 const exitBuiltin: Builtin = async (rawArgs, ctx) => {
   const parsed = parseInt(rawArgs.trim() || "0", 10);
-  await ctx.exit(isNaN(parsed) ? 0 : parsed);
+  await ctx.exit(Number.isNaN(parsed) ? 0 : parsed);
   return 0;
 };
 
@@ -552,7 +553,7 @@ function dotenvStatus(ctx: Context): number {
   );
   const idxWidth = String(ctx.dotenv.history.length).length;
   for (let i = 0; i < ctx.dotenv.history.length; i++) {
-    const r = ctx.dotenv.history[i]!;
+    const r = ctx.dotenv.history[i];
     const idx = String(i + 1).padStart(idxWidth, " ");
     const iso = new Date(r.ts).toISOString();
     const shown = r.keys.slice(0, 6).join(", ");
@@ -804,7 +805,7 @@ export function renderBuiltinList(): string {
 }
 
 export function isBuiltin(name: string): boolean {
-  return name in builtins;
+  return Object.hasOwn(builtins, name);
 }
 
 /**

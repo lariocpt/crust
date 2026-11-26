@@ -117,7 +117,7 @@ export async function runMcp(opts: { envFile?: string } = {}): Promise<number> {
           typeof req.params?.protocolVersion === "string" ? req.params.protocolVersion : "";
         const version = SUPPORTED_PROTOCOL_VERSIONS.includes(requested)
           ? requested
-          : SUPPORTED_PROTOCOL_VERSIONS[0]!;
+          : SUPPORTED_PROTOCOL_VERSIONS[0];
         initialized = true;
         return rpcReply(req.id, {
           protocolVersion: version,

@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Context } from "../src/types";
+import { required } from "./support/required";
 
 function mkCtx(): Context {
   return {
@@ -123,7 +124,7 @@ describe("discoverGlobals", () => {
     const { discoverGlobals } = await freshImport();
     const ctx = mkCtx();
     await discoverGlobals(ctx);
-    const fn = ctx.functions.get("fake-lib")!;
+    const fn = required(ctx.functions.get("fake-lib"));
     const out = await fn("hello", "world");
     expect(out).toBe("hello:world");
   });
@@ -141,7 +142,7 @@ describe("discoverGlobals", () => {
     const { discoverGlobals } = await freshImport();
     const ctx = mkCtx();
     await discoverGlobals(ctx);
-    const fn = ctx.functions.get("multi-fn")!;
+    const fn = required(ctx.functions.get("multi-fn"));
     expect(await fn("ab", "3")).toBe("ababab");
   });
 
@@ -157,7 +158,7 @@ describe("discoverGlobals", () => {
     await discoverGlobals(ctx);
     // Discovery succeeds (we don't import eagerly), but invocation surfaces the error.
     expect(ctx.functions.has("no-default")).toBe(true);
-    const fn = ctx.functions.get("no-default")!;
+    const fn = required(ctx.functions.get("no-default"));
     await expect(fn("x")).rejects.toThrow(/no callable export/);
   });
 
@@ -240,7 +241,7 @@ describe("discoverGlobals", () => {
     await discoverGlobals(ctx);
     // Simulate init.ts calling crust.fn("fake-lib", ...) after discovery.
     ctx.functions.set("fake-lib", (x) => `manual:${x}`);
-    const fn = ctx.functions.get("fake-lib")!;
+    const fn = required(ctx.functions.get("fake-lib"));
     expect(fn("hi")).toBe("manual:hi");
   });
 

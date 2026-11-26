@@ -28,7 +28,13 @@ import { type RunningServer, startServer } from "../mockServer/server";
 import { buildSource, parseStages } from "../parser";
 import { Pipeline } from "../pipeline";
 import { shellEnv } from "../shellPath";
-import { killGroup, type ProcSpec, procs as procsSource, tail as tailSource } from "../sources";
+import {
+  killGroup,
+  type ProcSpec,
+  prepareProcs,
+  procs as procsSource,
+  tail as tailSource,
+} from "../sources";
 import type { Context } from "../types";
 
 export interface MockJob {
@@ -84,6 +90,8 @@ export interface StreamQueryResult {
 export class JobManager {
   private seq = 0;
   private jobs = new Map<string, Job>();
+  private pendingProcs = new Map<AbortController, Promise<void>>();
+  private stoppingProcs = 0;
 
   constructor(readonly ctx: Context) {}
 
@@ -182,7 +190,7 @@ export class JobManager {
 
   async stopMock(id: string): Promise<void> {
     const job = this.jobs.get(id);
-    if (!job || job.kind !== "mock") throw new Error(`no mock server job ${id}`);
+    if (job?.kind !== "mock") throw new Error(`no mock server job ${id}`);
     await job.server.stop();
     this.jobs.delete(id);
   }
@@ -293,21 +301,30 @@ export class JobManager {
     commands: Record<string, string | ProcSpec>,
     bufferSize: number,
   ): Promise<StreamJob> {
+    if (this.stoppingProcs > 0) throw new Error("procs: manager teardown in progress");
     const controller = new AbortController();
-    const pipeline = procsSource(commands, { signal: controller.signal });
-    const iter = pipeline.lines()[Symbol.asyncIterator]();
-    const source = { [Symbol.asyncIterator]: () => iter };
-    const teardown = (): Promise<void> => {
-      controller.abort();
-      return JobManager.closeIter(iter);
-    };
-    return this.attachStream(
-      source,
-      teardown,
-      `procs(${Object.keys(commands).join(", ")})`,
-      bufferSize,
-      true,
-    );
+    const settled = Promise.withResolvers<void>();
+    this.pendingProcs.set(controller, settled.promise);
+    try {
+      const pipeline = await prepareProcs(commands, { signal: controller.signal });
+      controller.signal.throwIfAborted();
+      const iter = pipeline.lines()[Symbol.asyncIterator]();
+      const source = { [Symbol.asyncIterator]: () => iter };
+      const teardown = (): Promise<void> => {
+        controller.abort();
+        return JobManager.closeIter(iter);
+      };
+      return this.attachStream(
+        source,
+        teardown,
+        `procs(${Object.keys(commands).join(", ")})`,
+        bufferSize,
+        true,
+      );
+    } finally {
+      this.pendingProcs.delete(controller);
+      settled.resolve();
+    }
   }
 
   private attachStream(
@@ -357,7 +374,7 @@ export class JobManager {
 
   async stopStream(id: string): Promise<string> {
     const job = this.jobs.get(id);
-    if (!job || job.kind !== "stream") throw new Error(`no stream session ${id}`);
+    if (job?.kind !== "stream") throw new Error(`no stream session ${id}`);
     this.jobs.delete(id);
     try {
       await job.teardown();
@@ -395,7 +412,7 @@ export class JobManager {
     opts: { liveMs?: number; json?: boolean; limit?: number },
   ): Promise<StreamQueryResult> {
     const job = this.jobs.get(id);
-    if (!job || job.kind !== "stream") throw new Error(`no stream session ${id}`);
+    if (job?.kind !== "stream") throw new Error(`no stream session ${id}`);
     const limit = Math.min(Math.max(1, Math.trunc(opts.limit ?? 500)), QUERY_ITEM_MAX);
     const liveMs = Math.min(Math.max(0, Math.trunc(opts.liveMs ?? 0)), LIVE_MAX_MS);
 
@@ -531,23 +548,31 @@ export class JobManager {
   // ----------------------------------------------------------- teardown ----
 
   async stopAll(): Promise<void> {
-    const ids = [...this.jobs.keys()];
-    await Promise.all(
-      ids.map(async (id) => {
-        const job = this.jobs.get(id);
-        if (!job) return;
-        this.jobs.delete(id);
-        try {
-          if (job.kind === "mock") await job.server.stop();
-          else {
-            await job.teardown();
-            job.live?.end();
-            await Promise.race([job.pumpDone, Bun.sleep(TEARDOWN_REPORT_MS)]);
+    this.stoppingProcs++;
+    const pending = [...this.pendingProcs.entries()];
+    for (const [controller] of pending) controller.abort();
+    try {
+      const ids = [...this.jobs.keys()];
+      await Promise.all([
+        ...pending.map(([, settled]) => settled),
+        ...ids.map(async (id) => {
+          const job = this.jobs.get(id);
+          if (!job) return;
+          this.jobs.delete(id);
+          try {
+            if (job.kind === "mock") await job.server.stop();
+            else {
+              await job.teardown();
+              job.live?.end();
+              await Promise.race([job.pumpDone, Bun.sleep(TEARDOWN_REPORT_MS)]);
+            }
+          } catch {
+            // best-effort on the way out; the process is leaving anyway
           }
-        } catch {
-          // best-effort on the way out; the process is leaving anyway
-        }
-      }),
-    );
+        }),
+      ]);
+    } finally {
+      this.stoppingProcs--;
+    }
   }
 }

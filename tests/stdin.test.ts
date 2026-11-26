@@ -50,7 +50,7 @@ describe("stdin source — CLI round-trips", () => {
   });
 
   test("trailing partial line (no final newline) is flushed", async () => {
-    const r = await runCli(["-c", "stdin | (l => `<${l}>`)"], "one\ntwo\npartial");
+    const r = await runCli(["-c", "stdin | (l => `<$" + "{l}>`)"], "one\ntwo\npartial");
     expect(r.code).toBe(0);
     expect(r.stdout).toBe("<one>\n<two>\n<partial>\n");
   });

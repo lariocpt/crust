@@ -15,7 +15,7 @@ export function defaultPrompt(ctx?: Context): string {
 export function displayCwd(): string {
   const cwd = process.cwd();
   if (cwd === HOME) return "~";
-  if (cwd.startsWith(HOME + "/")) return "~" + cwd.slice(HOME.length);
+  if (cwd.startsWith(`${HOME}/`)) return `~${cwd.slice(HOME.length)}`;
   return cwd;
 }
 

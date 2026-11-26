@@ -22,12 +22,12 @@ export async function wait(...args: unknown[]): Promise<{
   let probeTimeout: string | null = null;
 
   for (let i = 0; i < strs.length; i++) {
-    const a = strs[i]!;
+    const a = strs[i];
     const eq = a.match(/^--(timeout|interval|probe-timeout)=(.+)$/);
     if (eq) {
-      if (eq[1] === "timeout") timeout = eq[2]!;
-      else if (eq[1] === "interval") interval = eq[2]!;
-      else probeTimeout = eq[2]!;
+      if (eq[1] === "timeout") timeout = eq[2];
+      else if (eq[1] === "interval") interval = eq[2];
+      else probeTimeout = eq[2];
       continue;
     }
     if (a === "--timeout" || a === "--interval" || a === "--probe-timeout") {

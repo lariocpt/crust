@@ -2,6 +2,7 @@ import { stat } from "node:fs/promises";
 import { file, Glob } from "bun";
 import { interruptPromise, isInterrupted } from "./interrupt";
 import { Pipeline } from "./pipeline";
+import { type ProcLaunch, preflightProc, procArgv, validateProcLaunch } from "./procLaunch";
 import {
   awaitReady,
   formatReadyTarget,
@@ -211,7 +212,9 @@ export function tail(paths: string | string[], opts: TailOptions = {}): Pipeline
         return;
       }
       if (resolved.length === 1) {
-        yield* tailOne(resolved[0]!, initialLines, follow, pollMs, opts.signal);
+        for (const path of resolved) {
+          yield* tailOne(path, initialLines, follow, pollMs, opts.signal);
+        }
         return;
       }
       yield* mergeAsync(resolved.map((p) => tailOne(p, initialLines, follow, pollMs, opts.signal)));
@@ -375,7 +378,9 @@ export async function* mergeAsync<T>(gens: AsyncGenerator<T>[]): AsyncGenerator<
   let live = gens.length;
 
   const pull = (idx: number): void => {
-    gens[idx]!.next().then(
+    const gen = gens[idx];
+    if (gen === undefined) throw new Error(`mergeAsync: missing generator ${idx}`);
+    gen.next().then(
       (res) => {
         ready.push({ idx, res });
         wake?.();
@@ -399,7 +404,9 @@ export async function* mergeAsync<T>(gens: AsyncGenerator<T>[]): AsyncGenerator<
           wake = r;
         });
       }
-      const { idx, res } = ready.shift()!;
+      const next = ready.shift();
+      if (next === undefined) throw new Error("mergeAsync: ready queue unexpectedly empty");
+      const { idx, res } = next;
       if (pendingError !== undefined) throw pendingError;
       if (res.done) {
         live--;
@@ -439,19 +446,20 @@ export function request(
       const init: RequestInit = { ...opts, method };
       // Minted at generator start (one request per source); a caller signal
       // wins, and only a MINTED signal's abort is ever labeled a timeout.
-      let minted = false;
-      if (timeoutMs !== undefined && !opts?.signal) {
-        init.signal = AbortSignal.timeout(timeoutMs);
-        minted = true;
+      const mintedTimeoutMs = !opts?.signal ? timeoutMs : undefined;
+      if (mintedTimeoutMs !== undefined) {
+        init.signal = AbortSignal.timeout(mintedTimeoutMs);
       }
       try {
         const res = await fetch(url, init);
         // The budget keeps governing the body stream downstream — label
         // body-phase timeouts too instead of a bare "operation timed out".
-        yield minted ? labelBodyTimeout(res, method, url, timeoutMs!) : res;
+        yield mintedTimeoutMs !== undefined
+          ? labelBodyTimeout(res, method, url, mintedTimeoutMs)
+          : res;
       } catch (err) {
-        if (minted && isTimeoutError(err)) {
-          throw new HttpTimeoutError(method, url, timeoutMs!);
+        if (mintedTimeoutMs !== undefined && isTimeoutError(err)) {
+          throw new HttpTimeoutError(method, url, mintedTimeoutMs);
         }
         if (init.redirect === "error" && isRedirectError(err)) {
           throw new HttpRedirectError(method, url);
@@ -508,8 +516,14 @@ export interface LiveSpec {
   graceMs?: number;
 }
 
-export interface ProcSpec {
-  cmd: string;
+/**
+ * Select exactly one launch form: {cmd}, {executable, args}, or
+ * {shell: "pwsh", script}. Direct args are literal; PowerShell source is opaque.
+ * PowerShell defaults to native errors; errorPolicy: "strict" requires 7.4+.
+ */
+export type ProcSpec = ProcLaunch & {
+  /** Working directory for this child only. */
+  cwd?: string;
   /** extra env for THIS process (merged over the inherited environment) */
   env?: Record<string, string>;
   /**
@@ -532,7 +546,7 @@ export interface ProcSpec {
   live?: string | LiveSpec;
   /** spawn only after these procs are READY (their spec keys) */
   after?: string | string[];
-}
+};
 
 const READY_DEFAULT_TIMEOUT_MS = 30_000;
 const READY_DEFAULT_INTERVAL_MS = 250;
@@ -659,6 +673,29 @@ export function procs(
   specs: Record<string, string | ProcSpec>,
   opts: ProcsOpts = {},
 ): Pipeline<ProcLine> {
+  return buildProcs(specs, opts, false);
+}
+
+/** Complete syntax/version checks before a caller registers a held session. */
+export async function prepareProcs(
+  specs: Record<string, string | ProcSpec>,
+  opts: ProcsOpts = {},
+): Promise<Pipeline<ProcLine>> {
+  opts.signal?.throwIfAborted();
+  const pipeline = buildProcs(specs, opts, true);
+  for (const [name, spec] of Object.entries(specs)) {
+    opts.signal?.throwIfAborted();
+    if (typeof spec !== "string") await preflightProc(spec, name, undefined, opts.signal);
+  }
+  opts.signal?.throwIfAborted();
+  return pipeline;
+}
+
+function buildProcs(
+  specs: Record<string, string | ProcSpec>,
+  opts: ProcsOpts,
+  preflightDone: boolean,
+): Pipeline<ProcLine> {
   const killGraceMs = opts.killGraceMs ?? KILL_GRACE_MS;
   const healthyUptimeMs = opts.healthyUptimeMs ?? RESTART_HEALTHY_UPTIME_MS;
   const entries = Object.entries(specs).map(([name, v]) => ({
@@ -666,6 +703,7 @@ export function procs(
     spec: typeof v === "string" ? { cmd: v } : v,
   }));
   if (entries.length === 0) throw new Error("procs: no processes given");
+  for (const { name, spec } of entries) validateProcLaunch(spec, name);
 
   // -- upfront validation: bad wiring should throw before anything spawns ----
   const names = new Set(entries.map((e) => e.name));
@@ -698,6 +736,13 @@ export function procs(
 
   return Pipeline.of(
     (async function* () {
+      opts.signal?.throwIfAborted();
+      if (!preflightDone) {
+        for (const { name, spec } of entries) {
+          await preflightProc(spec, name, undefined, opts.signal);
+        }
+      }
+      opts.signal?.throwIfAborted();
       // One mutable slot per proc so kill() always reaches the CURRENT child,
       // including one spawned by a restart.
       const current = new Map<string, ReturnType<typeof Bun.spawn>>();
@@ -713,6 +758,11 @@ export function procs(
         latch.promise.catch(() => {});
         latches.set(name, latch);
       }
+      const latchFor = (name: string): PromiseWithResolvers<void> => {
+        const latch = latches.get(name);
+        if (latch === undefined) throw new Error(`procs: missing readiness latch for "${name}"`);
+        return latch;
+      };
       const killSignal = Promise.withResolvers<void>();
 
       // SIGTERM the given groups, give them killGraceMs to die, then SIGKILL
@@ -816,7 +866,7 @@ export function procs(
         });
         if (res) {
           onReady();
-          latches.get(name)!.resolve();
+          latchFor(name).resolve();
           yield { proc: name, stream: "ready", line: `ready after ${res.ms}ms (${label})` };
           return;
         }
@@ -920,7 +970,7 @@ export function procs(
       // fixed at start, so respawning must happen INSIDE a single generator
       // rather than by adding new ones mid-flight.
       async function* runProc(name: string, spec: ProcSpec): AsyncGenerator<ProcLine> {
-        const latch = latches.get(name)!;
+        const latch = latchFor(name);
         const ready = readyOf.get(name);
         const live = liveOf.get(name);
         const deps = afterOf.get(name) ?? [];
@@ -932,7 +982,7 @@ export function procs(
             // errors → the outer finally tears everything down. Dependents
             // gate ONCE — a dependency restarting later never re-blocks them.
             await Promise.race([
-              Promise.all(deps.map((d) => latches.get(d)!.promise)),
+              Promise.all(deps.map((d) => latchFor(d).promise)),
               killSignal.promise,
             ]);
             if (killed) return;
@@ -940,10 +990,12 @@ export function procs(
           let backoff = 250;
           let restarts = 0;
           for (;;) {
-            const child = Bun.spawn(["sh", "-c", spec.cmd], {
+            if (killed || signal?.aborted) return;
+            const child = Bun.spawn(procArgv(spec), {
+              cwd: spec.cwd,
               stdout: "pipe",
               stderr: "pipe",
-              env: { ...shellEnv(), FORCE_COLOR: "0", ...(spec.env ?? {}) },
+              env: { ...shellEnv(spec.cwd), FORCE_COLOR: "0", ...(spec.env ?? {}) },
               // Own process group (setsid leader) so kills reach grandchildren.
               detached: true,
             });
@@ -1072,8 +1124,7 @@ export function load(
       let target = 0;
       let dropped = 0;
       const maxLagMs = opts.maxLagMs ?? 1000;
-      for (let p = 0; p < phases.length; p++) {
-        const { durMs, rps } = phases[p]!;
+      for (const [p, { durMs, rps }] of phases.entries()) {
         const interval = 1000 / rps;
         const phaseTarget = Math.max(1, Math.round((durMs * rps) / 1000));
         target += phaseTarget;

@@ -12,6 +12,7 @@ import {
   validateResponse,
   validateSchema,
 } from "../src/mockServer/validateRequest";
+import { required } from "./support/required";
 
 const SCHEMA_SPEC: OpenApiSpec = {
   openapi: "3.1.0",
@@ -231,8 +232,8 @@ describe("validateSchema", () => {
     };
     const violations = validateSchema({ items: [{ name: 5 }] }, schema, SCHEMA_SPEC);
     expect(violations).toHaveLength(1);
-    expect(violations[0]!.pointer).toBe("/items/0/name");
-    expect(violations[0]!.rule).toBe("type");
+    expect(violations[0].pointer).toBe("/items/0/name");
+    expect(violations[0].rule).toBe("type");
   });
 
   test("required violation points at the missing property", () => {
@@ -242,8 +243,8 @@ describe("validateSchema", () => {
       SCHEMA_SPEC,
     );
     expect(violations).toHaveLength(1);
-    expect(violations[0]!.pointer).toBe("/name");
-    expect(violations[0]!.rule).toBe("required");
+    expect(violations[0].pointer).toBe("/name");
+    expect(violations[0].rule).toBe("required");
   });
 
   test("nested repeat of an already-visited $ref is validated with the right pointer", () => {
@@ -255,8 +256,8 @@ describe("validateSchema", () => {
       SCHEMA_SPEC,
     );
     expect(violations).toHaveLength(1);
-    expect(violations[0]!.pointer).toBe("/child/value");
-    expect(violations[0]!.rule).toBe("minLength");
+    expect(violations[0].pointer).toBe("/child/value");
+    expect(violations[0].rule).toBe("minLength");
   });
 });
 
@@ -533,11 +534,11 @@ describe("--proxy validation-proxy e2e", () => {
     expect(await res.text()).toBe("teapot");
     const v = proxy.violations.find((x) => x.rule === "undocumented-status");
     expect(v).toBeDefined();
-    expect(v!.direction).toBe("response");
-    expect(v!.location).toBe("status");
-    expect(v!.status).toBe(599);
-    expect(v!.template).toBe("/weird-status");
-    expect(v!.expected).toEqual(["200"]);
+    expect(required(v).direction).toBe("response");
+    expect(required(v).location).toBe("status");
+    expect(required(v).status).toBe(599);
+    expect(required(v).template).toBe("/weird-status");
+    expect(required(v).expected).toEqual(["200"]);
   });
 
   test("schema-violating upstream JSON body is passed through and recorded", async () => {
@@ -546,9 +547,9 @@ describe("--proxy validation-proxy e2e", () => {
     expect(await res.json()).toEqual({ id: "not-an-int" });
     const v = proxy.violations.find((x) => x.rule === "type" && x.direction === "response");
     expect(v).toBeDefined();
-    expect(v!.location).toBe("body");
-    expect(v!.pointer).toBe("/id");
-    expect(v!.path).toBe("/bad-body");
+    expect(required(v).location).toBe("body");
+    expect(required(v).pointer).toBe("/id");
+    expect(required(v).path).toBe("/bad-body");
   });
 
   test("unknown path is forwarded anyway and recorded as undocumented-operation", async () => {
@@ -557,9 +558,9 @@ describe("--proxy validation-proxy e2e", () => {
     expect(await res.text()).toBe("mystery");
     const v = proxy.violations.find((x) => x.rule === "undocumented-operation");
     expect(v).toBeDefined();
-    expect(v!.direction).toBe("request");
-    expect(v!.template).toBe("");
-    expect(v!.path).toBe("/mystery-path");
+    expect(required(v).direction).toBe("request");
+    expect(required(v).template).toBe("");
+    expect(required(v).path).toBe("/mystery-path");
   });
 
   test("GET /__crust/violations reports; DELETE clears", async () => {
@@ -910,8 +911,8 @@ describe("validateSchema --strict (additionalProperties)", () => {
     const v = run({ a: 1, extra: "x", more: 2 }, schema);
     expect(v.map((x) => x.rule)).toEqual(["additionalProperties", "additionalProperties"]);
     expect(v.map((x) => x.pointer).sort()).toEqual(["/extra", "/more"]);
-    expect(v[0]!.expected).toEqual(["a"]);
-    expect(v[0]!.message).toContain("unexpected property");
+    expect(v[0].expected).toEqual(["a"]);
+    expect(v[0].message).toContain("unexpected property");
   });
 
   test("control: identical schema and value pass without strict", () => {
@@ -1082,7 +1083,7 @@ describe("--strict mock mode e2e", () => {
         violations: Array<{ pointer: string; rule: string }>;
       };
       expect(body.violations.map((v) => v.rule)).toEqual(["additionalProperties"]);
-      expect(body.violations[0]!.pointer).toBe("/extra");
+      expect(body.violations[0].pointer).toBe("/extra");
 
       const accepted = await fetch(`http://127.0.0.1:${looseServer.port}/tight`, payload);
       expect(accepted.status).toBe(201);
@@ -1114,7 +1115,7 @@ describe("an operation documenting no responses at all", () => {
 
   test("no status is invented as a violation", () => {
     const routes = buildRoutes(spec);
-    const route = routes.find((r) => r.template === "/undocumented")!;
+    const route = required(routes.find((r) => r.template === "/undocumented"));
     const v = validateResponse(
       { status: 200, contentType: "application/json", hasBody: true, body: {} },
       route,
@@ -1125,7 +1126,7 @@ describe("an operation documenting no responses at all", () => {
 
   test("an operation that DOES document statuses still rejects an undocumented one (control)", () => {
     const routes = buildRoutes(spec);
-    const route = routes.find((r) => r.template === "/documented")!;
+    const route = required(routes.find((r) => r.template === "/documented"));
     const v = validateResponse(
       { status: 503, contentType: "application/json", hasBody: true, body: {} },
       route,

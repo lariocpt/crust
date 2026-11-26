@@ -28,7 +28,7 @@ export type CompletionResult = CompletionReplace | string[];
 
 export function complete(buf: string, cursor: number): CompletionResult {
   let start = cursor;
-  while (start > 0 && !/[\s|]/.test(buf[start - 1]!)) start--;
+  while (start > 0 && !/[\s|]/.test(buf[start - 1])) start--;
   const token = buf.slice(start, cursor);
 
   let i = start - 1;
@@ -39,8 +39,8 @@ export function complete(buf: string, cursor: number): CompletionResult {
 
   if (candidates.length === 0) return { replace: [start, cursor], with: token };
   if (candidates.length === 1) {
-    const isDir = !atStartOfStage && existsSync(candidates[0]!) && safeIsDir(candidates[0]!);
-    return { replace: [start, cursor], with: candidates[0]! + (isDir ? "/" : "") };
+    const isDir = !atStartOfStage && existsSync(candidates[0]) && safeIsDir(candidates[0]);
+    return { replace: [start, cursor], with: candidates[0] + (isDir ? "/" : "") };
   }
   const cp = commonPrefix(candidates);
   if (cp.length > token.length) return { replace: [start, cursor], with: cp };
@@ -87,9 +87,9 @@ function safeIsDir(p: string): boolean {
 
 function commonPrefix(strs: string[]): string {
   if (strs.length === 0) return "";
-  let p = strs[0]!;
+  let p = strs[0];
   for (let i = 1; i < strs.length; i++) {
-    while (!strs[i]!.startsWith(p)) p = p.slice(0, -1);
+    while (!strs[i].startsWith(p)) p = p.slice(0, -1);
   }
   // The unit-by-unit shrink can stop with `p` ending in a HIGH SURROGATE — a
   // lone half-pair that is NOT valid UTF-16 and would splice straight into the

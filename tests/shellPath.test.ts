@@ -3,6 +3,7 @@ import { chmod, mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { shellEnv } from "../src/shellPath";
+import { required } from "./support/required";
 
 let dir: string;
 let cwd: string;
@@ -26,7 +27,7 @@ afterAll(async () => {
 describe("shellEnv — npm-run-style PATH", () => {
   test("prepends every ancestor node_modules/.bin, nearest first", () => {
     process.chdir(join(dir, "nested"));
-    const path = shellEnv().PATH!;
+    const path = required(shellEnv().PATH);
     const parts = path.split(delimiter);
     const near = parts.indexOf(join(dir, "nested", "node_modules", ".bin"));
     const far = parts.indexOf(join(dir, "node_modules", ".bin"));
@@ -39,7 +40,7 @@ describe("shellEnv — npm-run-style PATH", () => {
     process.chdir("/tmp");
     // /tmp's ancestors normally carry no node_modules/.bin; if the machine
     // has one at /, skip rather than assert a falsehood.
-    const path = shellEnv().PATH!;
+    const path = required(shellEnv().PATH);
     if (!path.includes(`${delimiter}/node_modules/.bin`) && !path.startsWith("/node_modules")) {
       expect(path).toBe(process.env.PATH ?? "");
     }

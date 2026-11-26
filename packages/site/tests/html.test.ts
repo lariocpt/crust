@@ -250,7 +250,7 @@ describe("nesting depth cap (64)", () => {
     const out = renderToString(chain(64));
     // 64 nested <span> wrappers around "end"
     expect(out.startsWith("<span>")).toBe(true);
-    expect(out.endsWith("end" + "</span>".repeat(64))).toBe(true);
+    expect(out.endsWith(`end${"</span>".repeat(64)}`)).toBe(true);
     expect(out.length).toBe(6 * 64 + 7 * 64 + 3); // <span> + </span> per level, plus "end"
   });
 

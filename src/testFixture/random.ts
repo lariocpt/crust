@@ -12,7 +12,7 @@ export const random = {
   },
   choice<T>(arr: readonly T[]): T {
     if (arr.length === 0) throw new Error("random.choice: empty array");
-    return arr[Math.floor(Math.random() * arr.length)]!;
+    return arr[Math.floor(Math.random() * arr.length)];
   },
   from<T>(iter: Iterable<T>): T {
     return random.choice(Array.from(iter));
@@ -26,7 +26,7 @@ export const random = {
       r -= w;
       if (r < 0) return v;
     }
-    return items[items.length - 1]![0];
+    return items[items.length - 1][0];
   },
   string(len: number, alphabet: string = DEFAULT_ALPHABET): string {
     let out = "";
@@ -42,7 +42,7 @@ export const random = {
     const out = arr.slice();
     for (let i = out.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
-      [out[i], out[j]] = [out[j]!, out[i]!];
+      [out[i], out[j]] = [out[j], out[i]];
     }
     return out;
   },

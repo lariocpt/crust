@@ -82,7 +82,7 @@ export async function runFixtures(opts: RunOpts): Promise<RunReport> {
     const idx = i;
     let t!: Promise<void>;
     t = (async () => {
-      const r = await tasks[idx]!();
+      const r = await tasks[idx]();
       slots[idx] = r;
       if (opts.bail && r.status !== "pass") bailed = true;
     })().finally(() => {
@@ -152,7 +152,7 @@ function buildStressBuckets(results: FixtureResult[]): StressBucket[] {
 function percentile(sorted: number[], p: number): number {
   if (sorted.length === 0) return 0;
   const idx = Math.min(sorted.length - 1, Math.floor((p / 100) * sorted.length));
-  return sorted[idx]!;
+  return sorted[idx];
 }
 
 export async function expandTarget(target: string): Promise<string[]> {
@@ -271,7 +271,7 @@ async function resolveDeep(
   path = callUnary ? "input" : "output",
 ): Promise<unknown> {
   if (typeof value === "function") {
-    if ((value as Function).length === 0) {
+    if (value.length === 0) {
       const resolved = await (value as () => unknown)();
       // In OUTPUT, arity silently decides meaning: 0 args is a thunk supplying
       // the EXPECTED value, >=1 is a predicate over the actual one. `() => true`
@@ -292,7 +292,7 @@ async function resolveDeep(
       }
       return resolved;
     }
-    if (callUnary && (value as Function).length === 1) {
+    if (callUnary && value.length === 1) {
       return await (value as (c: unknown) => unknown)(ctx);
     }
     return value;
@@ -350,15 +350,15 @@ function assertNoRefs(schema: unknown, pointer = ""): void {
 function editDistance(a: string, b: string): number {
   const prev = Array.from({ length: b.length + 1 }, (_, i) => i);
   for (let i = 1; i <= a.length; i++) {
-    let diag = prev[0]!;
+    let diag = prev[0];
     prev[0] = i;
     for (let j = 1; j <= b.length; j++) {
-      const next = Math.min(prev[j]! + 1, prev[j - 1]! + 1, diag + (a[i - 1] === b[j - 1] ? 0 : 1));
-      diag = prev[j]!;
+      const next = Math.min(prev[j] + 1, prev[j - 1] + 1, diag + (a[i - 1] === b[j - 1] ? 0 : 1));
+      diag = prev[j];
       prev[j] = next;
     }
   }
-  return prev[b.length]!;
+  return prev[b.length];
 }
 
 function assertKnownOutputKeys(rawOutput: unknown): void {

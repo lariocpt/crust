@@ -88,7 +88,7 @@ describe("source: bash scripts (G06)", () => {
       ].join("\n"),
     );
     process.env.SB_OUT = out;
-    const code = await builtins.source!("./loops.sh", ctx);
+    const code = await builtins.source("./loops.sh", ctx);
     expect(code).toBe(0);
     const text = await readFile(out, "utf8");
     expect(text).toContain("if-ok");
@@ -99,12 +99,12 @@ describe("source: bash scripts (G06)", () => {
 
   test("exported env is visible to the next crust line and to a later shell stage", async () => {
     await writeFile(join(dir, "env.sh"), "export SB_FOO=bar\n");
-    const code = await builtins.source!("./env.sh", ctx);
+    const code = await builtins.source("./env.sh", ctx);
     expect(code).toBe(0);
 
     // Next crust line: the `export` builtin (no args) lists the session env.
     const [, listed] = await captureStdout(async () => {
-      await builtins.export!("", ctx);
+      await builtins.export("", ctx);
     });
     expect(listed).toContain("SB_FOO=bar");
 
@@ -122,7 +122,7 @@ describe("source: bash scripts (G06)", () => {
       'echo before >> "$SB_OUT"\nexit 7\necho not-run >> "$SB_OUT"\n',
     );
     process.env.SB_OUT = out;
-    const code = await builtins.source!("./fail.sh", ctx);
+    const code = await builtins.source("./fail.sh", ctx);
     expect(code).toBe(7);
     expect(await readFile(out, "utf8")).toContain("before");
     expect(await readFile(out, "utf8")).not.toContain("not-run");
@@ -135,7 +135,7 @@ describe("source: bash scripts (G06)", () => {
       'set -e\necho before >> "$SB_OUT"\nfalse\necho after >> "$SB_OUT"\n',
     );
     process.env.SB_OUT = out;
-    const code = await builtins.source!("./sete.sh", ctx);
+    const code = await builtins.source("./sete.sh", ctx);
     expect(code).not.toBe(0);
     expect(await readFile(out, "utf8")).toContain("before");
     expect(await readFile(out, "utf8")).not.toContain("after");
@@ -143,7 +143,7 @@ describe("source: bash scripts (G06)", () => {
 
   test("env capture survives a value containing a space (or refuses loudly)", async () => {
     await writeFile(join(dir, "space.sh"), 'export SB_SPACE="a b c"\n');
-    const [code, err] = await captureStderr(async () => builtins.source!("./space.sh", ctx));
+    const [code, err] = await captureStderr(async () => builtins.source("./space.sh", ctx));
     if (code === 0) {
       expect(process.env.SB_SPACE).toBe("a b c");
     } else {
@@ -154,7 +154,7 @@ describe("source: bash scripts (G06)", () => {
 
   test("env capture survives a value containing a newline (or refuses loudly)", async () => {
     await writeFile(join(dir, "newline.sh"), 'SB_NEW="line1\nline2"\nexport SB_NEW\n');
-    const [code, err] = await captureStderr(async () => builtins.source!("./newline.sh", ctx));
+    const [code, err] = await captureStderr(async () => builtins.source("./newline.sh", ctx));
     if (code === 0) {
       expect(process.env.SB_NEW).toBe("line1\nline2");
     } else {
@@ -167,7 +167,7 @@ describe("source: bash scripts (G06)", () => {
     const out = join(dir, "ctrl.out");
     await writeFile(join(dir, "ctrl.crust"), 'export SB_CTRL=1\necho ctrl-ok >> "$SB_OUT"\n');
     process.env.SB_OUT = out;
-    const code = await builtins.source!("./ctrl.crust", ctx);
+    const code = await builtins.source("./ctrl.crust", ctx);
     expect(code).toBe(0);
     expect(process.env.SB_CTRL).toBe("1");
     expect(await readFile(out, "utf8")).toContain("ctrl-ok");
@@ -178,24 +178,41 @@ describe("source: bash scripts (G06)", () => {
       join(dir, "mod.ts"),
       'process.env.SB_TS = "imported";\nexport const value = 42;\n',
     );
-    const code = await builtins.source!("./mod.ts", ctx);
+    const code = await builtins.source("./mod.ts", ctx);
     expect(code).toBe(0);
     expect(process.env.SB_TS).toBe("imported");
   });
 
   test("control: source missing.sh fails with `source: …`, not a stack trace", async () => {
-    const [code, err] = await captureStderr(async () => builtins.source!("./nope-missing.sh", ctx));
+    const [code, err] = await captureStderr(async () => builtins.source("./nope-missing.sh", ctx));
     expect(code).not.toBe(0);
     expect(err).toContain("source:");
     expect(err).not.toContain("at ");
     expect(err).not.toContain("stack");
   });
 
+  test("inherited object names are not shell block openers", async () => {
+    const source = builtins.source;
+    if (!source) throw new Error("source builtin is missing");
+    for (const name of ["constructor", "toString", "__proto__"]) {
+      let calls = 0;
+      ctx.functions.set(name, () => {
+        calls++;
+        return [];
+      });
+      await writeFile(join(dir, "prototype-name"), `${name}\n`);
+      const [code, err] = await captureStderr(async () => source("./prototype-name", ctx));
+      expect(code).toBe(0);
+      expect(err).toBe("");
+      expect(calls).toBe(1);
+    }
+  });
+
   test("ambiguous extensionless file: one defined outcome, never a partial run", async () => {
     const out = join(dir, "amb.out");
     await writeFile(join(dir, "ambig"), 'if [ -n "$HOME" ]; then\necho amb-ok >> "$SB_OUT"\nfi\n');
     process.env.SB_OUT = out;
-    const [code, err] = await captureStderr(async () => builtins.source!("./ambig", ctx));
+    const [code, err] = await captureStderr(async () => builtins.source("./ambig", ctx));
     if (code === 0) {
       // The defined outcome here is: it ran (as bash) to completion.
       expect(await readFile(out, "utf8")).toContain("amb-ok");

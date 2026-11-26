@@ -243,7 +243,7 @@ function main(): number | Promise<number> {
   // `build`/`dev` take AT MOST one positional (the config file). A second
   // one, or a flag-shaped one, is refused rather than dropped: a silently
   // ignored argument is a false pass wearing a success exit.
-  if (rest.length > 1 || (rest.length === 1 && rest[0]!.startsWith("-"))) {
+  if (rest.length > 1 || (rest.length === 1 && rest[0].startsWith("-"))) {
     process.stderr.write(
       `crust-site: ${command} takes at most one argument (configFile)\n\n${USAGE}`,
     );

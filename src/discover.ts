@@ -151,7 +151,8 @@ function lazyDispatch(
       await inflight;
     }
     if (resolveError) throw resolveError;
-    return resolved!(...args);
+    if (!resolved) throw new Error(`package "${packageName}" did not resolve a callable export`);
+    return resolved(...args);
   };
 }
 
@@ -165,6 +166,6 @@ function pickExport(
   const fnExports = Object.entries(mod).filter(
     ([k, v]) => typeof v === "function" && k !== "default",
   );
-  if (fnExports.length === 1) return fnExports[0]![1];
+  if (fnExports.length === 1) return fnExports[0][1];
   return null;
 }

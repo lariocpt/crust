@@ -41,6 +41,7 @@ import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { required } from "../../../tests/support/required";
 import { build, DRAFT_BANNER_HTML, devBuild } from "../src/build.ts";
 import { type DevServer, startDev } from "../src/dev.ts";
 import { BuildError } from "../src/diagnostics.ts";
@@ -330,8 +331,8 @@ describe("dev — draft pages", () => {
     const dev = await devBuild({ configFile: cfg });
     const draftWarnings = dev.result.warnings.filter((d) => d.code === "link.draft");
     expect(draftWarnings.length).toBe(1);
-    expect(draftWarnings[0]!.severity).toBe("warning");
-    expect(draftWarnings[0]!.sourcePath).toBe("content/index.md");
+    expect(draftWarnings[0].severity).toBe("warning");
+    expect(draftWarnings[0].sourcePath).toBe("content/index.md");
     expect(dev.result.draftPages.map((p) => p.route)).toEqual(["/draft"]);
     await rm(dev.staging, { recursive: true, force: true });
 
@@ -346,7 +347,7 @@ describe("dev — draft pages", () => {
     expect(error).toBeInstanceOf(BuildError);
     const prod = (error as BuildError).diagnostics.filter((d) => d.code === "link.draft");
     expect(prod.length).toBe(1);
-    expect(prod[0]!.severity).toBe("error");
+    expect(prod[0].severity).toBe("error");
   });
 });
 
@@ -381,8 +382,8 @@ describe("dev — response headers and content types", () => {
       return { type: res.headers.get("content-type"), cache: res.headers.get("cache-control") };
     };
     const home = await (await fetch(`${h.base}/`)).text();
-    const jsPath = home.match(/assets\/app-[0-9a-f]{16}\.js/)![0];
-    const cssPath = home.match(/assets\/site-[0-9a-f]{16}\.css/)![0];
+    const jsPath = required(home.match(/assets\/app-[0-9a-f]{16}\.js/))[0];
+    const cssPath = required(home.match(/assets\/site-[0-9a-f]{16}\.css/))[0];
 
     // HTML: no-store, text/html
     expect(await head("/")).toEqual({
@@ -620,7 +621,7 @@ describe("dev — edge-case URLs", () => {
     let res = await get("/?x=1");
     expect(res.status).toBe(200);
     expect(await res.text()).toContain("<title>Home</title>");
-    res = await get("/a/b?utm=42#frag".split("#")[0]!);
+    res = await get("/a/b?utm=42#frag".split("#")[0]);
     expect(res.status).toBe(200);
     expect(await res.text()).toContain("<title>B</title>");
 

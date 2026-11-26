@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { required } from "../../tests/support/required";
 import type { OpenApiSpec } from "./loadSpec";
 import { pickResponse, synthesizeBody } from "./mockResponse";
 import { buildRoutes, matchRoute } from "./router";
@@ -46,8 +47,8 @@ describe("swagger2to3", () => {
     expect((spec as Record<string, unknown>).definitions).toBeUndefined();
     expect(spec.components?.schemas?.ComponentResponse).toBeDefined();
     // response.schema wrapped into content["application/json"]
-    const op = spec.paths!["/component"]!.post!;
-    const media = op.responses!["200"]!.content!["application/json"]!;
+    const op = required(spec.paths)["/component"].post;
+    const media = required(required(op.responses)["200"].content)["application/json"];
     expect(media.schema).toBeDefined();
     // $ref rewritten to #/components/schemas/*
     expect((media.schema as { $ref: string }).$ref).toBe("#/components/schemas/ComponentResponse");
@@ -59,14 +60,14 @@ describe("swagger2to3", () => {
     const routes = buildRoutes(spec);
     const { matched } = matchRoute(routes, "POST", "/component");
     expect(matched).not.toBeNull();
-    const { status, media } = pickResponse(matched!.operation);
+    const { status, media } = pickResponse(required(matched).operation);
     expect(status).toBe(200);
     const body = synthesizeBody(media, spec) as Record<string, unknown>;
     // refs resolve through components.schemas; schema-level examples win.
     expect(body.correlationId).toBe("abc-123");
     expect(body.status).toBe("Success");
     expect(Array.isArray(body.outputs)).toBe(true);
-    expect((body.outputs as Array<Record<string, unknown>>)[0]!.status).toBe("Success");
+    expect((body.outputs as Array<Record<string, unknown>>)[0].status).toBe("Success");
   });
 });
 
@@ -111,7 +112,7 @@ function bodyV2(over?: Record<string, unknown>): OpenApiSpec {
 describe("an `in: body` parameter becomes a requestBody (F47)", () => {
   test("the move: schema, required flag, media type, and the parameter removed", () => {
     const spec = swagger2to3(bodyV2());
-    const op = spec.paths!["/widgets"]!.post!;
+    const op = required(spec.paths)["/widgets"].post;
     const rb = op.requestBody as unknown as Record<string, unknown>;
     expect(rb.required).toBe(true);
     const media = (rb.content as Record<string, Record<string, unknown>>)["application/json"];
@@ -136,7 +137,10 @@ describe("an `in: body` parameter becomes a requestBody (F47)", () => {
         },
       }),
     );
-    const rb = spec.paths!["/upload"]!.post!.requestBody as Record<string, Record<string, unknown>>;
+    const rb = required(spec.paths)["/upload"].post.requestBody as Record<
+      string,
+      Record<string, unknown>
+    >;
     expect(Object.keys(rb.content)).toEqual(["application/x-www-form-urlencoded"]);
   });
 
@@ -151,7 +155,7 @@ describe("an `in: body` parameter becomes a requestBody (F47)", () => {
         },
       }),
     );
-    const rb = spec.paths!["/shared"]!.post!.requestBody as Record<string, unknown>;
+    const rb = required(spec.paths)["/shared"].post.requestBody as Record<string, unknown>;
     expect(rb.required).toBe(true);
     const media = (rb.content as Record<string, Record<string, unknown>>)["application/json"];
     expect((media.schema as { $ref: string }).$ref).toBe("#/components/schemas/Widget");
@@ -168,9 +172,9 @@ describe("an `in: body` parameter becomes a requestBody (F47)", () => {
         },
       },
     } as unknown as OpenApiSpec);
-    const item = spec.paths!["/things"]!;
-    expect(item.post!.requestBody).toBeDefined();
-    expect(item.put!.requestBody).toBeDefined();
+    const item = required(spec.paths)["/things"];
+    expect(item.post.requestBody).toBeDefined();
+    expect(item.put.requestBody).toBeDefined();
     // a shared parameter is not the converter's to delete — every operation still needs it
     expect((item.parameters as unknown as unknown[]).length).toBe(1);
   });
@@ -196,14 +200,14 @@ describe("an `in: body` parameter becomes a requestBody (F47)", () => {
         },
       }),
     );
-    const paths = spec.paths!;
-    expect((paths["/mixed"]!.post!.requestBody as Record<string, unknown>).content).toEqual({
+    const paths = required(spec.paths);
+    expect((paths["/mixed"].post.requestBody as Record<string, unknown>).content).toEqual({
       "text/plain": {},
     });
-    expect(paths["/form"]!.post!.requestBody).toBeUndefined();
-    expect(paths["/hollow"]!.post!.requestBody).toBeUndefined();
+    expect(paths["/form"].post.requestBody).toBeUndefined();
+    expect(paths["/hollow"].post.requestBody).toBeUndefined();
     // and the query parameter of /widgets did not become a body
-    expect(paths["/widgets"]!.post!.requestBody).toBeDefined();
+    expect(paths["/widgets"].post.requestBody).toBeDefined();
   });
 
   // 9 corpus specs do this (16 GET operations, 12 of them required — azure botservice/
@@ -256,12 +260,12 @@ describe("an `in: body` parameter becomes a requestBody (F47)", () => {
         },
       }),
     );
-    const item = spec.paths!["/search"]!;
-    expect(item.get!.requestBody).toBeUndefined();
-    expect(item.head!.requestBody).toBeUndefined();
-    expect(item.post!.requestBody).toBeDefined();
+    const item = required(spec.paths)["/search"];
+    expect(item.get.requestBody).toBeUndefined();
+    expect(item.head.requestBody).toBeUndefined();
+    expect(item.post.requestBody).toBeDefined();
     // and its parameter was not consumed by the guard
-    expect((item.get!.parameters as unknown[]).length).toBe(1);
+    expect((item.get.parameters as unknown[]).length).toBe(1);
   });
 
   // A path-item body is shared, so the guard has to be per-operation, not per-path.
@@ -276,8 +280,8 @@ describe("an `in: body` parameter becomes a requestBody (F47)", () => {
         },
       },
     } as unknown as OpenApiSpec);
-    const item = spec.paths!["/things"]!;
-    expect(item.get!.requestBody).toBeUndefined();
-    expect(item.post!.requestBody).toBeDefined();
+    const item = required(spec.paths)["/things"];
+    expect(item.get.requestBody).toBeUndefined();
+    expect(item.post.requestBody).toBeDefined();
   });
 });

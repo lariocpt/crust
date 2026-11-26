@@ -10,9 +10,9 @@ export function splitArgs(text: string): string[] {
   let quote: '"' | "'" | null = null;
   let started = false;
   for (let i = 0; i < text.length; i++) {
-    const ch = text[i]!;
+    const ch = text[i];
     if (quote === '"' && ch === "\\" && i + 1 < text.length) {
-      cur += text[++i]!;
+      cur += text[++i];
       started = true;
       continue;
     }
@@ -127,7 +127,7 @@ export function parseFlags(argv: string[], spec: FlagSpec): ParsedFlags {
   };
 
   for (let i = 0; i < argv.length; i++) {
-    const a = argv[i]!;
+    const a = argv[i];
     if (a === "-h" || a === "--help") return { values, rest, help: true };
 
     if (a.startsWith("--")) {
@@ -154,10 +154,10 @@ export function parseFlags(argv: string[], spec: FlagSpec): ParsedFlags {
     }
 
     if (a.startsWith("-") && a.length > 1) {
-      const letter = a[1]!;
+      const letter = a[1];
       const long = byShort.get(letter);
       if (!long) throw new FlagError(`unknown argument ${a}`);
-      const def = spec[long]!;
+      const def = spec[long];
       const attached = a.length > 2 ? a.slice(2) : null;
       if (def.type === "boolean") {
         if (attached !== null) throw new FlagError(`-${letter} is a flag and takes no value`);
@@ -175,15 +175,17 @@ export function parseFlags(argv: string[], spec: FlagSpec): ParsedFlags {
   // Fill declared positional slots in order, then keep the remainder. A slot
   // whose flag was ALSO given explicitly is an error, not a silent overwrite.
   const slots = Object.entries(spec)
-    .filter(([, d]) => d.positional !== undefined)
-    .sort((x, y) => x[1].positional! - y[1].positional!);
+    .flatMap(([name, def]) =>
+      def.positional === undefined ? [] : [{ name, def, position: def.positional }],
+    )
+    .sort((x, y) => x.position - y.position);
   for (const b of bare) {
     const slot = slots.shift();
     if (!slot) {
       rest.push(b);
       continue;
     }
-    const [long, def] = slot;
+    const { name: long, def } = slot;
     if (seen.has(long)) {
       throw new FlagError(`${flagLabel(long, def)} was given twice — as a flag and as "${b}"`);
     }
@@ -205,7 +207,7 @@ export function stripTrailingComment(text: string): string {
   let quote: '"' | "'" | null = null;
   let depth = 0;
   for (let i = 0; i < text.length; i++) {
-    const ch = text[i]!;
+    const ch = text[i];
     if (quote === '"' && ch === "\\" && i + 1 < text.length) {
       i++;
       continue;
@@ -226,7 +228,7 @@ export function stripTrailingComment(text: string): string {
       depth--;
       continue;
     }
-    if (ch === "#" && depth === 0 && (i === 0 || /\s/.test(text[i - 1]!))) {
+    if (ch === "#" && depth === 0 && (i === 0 || /\s/.test(text[i - 1]))) {
       return text.slice(0, i).trimEnd();
     }
   }
@@ -245,7 +247,7 @@ export function stripTrailingComment(text: string): string {
 export function hasUnquotedShellMeta(text: string): boolean {
   let quote: '"' | "'" | null = null;
   for (let i = 0; i < text.length; i++) {
-    const ch = text[i]!;
+    const ch = text[i];
     if (quote === '"' && ch === "\\" && i + 1 < text.length) {
       i++;
       continue;
@@ -345,7 +347,7 @@ export function parseAssignWords(text: string): AssignWord[] | AssignError {
   let quote: '"' | "'" | null = null;
   let i = 0;
   while (i < trimmed.length) {
-    while (i < trimmed.length && /\s/.test(trimmed[i]!)) i++;
+    while (i < trimmed.length && /\s/.test(trimmed[i])) i++;
     if (i >= trimmed.length) break;
     const start = i;
     // Consume one whitespace-delimited word with its quotes still attached, so
@@ -355,7 +357,7 @@ export function parseAssignWords(text: string): AssignWord[] | AssignError {
     quote = null;
     let sub = 0;
     for (; i < trimmed.length; i++) {
-      const ch = trimmed[i]!;
+      const ch = trimmed[i];
       if (ch === "\\") {
         i++;
         continue;
@@ -393,21 +395,21 @@ export function parseAssignWords(text: string): AssignWord[] | AssignError {
       return {
         reason: "unterminated-quote",
         word: trimmed.slice(start, i),
-        name: trimmed.slice(start).split("=")[0]!,
+        name: trimmed.slice(start).split("=")[0],
       };
     }
     const raw = trimmed.slice(start, i);
     const m = /^([A-Za-z_][A-Za-z0-9_]*)(\+?)=([\s\S]*)$/.exec(raw);
     if (m) {
-      const scanned = scanAssignValue(m[3]!, raw, m[1]!);
+      const scanned = scanAssignValue(m[3], raw, m[1]);
       if ("error" in scanned) return scanned.error;
-      words.push({ name: m[1]!, value: scanned.value, append: m[2] === "+" });
+      words.push({ name: m[1], value: scanned.value, append: m[2] === "+" });
       continue;
     }
     // `export FOO` alone is sh for "mark FOO for export" — no value.
     const bare = /^([A-Za-z_][A-Za-z0-9_]*)$/.exec(raw);
     if (bare) {
-      words.push({ name: bare[1]!, value: null, append: false });
+      words.push({ name: bare[1], value: null, append: false });
       continue;
     }
     return { reason: "not-assignment", word: raw };
@@ -429,7 +431,7 @@ function scanAssignValue(
   let out = "";
   let quote: '"' | "'" | null = null;
   for (let i = 0; i < raw.length; i++) {
-    const ch = raw[i]!;
+    const ch = raw[i];
     if (quote === "'") {
       // Single quotes protect everything — the only thing that ends them is
       // another single quote. `FOO='$BAR'` is the literal text.
@@ -437,11 +439,11 @@ function scanAssignValue(
       else out += ch;
       continue;
     }
-    if (ch === "\\" && i + 1 < raw.length && "\\$`\"' \t\n".includes(raw[i + 1]!)) {
+    if (ch === "\\" && i + 1 < raw.length && "\\$`\"' \t\n".includes(raw[i + 1])) {
       // A backslash protects one character — the `$` of `FOO=\$BAR`, a quote
       // inside a value. Before anything else it stays literal, so a Windows
       // path (`FOO=C:\temp`) survives, exactly as it does in sh.
-      out += raw[++i]!;
+      out += raw[++i];
       continue;
     }
     if (ch === "'" && quote === null) {

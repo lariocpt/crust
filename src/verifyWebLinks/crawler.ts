@@ -40,7 +40,8 @@ export async function crawl(seeds: string[], origin: URL, opts: VerifyOpts): Pro
         queue.length = 0;
         return false;
       }
-      const item = queue.shift()!;
+      const item = queue.shift();
+      if (item === undefined) return false;
       if (visited.has(item.url)) continue;
       visited.set(item.url, placeholder(item.url));
       const task: Promise<void> = process(item, origin, opts, visited, queue).finally(() => {

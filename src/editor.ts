@@ -128,7 +128,8 @@ export function suspendEditor(): () => void {
 }
 
 function getChunk(): Promise<string | null> {
-  if (queue.length > 0) return Promise.resolve(queue.shift()!);
+  const queued = queue.shift();
+  if (queued !== undefined) return Promise.resolve(queued);
   if (stdinClosed) return Promise.resolve(null);
   return new Promise<string | null>((resolve) => {
     pendingResolve = resolve;
@@ -239,7 +240,7 @@ export async function readLine(opts: EditorOpts): Promise<string | null> {
       // Same row: the single backtab the pre-fix placement got right (within one
       // row, v - o = eCol - tCol), kept so a line that fits never gains row moves
       // (pinned by a control test).
-      if (eCol > tCol) stdout.write(CSI + (eCol - tCol) + "D");
+      if (eCol > tCol) stdout.write(`${CSI}${eCol - tCol}D`);
     } else {
       // tRow < eRow only — o <= v is monotone, the caret is never past the
       // paint's end, so a descend is impossible. Climb to the target row first,
@@ -247,9 +248,9 @@ export async function readLine(opts: EditorOpts): Promise<string | null> {
       // RIGHT of the end column must use CUF — and CUF cannot scroll here,
       // because the target column is inside the row (tCol < width) and the move
       // never crosses the right margin. Equal columns: the climb alone.
-      stdout.write(CSI + (eRow - tRow) + "A");
-      if (tCol > eCol) stdout.write(CSI + (tCol - eCol) + "C");
-      else if (eCol > tCol) stdout.write(CSI + (eCol - tCol) + "D");
+      stdout.write(`${CSI}${eRow - tRow}A`);
+      if (tCol > eCol) stdout.write(`${CSI}${tCol - eCol}C`);
+      else if (eCol > tCol) stdout.write(`${CSI}${eCol - tCol}D`);
     }
   };
 
@@ -286,8 +287,8 @@ export async function readLine(opts: EditorOpts): Promise<string | null> {
   // drift, one layer up). Nothing ABOVE the cursor is touched, so the screen
   // cannot scroll.
   const replacePaint = (from: number): void => {
-    if (from > 0) stdout.write(CSI + from + "P");
-    stdout.write("\r" + CSI + "J");
+    if (from > 0) stdout.write(`${CSI}${from}P`);
+    stdout.write(`\r${CSI}J`);
   };
 
   const render = (): void => {
@@ -302,8 +303,8 @@ export async function readLine(opts: EditorOpts): Promise<string | null> {
     // cursor is touched, so this cannot scroll.
     if (Math.ceil(draftPaintCells / width) > 1) {
       const climbRows = Math.floor(draftCaretCells / width);
-      if (climbRows > 0) stdout.write(CSI + climbRows + "A");
-      stdout.write("\r" + CSI + "J");
+      if (climbRows > 0) stdout.write(`${CSI}${climbRows}A`);
+      stdout.write(`\r${CSI}J`);
     } else {
       // One row: keep the minimal repaint. The fix must not start moving the
       // cursor on a line that fits (pinned by a control test).
@@ -322,7 +323,7 @@ export async function readLine(opts: EditorOpts): Promise<string | null> {
     // the placement and the next repaint's climb derive from, so measure and
     // motion cannot drift (G32's rule).
     const caretOff = promptLen + cells(buf.slice(0, cursor));
-    stdout.write(prompt + buf + CSI + "K");
+    stdout.write(`${prompt}${buf}${CSI}K`);
     placeCaret(caretOff, visual, width);
     draftPaintCells = visual;
     draftCaretCells = caretOff;
@@ -489,11 +490,11 @@ export async function readLine(opts: EditorOpts): Promise<string | null> {
     // BOTH ways the search line was opened (a newline we wrote, or the
     // terminal's own wrap at the draft's last column).
     const up = searchRows + 1;
-    if (up > 0) stdout.write(CSI + up + "A");
+    if (up > 0) stdout.write(`${CSI}${up}A`);
     // After the climb a plain CR is enough: the column-counting back that
     // `replacePaint` needs exists only for a cursor parked at a pending wrap on
     // the SAME row, and moving up clears that state.
-    stdout.write("\r" + CSI + "J");
+    stdout.write(`\r${CSI}J`);
     searching = false;
     if (keep) {
       buf = smatch ?? sq;
@@ -585,7 +586,7 @@ export async function readLine(opts: EditorOpts): Promise<string | null> {
           while (i + 1 < chunk.length) {
             const nc = chunk.charCodeAt(i + 1);
             if (nc < 0x20) break;
-            run += chunk[i + 1]!;
+            run += chunk[i + 1];
             i++;
           }
           sq += run;
@@ -609,7 +610,7 @@ export async function readLine(opts: EditorOpts): Promise<string | null> {
     }
 
     for (let i = 0; i < chunk.length; i++) {
-      const c = chunk[i]!;
+      const c = chunk[i];
       const code = c.charCodeAt(0);
 
       // The search line owns every key while it is live (G09). The handler
@@ -627,7 +628,7 @@ export async function readLine(opts: EditorOpts): Promise<string | null> {
         const tail = chunk.slice(i + 2);
         const m = tail.match(/^([ABCDHF])|^(\d+)~/);
         if (m) {
-          handleEscape(m[1] ?? m[2]!);
+          handleEscape(m[1] ?? m[2]);
           i += 1 + m[0].length;
           continue;
         }
@@ -673,7 +674,7 @@ export async function readLine(opts: EditorOpts): Promise<string | null> {
         // No history write — the entry is not complete until it is submitted
         // whole. The check runs over the ACCUMULATED buffer, the same text
         // joinContinued folds, so the decision matches what gets submitted.
-        const acc = lines.length === 0 ? buf : lines.join("\n") + "\n" + buf;
+        const acc = lines.length === 0 ? buf : `${lines.join("\n")}\n${buf}`;
         if (needsContinuation(acc)) {
           lines.push(buf);
           buf = "";
@@ -681,7 +682,7 @@ export async function readLine(opts: EditorOpts): Promise<string | null> {
           histIdx = history.length;
           savedBuf = "";
           setPrompt(CONT_PROMPT);
-          stdout.write("\n" + prompt);
+          stdout.write(`\n${prompt}`);
           // The while loop's next getChunk() re-reads the remainder as its own
           // chunk — BREAK the char loop so those bytes are not also typed
           // here (the return path exits outright, so only this path leaks).
@@ -739,14 +740,14 @@ export async function readLine(opts: EditorOpts): Promise<string | null> {
         continue;
       }
       if (code === 0x0c) {
-        stdout.write(CSI + "2J" + CSI + "H");
+        stdout.write(`${CSI}2J${CSI}H`);
         render();
         continue;
       }
       if (code === 0x09) {
         const res = complete(buf, cursor);
         if (Array.isArray(res)) {
-          stdout.write("\n" + res.join("  ") + "\n");
+          stdout.write(`\n${res.join("  ")}\n`);
           render();
         } else {
           buf = buf.slice(0, res.replace[0]) + res.with + buf.slice(res.replace[1]);
@@ -764,7 +765,7 @@ export async function readLine(opts: EditorOpts): Promise<string | null> {
         // has to parse and re-lay-out — the visible "pasting stutters" bug.
         let run = c;
         while (i + 1 < chunk.length) {
-          const next = chunk[i + 1]!;
+          const next = chunk[i + 1];
           const nextCode = next.charCodeAt(0);
           if (nextCode < 0x20 || nextCode === 0x7f) break;
           run += next;
@@ -813,7 +814,7 @@ function quoteState(s: string): { open: string | null; paren: number } {
   let open: string | null = null; // the currently open span's quote char
   let paren = 0;
   for (let i = 0; i < s.length; i++) {
-    const c = s[i]!;
+    const c = s[i];
     if (open !== null) {
       if (c === "\\") i++;
       else if (c === open) open = null;
@@ -830,7 +831,7 @@ function quoteState(s: string): { open: string | null; paren: number } {
   if (open !== null) {
     let last: string | null = null;
     for (let i = s.length - 1; i >= 0; i--) {
-      const d = s[i]!;
+      const d = s[i];
       if (d === '"' || d === "'" || d === "`") {
         last = d;
         break;

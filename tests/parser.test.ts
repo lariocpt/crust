@@ -286,7 +286,7 @@ describe("parser — HTTP", () => {
     const p = parse(`GET ${baseUrl}/`)();
     const out = (await p.collect()) as Response[];
     expect(out).toHaveLength(1);
-    expect(out[0]!.status).toBe(200);
+    expect(out[0].status).toBe(200);
   });
 });
 

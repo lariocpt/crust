@@ -1,6 +1,6 @@
 import { basename, dirname, relative } from "node:path";
 import { type JUnitCase, type JUnitSuite, renderJUnit } from "../junitXml";
-import type { FixtureFailure, RunReport } from "./types";
+import type { RunReport } from "./types";
 
 export function renderText(report: RunReport, useColor: boolean): string {
   const c = useColor ? ansi : noColor;
@@ -39,7 +39,7 @@ export function renderText(report: RunReport, useColor: boolean): string {
   const fileCount = new Set(report.results.map((r) => r.file)).size;
   out.push(
     `${fileCount} file(s), ${report.results.length} run(s): ` +
-      `${c.green(t.pass + " pass")}, ${c.red(t.fail + " fail")}, ${c.yellow(t.error + " error")}` +
+      `${c.green(`${t.pass} pass`)}, ${c.red(`${t.fail} fail`)}, ${c.yellow(`${t.error} error`)}` +
       `  (${t.ms.toFixed(1)}ms)`,
   );
   if (report.bailed) {
@@ -58,11 +58,11 @@ export function renderText(report: RunReport, useColor: boolean): string {
       );
     }
   }
-  return out.join("\n") + "\n";
+  return `${out.join("\n")}\n`;
 }
 
 export function renderJson(report: RunReport): string {
-  return JSON.stringify(report, null, 2) + "\n";
+  return `${JSON.stringify(report, null, 2)}\n`;
 }
 
 export function renderMarkdown(report: RunReport): string {
@@ -94,7 +94,7 @@ export function renderMarkdown(report: RunReport): string {
       }
     }
   }
-  return out.join("\n") + "\n";
+  return `${out.join("\n")}\n`;
 }
 
 // Suite per fixture file, testcase per run. Stress --count N needs no

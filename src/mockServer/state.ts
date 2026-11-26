@@ -177,7 +177,7 @@ export class SqlStateBackend implements StateBackend {
   async get(collection: string, id: string): Promise<Record<string, unknown> | null> {
     const client = await this.ensure();
     const rows = (await client.unsafe(this.sql.get, [collection, id])) as Array<{ doc: unknown }>;
-    return rows.length > 0 ? parseDoc(rows[0]!.doc) : null;
+    return rows.length > 0 ? parseDoc(rows[0].doc) : null;
   }
 
   async list(collection: string): Promise<Record<string, unknown>[]> {
@@ -246,11 +246,11 @@ const SCHEME = /^([a-zA-Z][a-zA-Z0-9+.-]*):\/\//;
 export function normalizeStateUrl(state: string): string {
   const m = SCHEME.exec(state);
   if (!m) return `sqlite://${state}`;
-  const scheme = m[1]!.toLowerCase();
+  const scheme = m[1].toLowerCase();
   if (scheme === "sqlite" || scheme === "postgres" || scheme === "postgresql") {
     // Canonicalize the scheme so dialect detection downstream can't disagree
     // with the check here (SQLITE://x must not open as postgres).
-    return scheme + state.slice(m[1]!.length);
+    return scheme + state.slice(m[1].length);
   }
   throw new Error(
     `unsupported --state scheme '${scheme}:' (use a file path, sqlite://, or postgres://)`,

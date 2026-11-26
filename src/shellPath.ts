@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { delimiter, dirname, join } from "node:path";
+import { delimiter, dirname, join, resolve } from "node:path";
 
 // npm-script-style PATH for shell stages: prepend every ancestor
 // node_modules/.bin (nearest first) so locally-installed tool binaries
@@ -7,9 +7,9 @@ import { delimiter, dirname, join } from "node:path";
 // `grep x | node_modules/.bin/pino-pretty` — exactly like inside `bun run`.
 // Computed per spawn because `cd` moves the session at runtime; the cost is
 // a handful of stat calls, noise next to a process spawn.
-export function shellEnv(): Record<string, string | undefined> {
+export function shellEnv(cwd = process.cwd()): Record<string, string | undefined> {
   const bins: string[] = [];
-  let dir = process.cwd();
+  let dir = resolve(cwd);
   while (true) {
     const bin = join(dir, "node_modules", ".bin");
     if (existsSync(bin)) bins.push(bin);

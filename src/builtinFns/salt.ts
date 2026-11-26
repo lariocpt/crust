@@ -29,7 +29,7 @@ export function salt(...args: unknown[]): string {
     }
   }
   if (positionals.length === 0) return randomBytes(16).toString(encoding);
-  const size = args.length >= 2 ? positionals[positionals.length - 1]! : positionals[0]!;
+  const size = args.length >= 2 ? positionals[positionals.length - 1] : positionals[0];
   const bytes = Number.parseInt(size, 10);
   if (!Number.isFinite(bytes) || bytes <= 0) {
     throw new Error(

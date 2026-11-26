@@ -302,7 +302,7 @@ describe("the base invariant — relative resolution agrees with canonicalUrl", 
   test("control: the ORIGIN base (the old bug) does NOT agree with canonicalUrl", () => {
     // `new URL(site).origin` is "https://x.dev" — the /docs prefix is gone.
     // A relative ref then resolves to a URL the site can never serve.
-    const originBase = new URL(PREF).origin + "/a/b"; // "https://x.dev/a/b"
+    const originBase = `${new URL(PREF).origin}/a/b`; // "https://x.dev/a/b"
     const canonical = canonicalUrl(PREF, "/a/b"); // "https://x.dev/docs/a/b"
     expect(originBase).toBe("https://x.dev/a/b");
     expect(new URL("x", originBase).href).toBe("https://x.dev/a/x");

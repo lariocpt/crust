@@ -29,10 +29,10 @@ import * as editor from "../src/editor";
 import * as interrupt from "../src/interrupt";
 
 const CSI = "\x1b[";
-const LEFT = CSI + "D";
-const climb = (rows: number): string => CSI + rows + "A";
-const backtab = (n: number): string => CSI + n + "D";
-const right = (n: number): string => CSI + n + "C";
+const LEFT = `${CSI}D`;
+const climb = (rows: number): string => `${CSI}${rows}A`;
+const backtab = (n: number): string => `${CSI}${n}D`;
+const right = (n: number): string => `${CSI}${n}C`;
 
 /** 2 cells — leaves 28 buffer cells per row in the 30-column window. */
 const P_SHORT = "$ ";
@@ -104,7 +104,7 @@ async function drainTypeahead(): Promise<void> {
  *  [climb?][CR][CSI J?][prompt+buf][CSI K][placement], so this isolates the
  *  placement from the G31 climb that precedes it. */
 const lastPlacement = (out: string): string => {
-  const i = out.lastIndexOf(CSI + "K");
+  const i = out.lastIndexOf(`${CSI}K`);
   if (i < 0) return "";
   const rest = out.slice(i + CSI.length + 1);
   const j = rest.indexOf("\n");
