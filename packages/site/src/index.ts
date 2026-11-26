@@ -12,9 +12,11 @@
 //   html         — the fenced template runtime (value-range fence + escaping)
 //   Layout/LayoutContext — the layout render engine's types (per-render head
 //                  sink, deep-frozen page); renderPage/renderAll are
-//                  exported INTERNAL wiring for build()/dev (chunks 7/8),
-//                  not an author-facing API — authors write layouts, they
-//                  never call the engine
+//                  exported as documented pipeline wiring (USAGE.md,
+//                  "Programmatic API") for users who drive the render engine
+//                  directly — build()/dev import ./render themselves, not
+//                  through this entry — NOT an author-facing API: authors
+//                  write layouts, they never call the engine
 //   build        — the SSG pipeline (Bun.build per entrypoint, render, emit,
 //                  publish with the rename/copy contract)
 //
@@ -47,7 +49,7 @@ export const contractVersion = 1;
 
 export { checkOutputOverlap, defineSite, resolveConfigPaths } from "./config";
 export type { Diagnostic, DiagnosticCode, Severity } from "./diagnostics";
-export { BuildError, DiagnosticCodes, isDiagnostic, sortDiagnostics } from "./diagnostics";
+export { BuildError, DiagnosticCodes, sortDiagnostics } from "./diagnostics";
 export { parseFrontmatter } from "./frontmatter";
 export type { Html, HtmlValue } from "./html";
 
@@ -69,16 +71,20 @@ export type { Html, HtmlValue } from "./html";
 //
 // NOT public: trustedHtml, renderToString, escapeHtml, isHtml (the brand
 // guard the render engine uses internally), the fence's scanner (fence.ts),
-// and the url internals — those are internal wiring for the render chunk
-// and the test-suite, not a contract for site authors. They stay OUT of
-// this file on purpose (task contract: exported from their own module for
-// internal use / tests only, never part of the author-facing surface).
+// isDiagnostic (the registry-membership guard — internal modules and tests
+// import it from ./diagnostics) and collectUnusedAssets (the cross-page
+// asset audit — the build pipeline runs it from ./render) — those are
+// internal wiring, not a contract for site authors. They stay OUT of this
+// file on purpose (exported from their own module for internal use / tests
+// only, never part of the author-facing surface).
 export { finalizeDocument, html } from "./html";
 // The layout render engine (plan §3). The TYPES are part of the public
 // contract (build()'s BuildResult references PageRender; a user's layout is
-// a Layout). renderPage/renderAll are exported so chunks 7/8 (emit, dev
-// server) can import them from the package entry, but they are NOT
-// advertised: site authors write layouts and never call the engine.
+// a Layout). renderPage/renderAll are exported as the documented "pipeline
+// wiring" (USAGE.md, "Programmatic API") for consumers who drive the engine
+// directly — build()/dev do NOT import them through this entry, they import
+// ./render — and they are NOT advertised to layout authors: site authors
+// write layouts and never call the engine.
 export type {
   AssetUsage,
   DeepReadonly,
@@ -90,7 +96,7 @@ export type {
   RenderAllResult,
   RenderPageOptions,
 } from "./render";
-export { collectUnusedAssets, renderAll, renderPage } from "./render";
+export { renderAll, renderPage } from "./render";
 export {
   canonicalUrl,
   findRouteCollisions,

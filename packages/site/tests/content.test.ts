@@ -97,7 +97,10 @@ describe("discoverContent", () => {
     await rm(f.dir, { recursive: true, force: true });
   });
 
-  test("symlinks are skipped", async () => {
+  // Symlink creation needs SeCreateSymbolicLinkPrivilege on Windows (admin
+  // or developer mode) — an unprivileged machine fails with EPERM before the
+  // behaviour under test is even reachable. Gated, never a false pass.
+  test.skipIf(process.platform === "win32")("symlinks are skipped", async () => {
     const f = await fixture({ "content/real.md": "r" });
     await symlink(join(f.dir, "content", "real.md"), join(f.dir, "content", "link.md"));
     const found = await discoverContent(f.config);

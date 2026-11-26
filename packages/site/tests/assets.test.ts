@@ -939,41 +939,54 @@ describe("copyPublicDir", () => {
     expect(r2.diagnostics[0].message).toContain("not a directory");
   });
 
-  test("symlinks (file and directory) are an error, never copied through", async () => {
-    // Skipping silently would be a false pass (crust rule 1): the author put
-    // the file in public/ expecting it to publish. Following it could publish
-    // an arbitrary host tree. So: error, and nothing symlink-shaped is copied.
-    const { dir, site } = await project(
-      { "pub/real.txt": `real\n`, "secret/leak.txt": `do-not-publish\n` },
-      withPublic("pub"),
-    );
-    await writeFile(join(dir, "outside.txt"), `do-not-publish\n`);
-    await symlink(join(dir, "outside.txt"), join(dir, "pub", "link.txt"));
-    await symlink(join(dir, "secret"), join(dir, "pub", "link-dir"));
-    const staging = await tmp("crust-site-staging-");
-    const { copied, diagnostics } = await copyPublicDir(site, staging);
-    expect(copied).toEqual(["real.txt"]);
-    expect(diagnostics.map((d) => d.code)).toEqual([
-      "asset.public-symlink",
-      "asset.public-symlink",
-    ]);
-    expect(diagnostics.map((d) => d.severity)).toEqual(["error", "error"]);
-    // sorted by public-relative path; each names its own link
-    expect(diagnostics.map((d) => d.sourcePath)).toEqual(["link-dir", "link.txt"]);
-    expect(diagnostics[0].message).toContain("link-dir");
-    expect(diagnostics[1].message).toContain("link.txt");
-    expect(await listing(join(staging, "link-dir"))).toBeUndefined();
-    expect(await listing(staging)).toEqual(["real.txt"]);
-  });
+  // Symlink creation needs SeCreateSymbolicLinkPrivilege on Windows (admin
+  // or developer mode) — an unprivileged machine fails with EPERM before the
+  // behaviour under test is even reachable. Gated, never a false pass.
+  test.skipIf(process.platform === "win32")(
+    "symlinks (file and directory) are an error, never copied through",
+    async () => {
+      // Skipping silently would be a false pass (crust rule 1): the author
+      // put the file in public/ expecting it to publish. Following it could
+      // publish an arbitrary host tree. So: error, and nothing
+      // symlink-shaped is copied.
+      const { dir, site } = await project(
+        { "pub/real.txt": `real\n`, "secret/leak.txt": `do-not-publish\n` },
+        withPublic("pub"),
+      );
+      await writeFile(join(dir, "outside.txt"), `do-not-publish\n`);
+      await symlink(join(dir, "outside.txt"), join(dir, "pub", "link.txt"));
+      await symlink(join(dir, "secret"), join(dir, "pub", "link-dir"));
+      const staging = await tmp("crust-site-staging-");
+      const { copied, diagnostics } = await copyPublicDir(site, staging);
+      expect(copied).toEqual(["real.txt"]);
+      expect(diagnostics.map((d) => d.code)).toEqual([
+        "asset.public-symlink",
+        "asset.public-symlink",
+      ]);
+      expect(diagnostics.map((d) => d.severity)).toEqual(["error", "error"]);
+      // sorted by public-relative path; each names its own link
+      expect(diagnostics.map((d) => d.sourcePath)).toEqual(["link-dir", "link.txt"]);
+      expect(diagnostics[0].message).toContain("link-dir");
+      expect(diagnostics[1].message).toContain("link.txt");
+      expect(await listing(join(staging, "link-dir"))).toBeUndefined();
+      expect(await listing(staging)).toEqual(["real.txt"]);
+    },
+  );
 
-  test("publicDirectory itself being a symlink is asset.public-missing, named as such", async () => {
-    const { dir, site } = await project({ "real-pub/f.txt": `f\n` }, withPublic("pub-link"));
-    await symlink(join(dir, "real-pub"), join(dir, "pub-link"));
-    const { copied, diagnostics } = await copyPublicDir(site, await tmp("crust-site-staging-"));
-    expect(copied).toEqual([]);
-    expect(diagnostics.map((d) => d.code)).toEqual(["asset.public-missing"]);
-    expect(diagnostics[0].message).toContain("symbolic link");
-  });
+  // Symlink creation needs SeCreateSymbolicLinkPrivilege on Windows (admin
+  // or developer mode) — an unprivileged machine fails with EPERM before the
+  // behaviour under test is even reachable. Gated, never a false pass.
+  test.skipIf(process.platform === "win32")(
+    "publicDirectory itself being a symlink is asset.public-missing, named as such",
+    async () => {
+      const { dir, site } = await project({ "real-pub/f.txt": `f\n` }, withPublic("pub-link"));
+      await symlink(join(dir, "real-pub"), join(dir, "pub-link"));
+      const { copied, diagnostics } = await copyPublicDir(site, await tmp("crust-site-staging-"));
+      expect(copied).toEqual([]);
+      expect(diagnostics.map((d) => d.code)).toEqual(["asset.public-missing"]);
+      expect(diagnostics[0].message).toContain("symbolic link");
+    },
+  );
 });
 
 describe("publicCollisions", () => {

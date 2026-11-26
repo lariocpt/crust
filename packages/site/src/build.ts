@@ -107,11 +107,13 @@ export interface BuildResult {
 }
 
 /**
- * INTERNAL (chunk 9's dev watcher): the BuildResult plus the per-page readText
- * reverse index (page sourcePath → realpath'd dependency files) and the draft
- * pages (dev mode only — a production build renders no drafts, so its
- * `draftPages` is empty). Never part of the public contract — `build()`
- * projects it away.
+ * INTERNAL: the BuildResult plus the per-page readText dependency index
+ * (page sourcePath → realpath'd dependency files) and the draft pages (dev
+ * mode only — a production build renders no drafts, so its `draftPages` is
+ * empty). Never part of the public contract — `build()` projects it away.
+ * The v1 dev watcher does FULL rebuilds: it consumes pages/draftPages/
+ * warnings/durationMs only, and `pageDeps` stays collected but unused
+ * (USAGE.md, "Dev server contract" — no page-level skipping is claimed).
  */
 export interface BuildInternalResult extends BuildResult {
   /**
@@ -120,6 +122,13 @@ export interface BuildInternalResult extends BuildResult {
    * `pages`.
    */
   readonly draftPages: BuildPage[];
+  /**
+   * The per-page readText reverse index (page sourcePath → realpath'd
+   * dependency files). RESERVED for a future page-level invalidation pass:
+   * the v1 dev watcher does full rebuilds and does not consume it yet — it
+   * is collected so that pass will have the dependency graph without
+   * re-walking every page.
+   */
   readonly pageDeps: Readonly<Record<string, string[]>>;
 }
 
@@ -537,9 +546,7 @@ async function writeFileAt(staging: string, file: string, contents: string): Pro
  * exists) and it is trustedHtml (the fence still runs over it like any
  * document bytes). It is static markup with no attributes the fence's
  * url/style/attribute checks could trip on, no event handlers, and no
- * dynamic values, so a draft's banner can never open a fence violation the
- * page itself would not have. DEV ONLY: a production build never renders
- * drafts at all, so the banner never reaches the output directory.
+ * dynamic values.
  *
  * Styled with inline `style=` rules (one per element; no `<style>` block —
  * the fence's style-body rule bans tracked values inside `<style>` ELEMENTS,

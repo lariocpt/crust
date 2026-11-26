@@ -42,7 +42,7 @@ bunx @crust/site dev   [configFile]   # dev server, rebuilds on change
 
 A complete site is one config file, a content directory, and (optionally)
 script/style entrypoints and a public directory. This example is the fixture
-at `tests/fixtures/docs-example/` in this package — the docs gate
+at `tests/fixtures/docs-example/` in the package's repository — the docs gate
 type-checks it and the test suite builds it end to end, so it is known to
 work.
 
@@ -1030,10 +1030,69 @@ try {
 }
 ```
 
-The remaining exports (`normalizeRoute`, `routeToFile`, `canonicalUrl`,
-`findRouteCollisions`, `isNormalizedRoute`, `parseFrontmatter`, `html`,
-`url`/`validateUrl`, `defineSite`, `resolveConfigPaths`,
-`checkOutputOverlap`, `BuildError`, `DiagnosticCodes`, `sortDiagnostics`,
-`contractVersion`, and the public types) are the same contracts documented
-above. `renderPage`/`renderAll` are exported for the package's own
-pipeline wiring — site authors write layouts, they never call the engine.
+The remaining value exports (`normalizeRoute`, `routeToFile`,
+`canonicalUrl`, `findRouteCollisions`, `isNormalizedRoute`,
+`parseFrontmatter`, `html`, `finalizeDocument`, `url`/`validateUrl`,
+`defineSite`, `resolveConfigPaths`, `checkOutputOverlap`, `BuildError`,
+`DiagnosticCodes`, `sortDiagnostics`, `contractVersion`) are the same
+contracts documented above. `renderPage`/`renderAll` are exported for the
+package's own pipeline wiring — site authors write layouts, they never call
+the engine (advanced consumers may drive the render engine directly; every
+type they need is in the table below).
+
+The exported types, by family (37 in total — the full type surface; nothing
+else is exported as a type):
+
+| Family | Types |
+|---|---|
+| Build contract | `BuildOptions`, `BuildPage`, `BuildResult` |
+| Diagnostics | `Diagnostic`, `DiagnosticCode`, `Severity` |
+| `html` runtime | `Html`, `HtmlValue` |
+| Render engine | `AssetUsage`, `DeepReadonly<T>`, `FrozenPage`, `Layout`, `LayoutContext`, `PageRender`, `RenderAllOptions`, `RenderAllResult`, `RenderPageOptions` |
+| Config, content and routes | `AssetsConfig`, `ContentConfig`, `DevConfig`, `FrontmatterResult`, `Heading`, `InternalLink`, `LayoutFn`, `OutputConfig`, `Page`, `PageFrontmatter`, `ResolvedSite`, `RobotsConfig`, `RouteEntry`, `RouteResolution`, `RouteResolver`, `Site`, `SiteConfig`, `TrailingSlash` |
+| URL policy | `UrlAttribute`, `UrlPolicyOptions` |
+
+The same list, exactly as a user's file would import it (the docs gate
+type-checks this fence, so a name removed or renamed upstream fails CI):
+
+```ts
+import type {
+  AssetUsage,
+  AssetsConfig,
+  BuildOptions,
+  BuildPage,
+  BuildResult,
+  ContentConfig,
+  DeepReadonly,
+  DevConfig,
+  Diagnostic,
+  DiagnosticCode,
+  FrontmatterResult,
+  FrozenPage,
+  Heading,
+  Html,
+  HtmlValue,
+  InternalLink,
+  Layout,
+  LayoutContext,
+  LayoutFn,
+  OutputConfig,
+  Page,
+  PageFrontmatter,
+  PageRender,
+  RenderAllOptions,
+  RenderAllResult,
+  RenderPageOptions,
+  ResolvedSite,
+  RobotsConfig,
+  RouteEntry,
+  RouteResolution,
+  RouteResolver,
+  Site,
+  SiteConfig,
+  Severity,
+  TrailingSlash,
+  UrlAttribute,
+  UrlPolicyOptions,
+} from "@crust/site";
+```

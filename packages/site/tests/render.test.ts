@@ -604,24 +604,30 @@ describe("readText()", () => {
     expect(d.message).toContain("is absolute");
   });
 
-  test("a symlink that resolves outside the root is read-text.escape", async () => {
-    const dir = await tmp("crust-site-render-rt-");
-    const outsideDir = await tmp("crust-site-render-outside-");
-    await writeFile(join(outsideDir, "secret.txt"), "top secret");
-    await symlink(join(outsideDir, "secret.txt"), join(dir, "link.txt"));
-    const layout: Layout = async (ctx) => {
-      await ctx.readText("link.txt");
-      return html`<i>x</i>`;
-    };
-    const result = await renderWithDir(makePage(), layout, dir);
-    expect(result.html).toBeNull();
-    expect(result.deps).toEqual([]);
-    const d = result.diagnostics[0];
-    expect(d.code).toBe("read-text.escape");
-    expect(d.sourcePath).toBe("content/index.md");
-    expect(d.message).toContain(basename(outsideDir));
-    expect(d.message).toContain(basename(dir));
-  });
+  // Symlink creation needs SeCreateSymbolicLinkPrivilege on Windows (admin
+  // or developer mode) — an unprivileged machine fails with EPERM before the
+  // behaviour under test is even reachable. Gated, never a false pass.
+  test.skipIf(process.platform === "win32")(
+    "a symlink that resolves outside the root is read-text.escape",
+    async () => {
+      const dir = await tmp("crust-site-render-rt-");
+      const outsideDir = await tmp("crust-site-render-outside-");
+      await writeFile(join(outsideDir, "secret.txt"), "top secret");
+      await symlink(join(outsideDir, "secret.txt"), join(dir, "link.txt"));
+      const layout: Layout = async (ctx) => {
+        await ctx.readText("link.txt");
+        return html`<i>x</i>`;
+      };
+      const result = await renderWithDir(makePage(), layout, dir);
+      expect(result.html).toBeNull();
+      expect(result.deps).toEqual([]);
+      const d = result.diagnostics[0];
+      expect(d.code).toBe("read-text.escape");
+      expect(d.sourcePath).toBe("content/index.md");
+      expect(d.message).toContain(basename(outsideDir));
+      expect(d.message).toContain(basename(dir));
+    },
+  );
 
   test("a file over the 10 MiB cap is read-text.toobig", async () => {
     const dir = await tmp("crust-site-render-rt-");
@@ -679,26 +685,33 @@ describe("readText()", () => {
     expect(d.message).toContain("directory");
   });
 
-  test("a symlink that stays INSIDE the root is allowed (dep = the target's realpath)", async () => {
-    // Control to the outside-symlink escape case above: containment is judged
-    // on the FINAL realpath, so a symlink whose target is inside the root is
-    // plain file access. The dependency recorded is the target's realpath
-    // (chunk 8's dev invalidation keys on real files, not symlink names).
-    const dir = await tmp("crust-site-render-rt-");
-    await mkdir(join(dir, "notes"), { recursive: true });
-    await writeFile(join(dir, "notes", "real.txt"), "inside target");
-    await symlink(join(dir, "notes", "real.txt"), join(dir, "link.txt"));
-    const layout: Layout = async (ctx) => {
-      const text = await ctx.readText("link.txt");
-      return html`<i>${text}</i>`;
-    };
-    const result = await renderWithDir(makePage(), layout, dir);
-    expect(result.diagnostics).toEqual([]);
-    expect(result.html).toBe("<i>inside target</i>");
-    const expected = (await realpath(join(dir, "notes", "real.txt"))).replace(/\\/g, "/");
-    expect(result.deps).toEqual([expected]);
-    expect(expected).not.toContain("link.txt"); // the target, not the link
-  });
+  // Symlink creation needs SeCreateSymbolicLinkPrivilege on Windows (admin
+  // or developer mode) — an unprivileged machine fails with EPERM before the
+  // behaviour under test is even reachable. Gated, never a false pass.
+  test.skipIf(process.platform === "win32")(
+    "a symlink that stays INSIDE the root is allowed (dep = the target's realpath)",
+    async () => {
+      // Control to the outside-symlink escape case above: containment is
+      // judged on the FINAL realpath, so a symlink whose target is inside the
+      // root is plain file access. The dependency recorded is the target's
+      // realpath (chunk 8's dev invalidation keys on real files, not symlink
+      // names).
+      const dir = await tmp("crust-site-render-rt-");
+      await mkdir(join(dir, "notes"), { recursive: true });
+      await writeFile(join(dir, "notes", "real.txt"), "inside target");
+      await symlink(join(dir, "notes", "real.txt"), join(dir, "link.txt"));
+      const layout: Layout = async (ctx) => {
+        const text = await ctx.readText("link.txt");
+        return html`<i>${text}</i>`;
+      };
+      const result = await renderWithDir(makePage(), layout, dir);
+      expect(result.diagnostics).toEqual([]);
+      expect(result.html).toBe("<i>inside target</i>");
+      const expected = (await realpath(join(dir, "notes", "real.txt"))).replace(/\\/g, "/");
+      expect(result.deps).toEqual([expected]);
+      expect(expected).not.toContain("link.txt"); // the target, not the link
+    },
+  );
 
   test("Promise.all of readText in one async layout: every dep completes on THIS render's sink", async () => {
     // The engine must await the layout's Promise to full completion before it
@@ -781,9 +794,13 @@ describe("readText()", () => {
     // Isolation is the deterministic half of the contract: B's sink is a
     // different object and its dep set was never written by A's late work.
     expect(b.deps).toEqual([]);
-    // A's result snapshot was taken at close; a late dep can only land on
-    // the closed sink, never retroactively into the returned result.
-    expect(a.deps.every((d) => d.startsWith("/"))).toBe(true);
+    // A's result snapshot was taken at close, BEFORE the gate released: the
+    // late readText throws on the closed sink before recording anything, so
+    // the returned result holds exactly the deps that landed before close —
+    // here, none. (Not `every(startsWith("/"))`: an absolute realpath starts
+    // with a drive letter on Windows, so a root-anchored check would test
+    // the platform, not the isolation.)
+    expect(a.deps).toEqual([]);
   });
 
   test("a fire-and-forget readText (never awaited) cannot pollute the next page's deps", async () => {

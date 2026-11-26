@@ -90,7 +90,7 @@ function cliLive(args: string[]) {
     re: RegExp,
     timeoutMs: number,
     offsets?: { out?: number; err?: number },
-  ): Promise<RegExpMatchArray | null> => {
+  ): Promise<RegExpMatchArray> => {
     const deadline = Date.now() + timeoutMs;
     for (;;) {
       const out = text("out");
@@ -137,6 +137,39 @@ async function freePort(): Promise<number> {
   }
   throw new Error("could not find a free port after 10 tries");
 }
+
+/**
+ * Windows cannot emulate Ctrl-C: `proc.kill("SIGINT")` there is a plain
+ * TerminateProcess — the wrapper's JS handler never runs, so it neither
+ * forwards to the worker nor exits 130 (the observed code is 0xC000013A),
+ * and the worker survives as an orphan. A real console Ctrl-C on Windows
+ * reaches both processes natively, which no test can reproduce, so the
+ * signal-exit contract is asserted on POSIX only.
+ */
+const SIGNAL_EXIT = process.platform !== "win32";
+
+/**
+ * Kill a dev session for good. On Windows TerminateProcess does not reap
+ * children, so the whole process tree goes down via taskkill — otherwise an
+ * orphaned worker outlives the test holding its port and its staging tree.
+ */
+function killSession(proc: Bun.Subprocess): void {
+  if (process.platform === "win32") {
+    try {
+      Bun.spawnSync(["taskkill", "/pid", String(proc.pid), "/T", "/F"]);
+    } catch {
+      // already gone
+    }
+  }
+  try {
+    proc.kill("SIGKILL");
+  } catch {
+    // already dead
+  }
+}
+
+/** Diagnostics and result paths are posix (docs, "Paths"); join() is native. */
+const posixOf = (p: string): string => p.replace(/\\/g, "/");
 
 async function exists(path: string): Promise<boolean> {
   return await stat(path)
@@ -285,7 +318,7 @@ describe("crust-site build (e2e)", () => {
     expect(r.code).toBe(1);
     expect(r.stdout).toBe("");
     expect(r.stderr).toContain("error[config.load]");
-    expect(r.stderr).toContain(` --> ${missing}`);
+    expect(r.stderr).toContain(` --> ${posixOf(missing)}`);
   });
 
   test("a config that fails to LOAD exits 1 with config.load on stderr", async () => {
@@ -318,7 +351,9 @@ describe("crust-site build (e2e)", () => {
     await proc.exited;
     expect(proc.exitCode ?? -1).toBe(0);
     expect(stdout.split("\n").filter((l) => l !== "")).toHaveLength(1);
-    expect(stdout).toContain(`→ ${join(root, "dist")}`);
+    // the summary line prints the posix path (the CLI resolves through
+    // toPosix/posix.resolve), never the native backslash form
+    expect(stdout).toContain(`→ ${posixOf(join(root, "dist"))}`);
     expect(stderr).toBe("");
     expect(await exists(join(root, "dist", "index.html"))).toBe(true);
   });
@@ -342,7 +377,7 @@ describe("crust-site build (e2e)", () => {
     expect(proc.exitCode ?? -1).toBe(1);
     expect(stdout).toBe("");
     expect(stderr).toContain("error[config.load]");
-    expect(stderr).toContain(` --> ${join(root, "site.config.ts")}`);
+    expect(stderr).toContain(` --> ${posixOf(join(root, "site.config.ts"))}`);
   });
 });
 
@@ -417,7 +452,7 @@ describe("crust-site dev (e2e)", () => {
       // the serving URL line is the ONLY stdout; the port is parsed from it
       const m = await live.waitUntil(/serving http:\/\/localhost:(\d+)\//, 10000);
       expect(m).not.toBeNull();
-      const port = Number(m![1]);
+      const port = Number(m[1]);
       expect(port).toBeGreaterThan(0);
 
       // the initial build is served
@@ -437,21 +472,19 @@ describe("crust-site dev (e2e)", () => {
       expect(await res.text()).toContain("Rebuild marker: V2.");
 
       // Ctrl-C: forwarded to the worker, which stops cleanly and exits 130
-      live.kill("SIGINT");
-      await live.proc.exited;
-      expect(live.proc.exitCode).toBe(130);
-      // the port is really closed
-      await expect(fetch(`http://localhost:${port}/`)).rejects.toThrow();
-      // and no staging litter survives
-      expect(await devStagingSiblings(root)).toEqual([]);
+      if (SIGNAL_EXIT) {
+        live.kill("SIGINT");
+        await live.proc.exited;
+        expect(live.proc.exitCode).toBe(130);
+        // the port is really closed
+        await expect(fetch(`http://localhost:${port}/`)).rejects.toThrow();
+        // and no staging litter survives
+        expect(await devStagingSiblings(root)).toEqual([]);
+      }
     } finally {
       // belt and braces: if any assertion above died mid-session, kill the
-      // session so it cannot outlive the test process
-      try {
-        live.proc.kill("SIGKILL");
-      } catch {
-        // already dead
-      }
+      // session (the whole tree on Windows) so it cannot outlive the test
+      killSession(live.proc);
     }
   });
 
@@ -462,7 +495,7 @@ describe("crust-site dev (e2e)", () => {
     try {
       const m1 = await live.waitUntil(/serving http:\/\/localhost:(\d+)\//, 10000);
       expect(m1).not.toBeNull();
-      const port1 = Number(m1![1]);
+      const port1 = Number(m1[1]);
       expect(await (await fetch(`http://localhost:${port1}/`)).text()).toContain(
         "<title>Home</title>",
       );
@@ -483,7 +516,9 @@ describe("crust-site dev (e2e)", () => {
       const all = live.text("out").match(/serving http:\/\/localhost:(\d+)\//g) ?? [];
       expect(all).toHaveLength(2);
       expect(live.text("out").length).toBeGreaterThan(before);
-      const port2 = Number(all[1]!.match(/:(\d+)/)![1]);
+      const serving = all[1]?.match(/:(\d+)/);
+      if (!serving) throw new Error("missing restarted worker serving port");
+      const port2 = Number(serving[1]);
       expect(port2).not.toBe(port1);
       await expect(fetch(`http://localhost:${port1}/`)).rejects.toThrow();
       const res = await fetch(`http://localhost:${port2}/`);
@@ -491,16 +526,14 @@ describe("crust-site dev (e2e)", () => {
       expect(await res.text()).toContain("<title>Home</title>");
 
       // and a Ctrl-C still ends the whole session with 130
-      live.kill("SIGINT");
-      await live.proc.exited;
-      expect(live.proc.exitCode).toBe(130);
-      expect(await devStagingSiblings(root)).toEqual([]);
-    } finally {
-      try {
-        live.proc.kill("SIGKILL");
-      } catch {
-        // already dead
+      if (SIGNAL_EXIT) {
+        live.kill("SIGINT");
+        await live.proc.exited;
+        expect(live.proc.exitCode).toBe(130);
+        expect(await devStagingSiblings(root)).toEqual([]);
       }
+    } finally {
+      killSession(live.proc);
     }
   });
 
@@ -529,14 +562,12 @@ describe("crust-site dev (e2e)", () => {
           .slice(errFrom)
           .match(/rebuilt in \d+ ms/g) ?? [];
       expect(rebuilds).toHaveLength(1);
-      live.kill("SIGINT");
-      await live.proc.exited;
-    } finally {
-      try {
-        live.proc.kill("SIGKILL");
-      } catch {
-        // already dead
+      if (SIGNAL_EXIT) {
+        live.kill("SIGINT");
+        await live.proc.exited;
       }
+    } finally {
+      killSession(live.proc);
     }
   });
 
@@ -546,7 +577,7 @@ describe("crust-site dev (e2e)", () => {
     const live = cliLive(["dev", cfg]);
     try {
       const m1 = await live.waitUntil(/serving http:\/\/localhost:(\d+)\//, 10000);
-      const port1 = Number(m1![1]);
+      const port1 = Number(m1[1]);
       // src/app.ts is under the config dir but not content: a code change
       await writeFile(join(root, "src", "app.ts"), 'console.log("changed");\n');
       await live.waitUntil(/restarting the dev worker/, 10000);
@@ -554,21 +585,21 @@ describe("crust-site dev (e2e)", () => {
       await live.waitUntil(/serving http:\/\/localhost:(\d+)\//, 10000, { out: before });
       const all = live.text("out").match(/serving http:\/\/localhost:(\d+)\//g) ?? [];
       expect(all).toHaveLength(2);
-      const port2 = Number(all[1]!.match(/:(\d+)/)![1]);
+      const serving = all[1]?.match(/:(\d+)/);
+      if (!serving) throw new Error("missing restarted worker serving port");
+      const port2 = Number(serving[1]);
       expect(port2).not.toBe(port1);
       const res = await fetch(`http://localhost:${port2}/`);
       expect(res.status).toBe(200);
       expect(await res.text()).toContain("<title>Home</title>");
-      live.kill("SIGINT");
-      await live.proc.exited;
-      expect(live.proc.exitCode).toBe(130);
-      expect(await devStagingSiblings(root)).toEqual([]);
-    } finally {
-      try {
-        live.proc.kill("SIGKILL");
-      } catch {
-        // already dead
+      if (SIGNAL_EXIT) {
+        live.kill("SIGINT");
+        await live.proc.exited;
+        expect(live.proc.exitCode).toBe(130);
+        expect(await devStagingSiblings(root)).toEqual([]);
       }
+    } finally {
+      killSession(live.proc);
     }
   });
 
@@ -591,7 +622,7 @@ describe("crust-site dev (e2e)", () => {
     expect(proc.exitCode ?? -1).toBe(1);
     expect(stdout).toBe("");
     expect(stderr).toContain("error[config.load]");
-    expect(stderr).toContain(` --> ${join(root, "site.config.ts")}`);
+    expect(stderr).toContain(` --> ${posixOf(join(root, "site.config.ts"))}`);
   });
 
   test("a configured port in use exits 1 with dev.port-in-use (no auto-increment, no stdout)", async () => {

@@ -44,6 +44,9 @@ const SRC_INDEX = fileURLToPath(new URL("../src/index.ts", import.meta.url));
 const SRC_BUILD = fileURLToPath(new URL("../src/build.ts", import.meta.url));
 const SITE = "https://example.dev";
 
+/** Result paths are posix (docs, "Paths"); join() is native. */
+const posixOf = (p: string): string => p.replace(/\\/g, "/");
+
 const created: string[] = [];
 async function tmp(prefix: string): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), prefix));
@@ -705,7 +708,7 @@ describe("build — config loading", () => {
     expect(stderr).toBe("");
     // the relative configFile resolved against the child's CWD, not the
     // config's own directory or the importing file's directory
-    expect(stdout).toContain(`OUT ${join(root, "dist")}`);
+    expect(stdout).toContain(`OUT ${posixOf(join(root, "dist"))}`);
     expect(stdout).toContain("PAGES 2");
     expect(
       await stat(join(root, "dist"))
@@ -1152,7 +1155,9 @@ describe("publish", () => {
     expect(oldNames.length).toBe(1);
     const t = await tree(join(root, oldNames[0]));
     expect(t["old.html"].toString("utf8")).toBe("old");
-    expect((error as Error).message).toContain(JSON.stringify(join(root, oldNames[0])));
+    // publish() posix-normalizes its own paths (toPosix + posix.resolve)
+    // before naming the kept tree — the message carries the posix form
+    expect((error as Error).message).toContain(JSON.stringify(posixOf(join(root, oldNames[0]))));
     await expect(stat(join(root, "out"))).rejects.toThrow();
     await rm(staging, { recursive: true, force: true });
     await rm(join(root, oldNames[0]), { recursive: true, force: true });

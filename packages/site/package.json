@@ -12,6 +12,12 @@
   "bin": {
     "crust-site": "./src/cli.ts"
   },
+  "files": [
+    "LICENSE",
+    "README.md",
+    "docs",
+    "src"
+  ],
   "scripts": {
     "test": "bun test",
     "typecheck": "tsc --noEmit"
