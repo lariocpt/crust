@@ -250,6 +250,15 @@ export interface ExpectationsConfig {
    * predicate to the FastAPI detail array. Never inferred from a status.
    */
   validationEnvelope?: "crust" | "fastapi";
+  /**
+   * Permit a 5xx as a configured validation/error status. Off by default: a
+   * fixture cannot hold a server to "this request makes it fail", and a 5xx
+   * expectation plus an error-shaped body turns a crash into a passing
+   * negative test. Set it only where a gateway or legacy handler genuinely
+   * surfaces validation as a server error, and expect the generation to say so
+   * out loud.
+   */
+  serverErrorStatus?: boolean;
   /** Per-operation overrides keyed exactly `"METHOD /path"` — the manifest's operation key style. */
   operations?: Record<string, ExpectationOverride>;
 }
@@ -263,6 +272,7 @@ interface ExpectationOverrides {
   validationStatus?: number;
   concealment?: number;
   validationEnvelope?: "crust" | "fastapi";
+  serverErrorStatus?: boolean;
   operations: Record<string, ExpectationOverride>;
 }
 
@@ -275,13 +285,19 @@ interface ExpectationOverrides {
 export class ConfigError extends Error {}
 
 // Statuses crust will configure: client-error responses only. 2xx/3xx would
-// make a negative case assert success; 5xx is not an expectation a fixture
-// can hold a server to.
-function checkConfigStatus(what: string, value: unknown): number {
-  if (typeof value !== "number" || !Number.isInteger(value) || value < 400 || value >= 600) {
+// make a negative case assert success, and 5xx is not an expectation a fixture
+// can hold a server to — a 500 that arrives with an error-shaped body would
+// satisfy a 500-expecting validation case, which launders a crash into a
+// passing test. `serverErrorStatus` is the explicit, disclosed exception.
+function checkConfigStatus(what: string, value: unknown, allow5xx = false): number {
+  const max = allow5xx ? 600 : 500;
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 400 || value >= max) {
     throw new ConfigError(
-      `${what} must be an integer between 400 and 599 (got ${JSON.stringify(value)}) — ` +
-        "only client-error statuses can be configured",
+      `${what} must be an integer between 400 and ${max - 1} (got ${JSON.stringify(value)}) — ` +
+        (allow5xx
+          ? "only error statuses can be configured"
+          : "only client-error (4xx) statuses can be configured; set expectations.serverErrorStatus " +
+            "if a gateway really surfaces validation as a 5xx"),
     );
   }
   return value;
@@ -324,12 +340,28 @@ function validateExpectations(
     "validationStatus",
     "concealment",
     "validationEnvelope",
+    "serverErrorStatus",
     "operations",
   ]);
   const src = raw as ExpectationsConfig;
   const out: ExpectationOverrides = { module, operations: {} };
+  // Read first: it decides how wide `checkConfigStatus` lets a status go, and a
+  // typo in the flag must not silently widen the gate.
+  if (src.serverErrorStatus !== undefined) {
+    if (typeof src.serverErrorStatus !== "boolean") {
+      throw new ConfigError(
+        `expectations.serverErrorStatus must be a boolean (got ${JSON.stringify(src.serverErrorStatus)})`,
+      );
+    }
+    out.serverErrorStatus = src.serverErrorStatus;
+  }
+  const allow5xx = out.serverErrorStatus === true;
   if (src.validationStatus !== undefined) {
-    out.validationStatus = checkConfigStatus("expectations.validationStatus", src.validationStatus);
+    out.validationStatus = checkConfigStatus(
+      "expectations.validationStatus",
+      src.validationStatus,
+      allow5xx,
+    );
   }
   if (src.concealment !== undefined) {
     // Accept the string spellings the config contract documents and the bare
@@ -378,12 +410,14 @@ function validateExpectations(
         o.validationStatus = checkConfigStatus(
           `expectations.operations["${key}"].validationStatus`,
           value.validationStatus,
+          allow5xx,
         );
       }
       if (value.errorStatus !== undefined) {
         o.errorStatus = checkConfigStatus(
           `expectations.operations["${key}"].errorStatus`,
           value.errorStatus,
+          allow5xx,
         );
       }
       if (value.validationEnvelope !== undefined) {
@@ -2544,6 +2578,15 @@ export async function generateFixtures(opts: GenerateOpts): Promise<GenerateResu
   };
 
   const log = opts.log ?? ((line: string) => process.stdout.write(`${line}\n`));
+  // A 5xx expectation is allowed only by explicit policy, so it is said out loud
+  // every generation: a case that passes because the server crashed is the exact
+  // false pass this project forbids, and a reader must not have to know to look
+  // for it in the setup module.
+  if (scope.expectations?.serverErrorStatus === true) {
+    log(
+      "gen-fixtures: expectations.serverErrorStatus is set, so a 5xx may be configured as a validation or error status — a server failure that answers with an error-shaped body satisfies those cases. That is a gateway-compatibility measure, not validation conformance.",
+    );
+  }
   const unsound: UnsoundOp[] = [];
   const unproven: UnprovenOp[] = [];
   const bodyless: BodylessOp[] = [];
