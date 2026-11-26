@@ -38,8 +38,9 @@ test("the documented quickstart project builds exactly as documented", async () 
     // Exact names are asserted: the entrypoints here are single-file, and a
     // single-file bundle's cwd-relative banner is stripped before hashing,
     // so the hash is a function of the content alone — stable across
-    // machines AND working directories. (A multi-file bundle would keep its
-    // cwd-relative per-file banners and its names would not be pinnable.)
+    // machines AND working directories. (Multi-file bundles get the same
+    // treatment — every per-file banner stripped, metafile-enumerated — so
+    // their names would be pinnable too; the fixture stays single-file.)
     expect(result.assets.main).toBe("assets/main-8f1a92802d4c9533.js");
     expect(result.assets.site).toBe("assets/site-4302d8f61557770f.css");
 

@@ -654,24 +654,37 @@ them. An asset that no page ever passed to `script()`/`stylesheet()` is an
 Two more measured behaviors of the bundler, both pinned by tests:
 
 - **Bun prefixes each output with a one-line banner naming the bundled
-  file relative to the process cwd.** For a single-file entrypoint the
-  banner sits at the head of the file (after a preserved hashbang and one
-  blank line, when the entry starts with `#!`) and names the entry itself,
-  so the SSG strips it before hashing: **single-file entrypoints are
-  byte-identical — hashes included — across builds from any working
-  directory**. A multi-file bundle (the entry imports other files, a CSS
-  `@import`s, an npm package import) emits one banner per bundled file,
-  and the leading one names a dependency, not the entry: those paths are
-  only known after re-resolving Bun's import graph, so multi-file bundles
-  keep them and **remain cwd-sensitive** — the same site built from a
-  different cwd can produce different hashes for them. Pin the build's
-  working directory (CI normally does) if you have any bundled entrypoint
-  that imports other files.
+  file relative to the process cwd** (a `../`-prefixed path when the file
+  is outside the cwd — never an absolute path). For a single-file
+  entrypoint the banner sits at the head of the file (after a preserved
+  hashbang and one blank line, when the entry starts with `#!`) and names
+  the entry itself, so the SSG strips it before hashing. A multi-file
+  bundle (the entry imports other files, a CSS `@import`s, an npm package
+  import) emits one banner per bundled file, and the leading one names a
+  dependency, not the entry — the SSG strips those as well: every input
+  file of the build is enumerated from Bun's build metafile, whose keys
+  carry the same cwd-relative paths as the banners (measured
+  byte-identical), so the exact banner line is computable for every
+  bundled file. The strip removes any output line byte-identical to a
+  computed banner — but only after the file's FIRST line has matched one
+  of them, so a bannerless or changed-shape output is never touched: a
+  future Bun that changes the banner shape degrades that asset to the old
+  cwd-sensitive hash instead of pattern-stripping and corrupting code.
+  Result: **every asset, single- or multi-file, is byte-identical — hashes
+  included — across builds from any working directory**; no pinning of the
+  build's cwd is needed. One honest caveat, pinned by tests: the transpile
+  drops every source comment, so a bare comment-shaped line in the output
+  can only be a banner or template-literal content — if the latter is
+  byte-identical to one of the computed banners, the exact match strips it
+  with them (one line of string data changes; the backtick boundaries
+  survive, so the code still parses).
 - **The transpile drops every source comment** (leading, mid-file,
   trailing; `//` and `/* */`, CSS included) before the bundle is emitted:
-  shipped assets contain no source comments. String data is untouched — a
-  template-literal line that merely looks like a comment survives verbatim.
-  An entry that is only comments or type declarations therefore emits zero
+  shipped assets contain no source comments. String data is otherwise
+  untouched — a template-literal line that merely looks like a comment
+  survives verbatim (the one exception: a line byte-identical to a
+  computed banner of a multi-file bundle, per the previous bullet). An
+  entry that is only comments or type declarations therefore emits zero
   bytes (and no banner).
 
 ```ts
@@ -957,10 +970,14 @@ A rebuild with unchanged inputs is **byte-identical**:
 - no timestamps in any emitted byte (no sitemap `<lastmod>`),
 - LF-only output; CRLF/CR input is normalized and a leading BOM stripped,
 - diagnostics are sorted by sourcePath, line, code,
-- the one cwd-sensitivity: the per-file banners a **multi-file** asset
-  bundle keeps (single-file banners are stripped, see “Assets”) embed
-  cwd-relative paths, so run builds from a fixed directory if you bundle
-  entrypoints that import other files.
+- no cwd-sensitivity in any emitted byte: the per-file path banners Bun
+  prepends to bundled asset files embed cwd-relative paths, and the SSG
+  strips every one of them before hashing — single-file and multi-file
+  bundles alike (see “Assets”) — so a rebuild is byte-identical from any
+  working directory. The one residual is a future Bun that changes the
+  banner shape: the strip is an exact match, so it then leaves the bytes
+  untouched, and that asset's hash can become cwd-sensitive again rather
+  than risk a corrupted strip.
 
 ---
 

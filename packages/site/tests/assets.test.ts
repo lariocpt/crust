@@ -15,6 +15,7 @@ import {
   copyPublicDir,
   manifestLookup,
   publicCollisions,
+  stripMultiFileBanners,
 } from "../src/assets.ts";
 import { defineSite, resolveConfigPaths } from "../src/config.ts";
 import type { Diagnostic } from "../src/diagnostics.ts";
@@ -401,8 +402,10 @@ function assetFile(manifest: AssetManifest, name: string): string {
 
 describe("Bun banner strip (cross-cwd determinism)", () => {
   // Bun 1.4.x prepends a cwd-relative path banner to the bundled output;
-  // buildAssets strips it (src/assets.ts, stripBundlerBanner) so the hash and
-  // the emitted bytes never depend on the working directory.
+  // buildAssets strips them (src/assets.ts, stripBundlerBanner for the one
+  // leading banner of single-input bundles, stripMultiFileBanners for every
+  // per-file banner of multi-input bundles) so the hash and the emitted
+  // bytes never depend on the working directory.
 
   test("single-file entries: identical hashes and byte-identical files from THREE different cwds", async () => {
     const { dir, site } = await project(
@@ -552,17 +555,23 @@ describe("Bun banner strip (cross-cwd determinism)", () => {
     expect(a).not.toBe(b);
   });
 
-  test("a multi-file bundle KEEPS its per-file path comments (documented residual; no over-strip)", async () => {
+  test("a multi-file bundle strips EVERY per-file path comment (metafile-enumerated, exact match, gated)", async () => {
     // The leading banner of a multi-file bundle names the FIRST bundled
-    // file (a dependency), not the entry — the exact match against the
-    // entry cannot identify it, and a pattern strip would eat real user
-    // comments. Such bundles therefore stay cwd-sensitive; docs/USAGE.md
-    // documents that. This pins the deliberate NON-strip (honest-failure
-    // control: a future change that strips these comments breaks here).
+    // file (a dependency), not the entry — the single-file head-match cannot
+    // identify it, and a pattern strip would eat template-literal lines that
+    // merely look like banners. The strip therefore enumerates the build's
+    // input files from the metafile (whose keys are measured byte-identical
+    // to the banner paths), computes the exact banner for each, and removes
+    // any output line byte-identical to one of them — gated on the file's
+    // first line being such a banner, so a bannerless or changed-shape
+    // output is never touched. This pins the STRIP (the inverse of the old
+    // documented-residual test: a regression that keeps these comments
+    // breaks here, which would re-open the cwd-sensitive hash).
     const { site } = await project(
       {
         "src/util.ts": `export const n = 1;\n`,
-        "src/app.ts": `import { n } from "./util";\nconsole.log(n);\n`,
+        "src/more.ts": `export const m = 2;\n`,
+        "src/app.ts": `import { n } from "./util";\nimport { m } from "./more";\nconsole.log(n + m);\n`,
       },
       scripts({ app: "src/app.ts" }),
     );
@@ -570,11 +579,266 @@ describe("Bun banner strip (cross-cwd determinism)", () => {
     const { manifest, diagnostics } = await buildAssets(site, staging);
     expect(diagnostics).toEqual([]);
     const text = (await readFile(join(staging, assetFile(manifest, "app")))).toString();
-    // every bundled file keeps its cwd-relative comment (separator is `/`
-    // on every platform — Bun's Loose normalization, Windows included)
-    expect(text).toMatch(/\/\/ .*src\/util\.ts\n/);
-    expect(text).toMatch(/\/\/ .*src\/app\.ts\n/);
-    expect(text).toContain("console.log");
+    // no per-file path banner survives anywhere in the file
+    for (const line of text.split("\n")) {
+      expect(line).not.toMatch(/^\/\/ .+$/);
+    }
+    expect(text).not.toContain("src/util.ts");
+    expect(text).not.toContain("src/more.ts");
+    expect(text).not.toContain("src/app.ts");
+    // content intact, in bundle order
+    const i1 = text.indexOf("n = 1");
+    const i2 = text.indexOf("m = 2");
+    const i3 = text.indexOf("console.log");
+    expect(i1).not.toBe(-1);
+    expect(i2).not.toBe(-1);
+    expect(i3).not.toBe(-1);
+    expect(i1).toBeLessThan(i2);
+    expect(i2).toBeLessThan(i3);
+  });
+
+  test("a multi-file bundle (entry imports 2 local modules) is byte-identical — hash and file — from THREE different cwds", async () => {
+    // THE determinism contract for the old residual case: pre-fix, every
+    // per-file banner of a multi-file bundle embedded a cwd-relative path,
+    // so the same site built from a different cwd hashed differently. Now
+    // every banner is stripped (metafile-enumerated, exact match, gated), so
+    // the emitted bytes — and the hash — are identical from any working
+    // directory. The three cwds are structurally different relative to the
+    // project, so the banners render three different forms (a plain
+    // `src/…` form, a `../<proj>/src/…` form from a sibling, and a deeper
+    // `../../…` form) — any cwd leakage in the bytes or hashes is visible.
+    const { dir, site } = await project(
+      {
+        "src/util.ts": `export const n = 1;\n`,
+        "src/more.ts": `export const m = 2;\n`,
+        "src/app.ts": `import { n } from "./util";\nimport { m } from "./more";\nconsole.log(n + m);\n`,
+        "src/base.css": `.base { color: red; }\n`,
+        "src/site.css": `@import "./base.css";\n.site { color: blue; }\n`,
+      },
+      { scripts: { app: "src/app.ts" }, styles: { site: "src/site.css" } },
+    );
+    const deepRoot = await tmp("crust-site-cwd-deep-");
+    const cwds = [dir, await tmp("crust-site-cwd-shallow-"), join(deepRoot, "deep", "er")];
+    await mkdir(join(deepRoot, "deep", "er"), { recursive: true });
+    const stags = [
+      await tmp("crust-site-staging-"),
+      await tmp("crust-site-staging-"),
+      await tmp("crust-site-staging-"),
+    ];
+    const original = process.cwd();
+    const results: Awaited<ReturnType<typeof buildAssets>>[] = [];
+    try {
+      for (const cwd of cwds) {
+        process.chdir(cwd);
+        results.push(await buildAssets(site, stags[results.length]));
+      }
+    } finally {
+      process.chdir(original);
+    }
+    for (const r of results) expect(r.diagnostics).toEqual([]);
+    // identical manifests: same names, same hashed file names, same byte
+    // counts (the hashes themselves are the cross-cwd proof)
+    const asJson = (m: (typeof results)[number]["manifest"]) => JSON.stringify([...m.entries()]);
+    expect(asJson(results[1].manifest)).toBe(asJson(results[0].manifest));
+    expect(asJson(results[2].manifest)).toBe(asJson(results[0].manifest));
+    // and the emitted files are byte-identical across all three builds —
+    // JS multi-file AND CSS @import bundles (block-comment banners)
+    for (const [name, entry] of results[0].manifest) {
+      const a = await readFile(join(stags[0], entry.file));
+      expect(a.equals(await readFile(join(stags[1], assetFile(results[1].manifest, name))))).toBe(
+        true,
+      );
+      expect(a.equals(await readFile(join(stags[2], assetFile(results[2].manifest, name))))).toBe(
+        true,
+      );
+    }
+  });
+
+  test("a bare-specifier import resolves from the ENTRY's location (node_modules) even from a foreign cwd, and its banner is stripped", async () => {
+    // The metafile-based strip must not move module resolution: the entry
+    // imports a bare specifier that resolves via a node_modules tree NEXT TO
+    // THE ENTRY (never via the process cwd), and the build runs from an
+    // unrelated working directory. The package's banner — a node_modules
+    // path, cwd-relative — must be stripped like any other input's, which
+    // is what keeps the hash cwd-independent for npm imports.
+    const { site } = await project(
+      {
+        "node_modules/fake-pkg/index.js": `export const fromPkg = "pkg-content";\n`,
+        "src/app.ts": `import { fromPkg } from "fake-pkg";\nconsole.log(fromPkg);\n`,
+      },
+      scripts({ app: "src/app.ts" }),
+    );
+    const otherCwd = await tmp("crust-site-cwd-bare-");
+    const staging = await tmp("crust-site-staging-");
+    const original = process.cwd();
+    let result: Awaited<ReturnType<typeof buildAssets>>;
+    try {
+      process.chdir(otherCwd);
+      result = await buildAssets(site, staging);
+    } finally {
+      process.chdir(original);
+    }
+    expect(result.diagnostics).toEqual([]);
+    const text = (await readFile(join(staging, assetFile(result.manifest, "app")))).toString();
+    expect(text).toContain("pkg-content");
+    // the package's banner is gone: no node_modules path anywhere
+    expect(text).not.toContain("node_modules");
+    expect(text).not.toContain("fake-pkg");
+  });
+});
+
+describe("stripMultiFileBanners (unit)", () => {
+  // The strip operates on the EMITTED bytes, so these tests synthesize the
+  // bytes Bun 1.4.4 would emit (a banner before every file's code, one
+  // blank line between files — measured) and run the real strip against
+  // them. Each test chdirs into a fresh tmpdir so the cwd-relative
+  // candidate computation (and the entry read for the hashbang check) is
+  // deterministic; the cwd is restored in `finally` like the build-level
+  // cross-cwd tests.
+  const runInTmp = async (
+    setup: (cwd: string) => Promise<void>,
+    body: (cwd: string) => Promise<void>,
+  ): Promise<void> => {
+    const cwd = await tmp("crust-site-strip-unit-");
+    const original = process.cwd();
+    try {
+      await setup(cwd);
+      await body(cwd);
+    } finally {
+      process.chdir(original);
+    }
+  };
+
+  test("strips every per-file banner; code and blank lines survive", async () => {
+    await runInTmp(
+      async (cwd) => {
+        await writeFile(join(cwd, "app.ts"), `console.log(1);\n`); // no hashbang
+      },
+      async (cwd) => {
+        // metafile keys exactly as Bun reports them (pretty, cwd-relative)
+        const text =
+          "// util.ts\n" +
+          `const n = 1;\n\n` +
+          "// more.ts\n" +
+          `const m = 2;\n\n` +
+          "// app.ts\n" +
+          `console.log(n + m);\n`;
+        const bytes = Buffer.from(text, "utf8");
+        const out = await stripMultiFileBanners(bytes, join(cwd, "app.ts"), ".js", [
+          "util.ts",
+          "more.ts",
+          "app.ts",
+        ]);
+        // every banner line gone; every original line break kept (a
+        // stripped banner leaves its line break behind)
+        expect(new TextDecoder("utf-8").decode(out)).toBe(
+          "\nconst n = 1;\n\n\nconst m = 2;\n\n\nconsole.log(n + m);\n",
+        );
+      },
+    );
+  });
+
+  test("gate: a first line that is no computed banner returns the SAME bytes object untouched", async () => {
+    await runInTmp(
+      async (cwd) => {
+        await writeFile(join(cwd, "app.ts"), `console.log(1);\n`);
+      },
+      async (cwd) => {
+        const text = "// not-a-known-input.ts\nconst n = 1;\n";
+        const bytes = Buffer.from(text, "utf8");
+        const out = await stripMultiFileBanners(bytes, join(cwd, "app.ts"), ".js", [
+          "util.ts",
+          "app.ts",
+        ]);
+        // identity, not equality: a no-match must leave the bytes ALONE
+        expect(out).toBe(bytes);
+      },
+    );
+  });
+
+  test("gate at the hashbang offset: the banner after a preserved hashbang is stripped", async () => {
+    await runInTmp(
+      async (cwd) => {
+        await writeFile(join(cwd, "app.ts"), `#!/usr/bin/env node\nconsole.log(1);\n`);
+      },
+      async (cwd) => {
+        const text = `#!/usr/bin/env node\n\n// app.ts\nconst n = 1;\n`;
+        const bytes = Buffer.from(text, "utf8");
+        const out = await stripMultiFileBanners(bytes, join(cwd, "app.ts"), ".js", ["app.ts"]);
+        expect(new TextDecoder("utf-8").decode(out)).toBe(
+          `#!/usr/bin/env node\n\n\nconst n = 1;\n`,
+        );
+      },
+    );
+  });
+
+  test("a template-literal line byte-identical to a banner is stripped with it (pinned caveat)", async () => {
+    // The transpile drops EVERY source comment, so a bare comment-shaped
+    // line in the output can only be a banner or template-literal content.
+    // When the latter is byte-identical to a computed banner, the exact
+    // match removes it: one line of STRING data changes (the backtick
+    // boundaries survive, the code still parses) — never code structure.
+    // docs/USAGE.md (Assets) documents the trade; this pins it so any
+    // future change to the rule has to change the docs, not silently.
+    await runInTmp(
+      async (cwd) => {
+        await writeFile(join(cwd, "app.ts"), `console.log(1);\n`);
+      },
+      async (cwd) => {
+        const text = `// util.ts\nconst s = \`keep\n// util.ts\ndrop\`;\n`;
+        const bytes = Buffer.from(text, "utf8");
+        const out = await stripMultiFileBanners(bytes, join(cwd, "app.ts"), ".js", [
+          "util.ts",
+          "app.ts",
+        ]);
+        expect(new TextDecoder("utf-8").decode(out)).toBe(`\nconst s = \`keep\n\ndrop\`;\n`);
+      },
+    );
+  });
+
+  test("the ../ pretty form (an input outside the cwd) is matched too", async () => {
+    await runInTmp(
+      async (cwd) => {
+        await writeFile(join(cwd, "e.js"), `console.log(1);\n`);
+      },
+      async (cwd) => {
+        // key "../other/mod.js": the metafile's form for a file OUTSIDE the
+        // cwd — the candidate list re-derives it from the resolved absolute
+        // path, so both forms must match
+        const text = `// ../other/mod.js\nconst m = 3;\n\n// e.js\nconst e = 4;\n`;
+        const bytes = Buffer.from(text, "utf8");
+        const out = await stripMultiFileBanners(bytes, join(cwd, "e.js"), ".js", [
+          "../other/mod.js",
+          "e.js",
+        ]);
+        expect(new TextDecoder("utf-8").decode(out)).toBe("\nconst m = 3;\n\n\nconst e = 4;\n");
+      },
+    );
+  });
+
+  test("css bundles: block-comment banners are stripped for every input", async () => {
+    await runInTmp(
+      async (cwd) => {
+        await writeFile(join(cwd, "b.css"), `.b { color: blue; }\n`);
+      },
+      async (cwd) => {
+        const text = `/* a.css */\n.a { color: red; }\n\n/* b.css */\n.b { color: blue; }\n`;
+        const bytes = Buffer.from(text, "utf8");
+        const out = await stripMultiFileBanners(bytes, join(cwd, "b.css"), ".css", [
+          "a.css",
+          "b.css",
+        ]);
+        expect(new TextDecoder("utf-8").decode(out)).toBe(
+          "\n.a { color: red; }\n\n\n.b { color: blue; }\n",
+        );
+      },
+    );
+  });
+
+  test("empty bytes are returned unchanged", async () => {
+    const bytes = new Uint8Array(0);
+    const out = await stripMultiFileBanners(bytes, "/nonexistent/entry.js", ".js", ["x.js"]);
+    expect(out).toBe(bytes);
   });
 });
 
