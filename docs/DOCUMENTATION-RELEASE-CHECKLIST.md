@@ -2,13 +2,14 @@
 
 ## v0.4.0 coordinated release
 
-**Production release status: partial; blocked at npm publication.** The GitHub
-binary release is live, but the npm launchers are not published. The coordinated
-website deployment and backend dependency pin remain on hold.
+**Production release status: complete.** Crust `0.4.0` is published, the
+coordinated website is live, and the backend's exact Mongo launcher pin is
+validated, committed, and pushed. Package publication and the live website
+were verified before the backend update.
 
 The repository owner authorized production releases and requested the website
 release followed by the backend's installation of live Crust `0.4.0`.
-This candidate is a version/documentation milestone, not a new runtime-feature
+This release is a version/documentation milestone, not a new runtime-feature
 release. The [0.3.9 audit](RELEASE-0.3.9-AUDIT.md) records what already shipped.
 
 - [x] Isolate the candidate from public `main` without including unrelated
@@ -24,47 +25,47 @@ release. The [0.3.9 audit](RELEASE-0.3.9-AUDIT.md) records what already shipped.
   stamps, compiled variant probes, and checksums.
 - [x] Independently verify the checksum manifest and all eight released asset
   digests against GitHub's SHA-256 metadata.
-- [ ] Complete npm and GitHub Packages publication in the existing workflow,
+- [x] Complete npm and GitHub Packages publication in the existing workflow,
   preserving binary-before-launcher ordering.
-- [ ] Verify both public npm packages and their released source provenance.
-- [ ] Deploy the coordinated website after the package release; verify its
+- [x] Verify both public npm packages and their released source provenance.
+- [x] Deploy the coordinated website after the package release; verify its
   production workflow and live content.
-- [ ] Only then pin the backend's Mongo launcher and lockfile to live `0.4.0`,
+- [x] Only then pin the backend's Mongo launcher and lockfile to live `0.4.0`,
   validate the intended tooling, and commit/push that branch.
 
-### Publication evidence and blocker
+### Publication evidence
 
 | Item | Observed state |
 | --- | --- |
 | Released source commit | `f24c456f8d7124c5d2fb43b212e8aee9f5ab1117` |
-| Source publication | Candidate pushed to public `main`; annotated `v0.4.0` tag pushed |
+| Source publication | Released source on public `main`; annotated `v0.4.0` tag remains unchanged |
 | GitHub release | [Crust v0.4.0](https://github.com/lariocpt/crust/releases/tag/v0.4.0), published `2026-11-26T00:33:33Z`, non-draft and non-prerelease |
 | Published artifacts | Eight Linux/macOS, x64/arm64, clean/Mongo binaries plus `SHA256SUMS` |
-| Release workflow | [Run 45729364678](https://github.com/lariocpt/crust/actions/runs/45729364678), attempt 2 completed with failure in npm publication |
-| npm packages | Both packages remain at `latest=0.3.9`; neither public package metadata document contains `0.4.0` |
-| GitHub Packages | Publication steps were skipped after npm failed |
-| Website candidate | Local commit `8e0dfdb167e65d8b8babe7e9816a6ad7f79d1afd`; not pushed or deployed |
-| Backend branch | `feature/crust-main` unchanged: manifest still requests `latest`, lockfile still resolves `0.3.9` |
+| Release workflow | [Run 45729364678](https://github.com/lariocpt/crust/actions/runs/45729364678), attempt 3 completed successfully at the released source commit |
+| npm packages | `@lariocpt/crust` and `@lariocpt/crust-mongo` both contain `0.4.0`; both public `latest` tags resolve to `0.4.0` |
+| GitHub Packages | Both `0.4.0` package publication steps succeeded in the same workflow |
+| Website publication | Commit `8e0dfdb167e65d8b8babe7e9816a6ad7f79d1afd` pushed to website `main`; [production release guide](https://lariocpt.github.io/crust-website/docs/releases/) independently verified live |
+| Website workflow | [Run 45731336320](https://github.com/lariocpt/crust-website/actions/runs/45731336320) passed public build, grammar, output, deployment, and live-link gates |
+| Backend publication | `feature/crust-main` commit `06893a2f2e814c2a2d155140a130905e60d05eb6` pushed; manifest and lockfile both pin Mongo launcher `0.4.0` |
 
 The original npm job and one npm-only retry both failed with `E404` on
 `PUT https://registry.npmjs.org/@lariocpt%2fcrust`. Public reads of both existing
 packages succeeded. The configured CI secret passed the workflow's nonempty
 check, but that does not establish valid publishing access. The exact credential
-or registry-access cause is unverified. Local `npm whoami` returned `ENEEDAUTH`,
-and no local publishing token was available.
+or registry-access cause remains unverified. Local `npm whoami` returned
+`ENEEDAUTH`; publication did not use a local publishing token.
 
-An owner must repair npm publishing access, including checking the CI
-`NPM_TOKEN` validity, package write permissions, and applicable authentication
-requirements, then update the repository secret securely if necessary. Do not
-paste credentials into chat or commit them. Resume with only the failed npm job;
-do not move the tag, rebuild, or overwrite the published binaries. After both
-package versions and their provenance are verified, push/deploy the website
-candidate and verify it live. Only then update, validate, commit, and push the
-backend's exact `0.4.0` dependency pin.
+The owner securely updated the repository's `NPM_TOKEN` secret, then the failed
+npm job was rerun in the existing workflow. GitHub also scheduled fresh test
+and binary-release jobs; all succeeded. This was not a no-rebuild retry.
+Fresh verification confirmed the tag and all eight published binary digests
+were unchanged. No tag move or manual package publication was performed.
 
-No application API, application database, fixture, load, or LAN/Jenkins
-validation is implied. Do not reuse published versions or move released tags
-as an improvised rollback.
+Immediately after publication, exact-version npm metadata briefly returned
+404 or stale content. Subsequent uncached public metadata and independent
+tarball verification confirmed both exact versions, integrity hashes, and
+`latest` tags before the website was pushed. No credentials were put in chat,
+commits, or this record.
 
 ### Fresh candidate validation
 
@@ -79,10 +80,54 @@ as an improvised rollback.
   produced 34 pages, 1,659 internal links and 55 anchor links, with no dead
   internal links. Its known Shiki language warning used plaintext fallback.
 - Website grammar checks passed all 382 examples against the candidate's source
-  entrypoint. The deployment workflow will repeat that gate against the
-  published compiled binary.
+  entrypoint. The production deployment workflow and a separate local check
+  also passed all 382 examples against the published compiled `0.4.0` binary.
 - Diff checks passed. Runtime, test, skill and npm-template sources are unchanged
   from `v0.3.9`; unrelated website-builder and backend work remains excluded.
+
+### Post-publication verification and limits
+
+- Both public npm tarballs passed SHA-1 and SHA-512 integrity checks. Their
+  `gitHead` values match the released source commit. Each package's 15
+  non-manifest files are byte-identical to the tagged launcher/skill sources;
+  manifests contain the expected name, version, variant, GitHub source, platform
+  inventory, and only the reviewed postinstall lifecycle script.
+- Public npm SHA-1 values: clean
+  `f8547a09051b2c161fc37404322c3c0d78b84865`; Mongo
+  `53756e11d9b2961e04a455204cd49e0ee1cd1435`.
+- The checksum manifest's SHA-256 is
+  `212140997a304d9e5e2d47a912afb3a8c4faa46ac976e0438a1b2259558aea87`.
+  All eight entries matched GitHub asset digests before and after recovery.
+- Published Linux x64 clean and Mongo launchers independently reported `0.4.0`
+  and released source commit `f24c456f8d7124c5d2fb43b212e8aee9f5ab1117`.
+  Actual downloaded binary SHA-256 values matched the release: clean
+  `68b70224dd5d752f61b8ffc0ccc23577439171cfb324e22c02cfa6a4e4c64849`;
+  Mongo `727fe90cf78fefb28ed8b6afdddf3627e6f0855a9237b6648657b29f5af2bffd`.
+  These were metadata-only checks, not application execution.
+- Independent HTTP requests returned 200 for the deployed homepage, docs index,
+  and release guide. Navigation, one-H1 structure, release link, and both exact
+  npm install commands were checked in addition to the workflow's live links.
+- The backend's frozen install with lifecycle scripts disabled left its
+  lockfile unchanged and changed only the Mongo launcher package. Fresh focused
+  tooling/selector/transport tests passed 34 tests with zero failures;
+  TypeScript, changed-JavaScript syntax, documentation links, and diff checks
+  passed. Historical `0.3.8` generation records were not regenerated.
+- Backend `make quality-check` was attempted after staging, but this branch
+  lacks that target and a tracked pre-commit configuration. The existing hook's
+  missing-config exception was scoped to the individual commit; no hook or
+  quality configuration was changed. The focused checks above are not claimed
+  to be a successful run of the unavailable target.
+- Local Bun validation used `--config=/dev/null`; backend unit/type validation
+  also disabled dotenv autoload and used a sanitized environment. Production
+  workflow configuration is separate.
+- No application API, application database, native/generated fixture suite,
+  load, installed-host MCP smoke, or LAN/Jenkins validation is claimed. The
+  release workflow's compiled Mongo probes are not application DB coverage.
+  The backend's documented exporter/runtime integration limitations remain.
+
+Keep credentials out of release review. Do not reuse published versions, move
+released tags, or perform destructive rollback operations without a separately
+reviewed destination and authorization.
 
 ## v0.3.9 release close-out
 
