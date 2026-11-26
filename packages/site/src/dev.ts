@@ -33,10 +33,10 @@
 
 import { type FSWatcher, watch } from "node:fs";
 import { lstat, readdir, rm, stat } from "node:fs/promises";
-import { posix } from "node:path";
 import { devBuild, devRebuild, loadResolvedConfig } from "./build";
 import { BuildError, type Diagnostic, formatDiagnostics } from "./diagnostics";
 import { devStagingDirFor, isCustodianSibling, sweepDeadDevStaging } from "./emit";
+import { filesystemPath as posix } from "./fs-path";
 import { normalizeRequestPath, routeToFile } from "./routes";
 import type { ResolvedSite } from "./types";
 

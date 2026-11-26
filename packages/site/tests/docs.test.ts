@@ -2,10 +2,65 @@ import { expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import path from "node:path";
+import { extractTsFences } from "../scripts/lint-docs.mjs";
 import { build } from "../src/index.ts";
 
 const PKG = path.resolve(import.meta.dir, "..");
 const FIXTURE = path.join(PKG, "tests", "fixtures", "docs-example");
+
+test.each(["LF", "CRLF", "mixed"] as const)(
+  "documentation fence scanner preserves content and source lines with %s endings",
+  (ending) => {
+    const lines = [
+      "# Examples",
+      "```ts",
+      "const first = 1;",
+      "```",
+      "```sh",
+      "echo skipped",
+      "```",
+      "````md",
+      "```ts",
+      "not TypeScript: skipped inside the wrapper",
+      "```",
+      "````",
+      "```ts",
+      "const second = 2;",
+      "```",
+    ];
+    const text = lines
+      .map(
+        (line, i) => `${line}${ending === "CRLF" || (ending === "mixed" && i % 2) ? "\r\n" : "\n"}`,
+      )
+      .join("");
+    expect(extractTsFences(text)).toEqual([
+      { startLine: 2, content: ["const first = 1;"] },
+      { startLine: 13, content: ["const second = 2;"] },
+    ]);
+  },
+);
+
+test.each(["\n", "\r\n"])(
+  "documentation fence scanner rejects unclosed fences with %j endings",
+  (eol) => {
+    expect(() => extractTsFences(["# Examples", "```ts", "const value = 1;"].join(eol))).toThrow(
+      "unclosed ```ts fence at line 2",
+    );
+  },
+);
+
+test.each([
+  ["docs/USAGE.md", 20],
+  ["README.md", 3],
+] as const)(
+  "documentation fence scanner finds every example in %s under CRLF",
+  async (file, count) => {
+    const lf = (await Bun.file(path.join(PKG, file)).text()).replace(/\r\n/g, "\n");
+    const expected = extractTsFences(lf);
+    expect(expected).toHaveLength(count);
+    expect(extractTsFences(lf.replace(/\n/g, "\r\n"))).toEqual(expected);
+  },
+);
 
 test("documentation gate: every ```ts fence typechecks and every diagnostic code is documented", async () => {
   const proc = Bun.spawn(["bun", "scripts/lint-docs.mjs"], {

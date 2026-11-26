@@ -473,6 +473,40 @@ describe("checkOutputOverlap", () => {
     expect(overlapCodes(resolvedWith({ output: { directory: "dist" } }, "/proj"))).toEqual([]);
   });
 
+  test.each([".", "..", "../.."])("output %s cannot contain the config directory", (directory) => {
+    for (const root of [
+      "/project/deep/config",
+      "C:/project/deep/config",
+      "//host/share/deep/config",
+    ]) {
+      const r = resolvedWith(
+        {
+          content: { directory: "D:/external/content", defaultLayout: "base" },
+          output: { directory },
+        },
+        root,
+      );
+      expect(overlapCodes(r)).toEqual(["config.output-overlap"]);
+      expect(overlapMessages(r)).toContain(`the config directory "${root}"`);
+    }
+  });
+
+  test.each(["dist", "../config-other"])(
+    "output %s is not an ancestor false-positive",
+    (directory) => {
+      for (const root of ["/project/config", "C:/project/config", "//host/share/config"]) {
+        const r = resolvedWith(
+          {
+            content: { directory: "D:/external/content", defaultLayout: "base" },
+            output: { directory },
+          },
+          root,
+        );
+        expect(overlapCodes(r)).toEqual([]);
+      }
+    },
+  );
+
   test("publicDirectory inside output is an error", () => {
     const r = resolvedWith(
       { output: { directory: "dist" }, assets: { publicDirectory: "dist/files" } },

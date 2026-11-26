@@ -124,6 +124,7 @@ import {
   isDiagnostic,
   sortDiagnostics,
 } from "./diagnostics";
+import { filesystemPath } from "./fs-path";
 import { finalizeDocument, type Html, html, isHtml } from "./html";
 import type { LayoutFn } from "./types";
 import { validateUrl } from "./url";
@@ -535,7 +536,7 @@ async function readText(sink: Sink, root: string, path: string): Promise<string>
   if (path.split("/").includes(".."))
     readTextFail(sink, path, "read-text.escape", "contains a `..` segment");
 
-  const target = posix.join(root, posix.normalize(path));
+  const target = filesystemPath.join(root, posix.normalize(path));
   let resolved: string;
   try {
     // toPosix on BOTH sides: on Windows realpath returns backslashes, and the
@@ -791,7 +792,11 @@ export async function renderPage(opts: RenderPageOptions): Promise<PageRender> {
       root = toPosix(await realpath(opts.configDir));
     } catch (e) {
       sink.diagnostics.push(
-        renderThrew(page.sourcePath, e, "the readText root (the config directory realpath)"),
+        renderThrew(
+          page.sourcePath,
+          e,
+          `the readText root (the config directory realpath ${JSON.stringify(toPosix(opts.configDir))})`,
+        ),
       );
       return collect(sink, frozen, null);
     }

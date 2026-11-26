@@ -995,31 +995,44 @@ describe("renderPage — layout resolution", () => {
 });
 
 describe("renderPage — total on hand-built input", () => {
-  test("a missing config dir is render.threw with the honest stage (the layout never ran)", async () => {
-    // The readText root is realpath'd before the layout runs. A hand-built
-    // input with a missing config dir must come back as a located diagnostic
-    // that says WHICH setup step failed — the old wording blamed "the
-    // layout" for a step the layout had not even reached (a false statement;
-    // crust rule 1).
-    const parent = await tmp("crust-site-render-cfg-");
-    const missing = join(parent, "does-not-exist");
-    const result = await renderPage({
-      page: makePage(),
-      site: SITE,
-      manifest: MANIFEST,
-      layouts: { docs },
-      configDir: missing,
-    });
-    expect(result.html).toBeNull();
-    expect(result.diagnostics).toHaveLength(1);
-    const d = result.diagnostics[0];
-    expect(d.code).toBe("render.threw");
-    expect(d.severity).toBe("error");
-    expect(d.sourcePath).toBe("content/index.md");
-    expect(d.message).toContain("readText root");
-    expect(d.message).toContain(missing.replace(/\\/g, "/"));
-    expect(d.message).not.toContain("the layout for page");
-  });
+  test.each(["native", "backslash"] as const)(
+    "a missing config dir is render.threw with the honest stage (%s path; layout never ran)",
+    async (style) => {
+      // The readText root is realpath'd before the layout runs. A hand-built
+      // input with a missing config dir must come back as a located diagnostic
+      // that says WHICH setup step failed — the old wording blamed "the
+      // layout" for a step the layout had not even reached (a false statement;
+      // crust rule 1).
+      const parent = await tmp("crust-site-render-cfg-");
+      const missing = join(parent, "does-not-exist");
+      const configDir =
+        style === "backslash" ? missing.split("/").join(String.fromCharCode(92)) : missing;
+      let layoutRan = false;
+      const result = await renderPage({
+        page: makePage(),
+        site: SITE,
+        manifest: MANIFEST,
+        layouts: {
+          docs: () => {
+            layoutRan = true;
+            return html`<p>must not run</p>`;
+          },
+        },
+        configDir,
+      });
+      expect(result.html).toBeNull();
+      expect(result.diagnostics).toHaveLength(1);
+      const d = result.diagnostics[0];
+      expect(d.code).toBe("render.threw");
+      expect(d.severity).toBe("error");
+      expect(d.sourcePath).toBe("content/index.md");
+      expect(d.message).toContain("readText root");
+      expect(d.message).toContain(configDir.replace(/\\/g, "/"));
+      expect(d.message).toContain("ENOENT");
+      expect(d.message).not.toContain("the layout for page");
+      expect(layoutRan).toBe(false);
+    },
+  );
 });
 
 describe("the frozen page view", () => {

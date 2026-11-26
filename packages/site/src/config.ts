@@ -4,8 +4,8 @@
 // reports five problems. Unknown keys at any level are errors, not ignored
 // extras: a typo'd key that silently does nothing is a false pass.
 
-import { posix } from "node:path";
 import { BuildError, type Diagnostic } from "./diagnostics";
+import { isWindowsPath, pathContains, filesystemPath as posix } from "./fs-path";
 import type {
   ContentConfig,
   DevConfig,
@@ -36,7 +36,6 @@ const ROBOTS_KEYS = ["indexable"];
 const DEV_KEYS = ["hostname", "port"];
 
 const ASSET_NAME = /^[A-Za-z0-9_-]+$/;
-const WINDOWS_ABSOLUTE = /^[A-Za-z]:[\\/]/;
 
 function asObject(value: unknown): Obj | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
@@ -422,11 +421,14 @@ function toPosix(p: string): string {
 }
 
 function isAbsolute(p: string): boolean {
-  return posix.isAbsolute(p) || WINDOWS_ABSOLUTE.test(p);
+  return posix.isAbsolute(p);
 }
 
 function resolveUnder(configDir: string, rel: string): string {
   const r = toPosix(rel);
+  // A root-relative Windows path inherits the CONFIG's drive/share, not cwd.
+  // Keep explicit POSIX fixtures portable when validating on Windows.
+  if (isWindowsPath(configDir)) return posix.resolve(configDir, r);
   return posix.normalize(isAbsolute(r) ? r : posix.join(toPosix(configDir), r));
 }
 
@@ -470,17 +472,6 @@ export function resolveConfigPaths(site: Site, configDir: string): ResolvedSite 
   };
 }
 
-/** Component-wise containment: equal paths, or `outer`'s segments prefix `inner`'s. */
-function pathContains(outer: string, inner: string): boolean {
-  const o = outer.split("/");
-  const i = inner.split("/");
-  if (o.length > i.length) return false;
-  for (let n = 0; n < o.length; n++) {
-    if (o[n] !== i[n]) return false;
-  }
-  return true;
-}
-
 function overlaps(a: string, b: string): boolean {
   return pathContains(a, b) || pathContains(b, a);
 }
@@ -498,7 +489,7 @@ function overlaps(a: string, b: string): boolean {
  *     inside the entrypoint's directory) only adds new files to the source
  *     tree, clobbers nothing, and is the common layout (config + entrypoints
  *     at the project root, output in a subdirectory) — the same "output
- *     inside the config directory" case the equality rule below allows.
+ *     inside the config directory" case the one-way rule below allows.
  * Compared by path COMPONENTS, so `/out` and `/output` do not false-match.
  * Throws BuildError naming both paths of every overlap.
  */
@@ -534,14 +525,13 @@ export function checkOutputOverlap(resolved: ResolvedSite): void {
       }
     }
   }
-  // The config directory is the ONE comparison that is equality-only: output
-  // normally lives INSIDE the project directory (that is the common case), so
-  // containment would false-positive on every real site.
-  if (out === toPosix(resolved.configDir)) {
+  // Only OUTPUT-containing-config is dangerous. The reverse is the normal
+  // project/dist layout, but an ancestor output would delete the config too.
+  if (pathContains(out, toPosix(resolved.configDir))) {
     errors.push({
       code: "config.output-overlap",
       severity: "error",
-      message: `output.directory "${out}" is the config directory itself`,
+      message: `output.directory "${out}" contains the config directory "${resolved.configDir}" (or is the config directory itself) — publishing would delete its own config`,
     });
   }
   if (errors.length > 0) throw new BuildError(errors);

@@ -89,9 +89,11 @@ const PRELUDE = [
  * ANY line-initial run of >= 3 backticks (so a ```` wrapper or a nested
  * ```sh block is skipped whole, never half-read); only the `ts` info string
  * is collected. Returns 1-based open-line numbers and the content lines.
+ * @param {string} text
+ * @returns {{ startLine: number, content: string[] }[]}
  */
-function extractTsFences(text) {
-  const lines = text.split("\n");
+export function extractTsFences(text) {
+  const lines = text.split(/\r?\n/);
   const fences = [];
   let open = null; // { marker: "`".repeat(n), info, startLine, content: [] }
   for (let i = 0; i < lines.length; i++) {
@@ -263,7 +265,9 @@ async function main() {
   );
 }
 
-main().catch((e) => {
-  console.error(`lint-docs: crashed: ${e?.stack ?? e}`);
-  process.exit(1);
-});
+if (import.meta.main) {
+  main().catch((e) => {
+    console.error(`lint-docs: crashed: ${e?.stack ?? e}`);
+    process.exit(1);
+  });
+}

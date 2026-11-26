@@ -10,8 +10,8 @@
 // server and the link checker.
 
 import { lstat } from "node:fs/promises";
-import { posix } from "node:path";
 import { compareStrings, type Diagnostic, isDiagnostic, sortDiagnostics } from "./diagnostics";
+import { filesystemPath as posix } from "./fs-path";
 import { canonicalUrl, findRouteCollisions, normalizeRoute } from "./routes";
 import type { Page, ResolvedSite } from "./types";
 

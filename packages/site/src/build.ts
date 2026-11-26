@@ -19,7 +19,7 @@
 //     outputDirectory is the dev staging tree, served in place.
 //
 // Concurrency: the output is LOCKED for the run (emit.acquireBuildLock,
-// claimed after the startup cleanup and before the staging mkdir) — a
+// claimed before startup recovery and the staging mkdir) — a
 // concurrent build of the same output is refused with build.busy before it
 // can interleave its renames with the holder's (the measured false-pass
 // race: a second build publishing into the first's rename window got rolled
@@ -29,7 +29,6 @@
 // lexicographic ordering everywhere, no timestamps in any emitted byte.
 
 import { mkdir, rm, stat, writeFile } from "node:fs/promises";
-import { resolve as nativeResolve, posix } from "node:path";
 import { pathToFileURL } from "node:url";
 import { buildAssets, copyPublicDir, publicCollisions } from "./assets";
 import { checkOutputOverlap, resolveConfigPaths } from "./config";
@@ -42,7 +41,7 @@ import {
 import { BuildError, compareStrings, type Diagnostic, sortDiagnostics } from "./diagnostics";
 import {
   acquireBuildLock,
-  cleanupStale,
+  cleanupStaleLocked,
   devStagingDirFor,
   type EmitFile,
   notFoundPage,
@@ -53,16 +52,13 @@ import {
   writePages,
 } from "./emit";
 import { parseFrontmatter } from "./frontmatter";
+import { filesystemPath as posix } from "./fs-path";
 import { type Html, html, trustedHtml } from "./html";
 import { parsePage } from "./pages";
 import { collectUnusedAssets, renderAll, renderPage } from "./render";
 import { routeToFile } from "./routes";
 import type { FrontmatterResult, Page, ResolvedSite, RouteResolver, Site } from "./types";
 import { type EmittedPage, type KnownRoute, validatePages } from "./validate";
-
-function toPosix(p: string): string {
-  return p.replace(/\\/g, "/");
-}
 
 function messageOf(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -602,7 +598,7 @@ export async function loadResolvedConfig(configFile: string): Promise<LoadedConf
   }
   // absolute before anything else: every stored path resolves against the
   // CONFIG FILE's directory, and the import needs a stable specifier.
-  const configPath = toPosix(nativeResolve(process.cwd(), raw));
+  const configPath = posix.resolve(process.cwd(), raw);
   const site = await loadSiteConfig(configPath);
   const resolved = resolveConfigPaths(site, posix.dirname(configPath));
   checkOutputOverlap(resolved);
@@ -620,13 +616,11 @@ export async function buildInternal(options: BuildOptions): Promise<BuildInterna
 
   const resolved = loaded.resolved;
   const outputDir = posix.resolve(resolved.output.directory);
-  // startup cleanup (which restores a killed build's orphaned previous output
-  // to the output path) FIRST, then the lock: a concurrent build of this
-  // output is refused before it can interleave its renames with the holder's.
-  await cleanupStale(outputDir);
+  // Recovery can replace output too: it must not run beside a live publisher.
   const release = await acquireBuildLock(outputDir);
   const staging = stagingDirFor(outputDir);
   try {
+    await cleanupStaleLocked(outputDir);
     await mkdir(staging, { recursive: true });
     return await runBuild(resolved, staging, outputDir, started, "build");
   } finally {

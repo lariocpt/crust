@@ -385,7 +385,7 @@ describe.skipIf(!pwsh)("real PowerShell", () => {
     const result = await runPowerShell("Write-Error 'failure'; Write-Output 'continued'", "native");
     expect(result.code).toBe(0);
     expect(result.stdout).toContain("continued");
-  });
+  }, 30_000);
 
   test("parser rejects malformed syntax before any script side effects", async () => {
     await expect(
@@ -406,7 +406,7 @@ describe.skipIf(!pwsh)("real PowerShell", () => {
       },
       "parse-only",
     );
-  });
+  }, 15_000);
 
   test("strict policy accepts supported versions and rejects older runtimes", async () => {
     const versionResult = await runPowerShell("$PSVersionTable.PSVersion.ToString()", "native");

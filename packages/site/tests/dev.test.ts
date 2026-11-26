@@ -31,9 +31,8 @@
 // (verified by mutation during development).
 //
 // Ports: every test uses an ephemeral port (startDev `port: 0`) except the
-// EADDRINUSE case, which probes a free high random port with a retry (the
-// test-only collision escape hatch — the dev server itself never
-// auto-increments).
+// EADDRINUSE case, which keeps an ephemeral IPv4 socket open and passes its
+// exact address to startDev (the dev server itself never auto-increments).
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
@@ -199,22 +198,6 @@ async function start(root: string, opts: ConfigOptions = {}): Promise<Handle> {
 /** The dev staging siblings left in a site root (there should be none after stop). */
 async function devStagingSiblings(root: string): Promise<string[]> {
   return (await readdir(root)).filter((n) => n.startsWith(".crust-dev-staging-"));
-}
-
-/** Probe a free high random port, retrying on collision (test-only escape
- *  hatch — the dev server itself refuses to move ports). */
-async function freePort(): Promise<number> {
-  for (let i = 0; i < 10; i++) {
-    const port = 40000 + Math.floor(Math.random() * 20000);
-    try {
-      const probe = Bun.serve({ hostname: "127.0.0.1", port, fetch: () => new Response("x") });
-      probe.stop(true);
-      return port;
-    } catch {
-      // someone else took it — try again
-    }
-  }
-  throw new Error("could not find a free port after 10 tries");
 }
 
 // ---------------------------------------------------------------------------
@@ -505,12 +488,13 @@ describe("dev — port binding", () => {
   test("EADDRINUSE → dev.port-in-use (no auto-increment), staging deleted, the holder untouched", async () => {
     const root = await tmp("crust-site-dev-portinuse-");
     const cfg = await makeSite(root);
-    const port = await freePort();
-    const holder = Bun.serve({ hostname: "127.0.0.1", port, fetch: () => new Response("held") });
+    const holder = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("held") });
+    const port = holder.port;
+    let unexpected: DevServer | undefined;
     try {
       let error: unknown;
       try {
-        await startDev({ configFile: cfg, port });
+        unexpected = await startDev({ configFile: cfg, port, hostname: "127.0.0.1" });
       } catch (e) {
         error = e;
       }
@@ -528,7 +512,11 @@ describe("dev — port binding", () => {
       // the holder is untouched and still serves
       expect(await (await fetch(`http://127.0.0.1:${port}/`)).text()).toBe("held");
     } finally {
-      holder.stop(true);
+      try {
+        await unexpected?.stop();
+      } finally {
+        holder.stop(true);
+      }
     }
   });
 });

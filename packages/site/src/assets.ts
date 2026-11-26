@@ -84,6 +84,7 @@ import {
 import { tmpdir } from "node:os";
 import { posix, win32 } from "node:path";
 import { compareStrings, type Diagnostic, sortDiagnostics } from "./diagnostics";
+import { filesystemPath, isWindowsPath } from "./fs-path";
 import type { ResolvedSite } from "./types";
 
 const ASSETS_DIR = "assets";
@@ -285,8 +286,7 @@ function cssEscapeStarSlash(pretty: string): string {
  * are the banner we would have computed, and a NO-match (new Bun version,
  * exotic path) simply means "leave the bytes alone" — never a corrupted strip.
  */
-function bannerPathCandidates(absPath: string): string[] {
-  const cwd = process.cwd();
+export function bannerPathCandidates(absPath: string, cwd = process.cwd()): string[] {
   const foldDrive = (p: string): string[] => {
     if (!/^[A-Za-z]:/.test(p)) return [p];
     const drive = p[0];
@@ -298,9 +298,12 @@ function bannerPathCandidates(absPath: string): string[] {
   const push = (p: string): void => {
     if (!out.includes(p)) out.push(p);
   };
-  if (process.platform === "win32") {
+  if (isWindowsPath(cwd) && isWindowsPath(absPath)) {
     for (const from of foldDrive(toPosix(cwd))) {
       for (const to of foldDrive(toPosix(absPath))) {
+        // Bun's Loose paths compare drive components byte-for-byte. In
+        // particular D:/cwd -> C:/tmp is ../../C:/tmp, not win32's C:/tmp.
+        push(posix.relative(`/${from}`, `/${to}`));
         try {
           push(win32.relative(from, to).replace(/\\/g, "/"));
         } catch {
@@ -534,7 +537,7 @@ export async function buildAssets(
   const tmpdirs: string[] = [];
   try {
     for (const entry of declaredEntrypoints(resolvedSite)) {
-      const outdir = await mkdtemp(posix.join(toPosix(tmpdir()), "crust-site-asset-"));
+      const outdir = await mkdtemp(filesystemPath.join(tmpdir(), "crust-site-asset-"));
       tmpdirs.push(outdir);
       let outputs: readonly Bun.BuildArtifact[];
       // The build's input files as the bundler reports them — metafile keys,
@@ -627,8 +630,8 @@ export async function buildAssets(
       // identical content.
       const hash = createHash("sha256").update(bytes).digest("hex").slice(0, 16);
       const file = posix.join(ASSETS_DIR, `${entry.name}-${hash}.${ext.slice(1)}`);
-      await mkdir(posix.join(staging, ASSETS_DIR), { recursive: true });
-      await writeFile(posix.join(staging, file), bytes);
+      await mkdir(filesystemPath.join(staging, ASSETS_DIR), { recursive: true });
+      await writeFile(filesystemPath.join(staging, file), bytes);
       manifest.set(entry.name, { file, bytes: bytes.length });
     }
   } finally {
@@ -712,9 +715,9 @@ async function walkCopy(
   copied: string[],
   diagnostics: Diagnostic[],
 ): Promise<void> {
-  const entries = (await readdir(posix.join(publicDir, rel), { withFileTypes: true })).sort(
-    (a, b) => compareStrings(a.name, b.name),
-  );
+  const entries = (
+    await readdir(filesystemPath.join(publicDir, rel), { withFileTypes: true })
+  ).sort((a, b) => compareStrings(a.name, b.name));
   for (const d of entries) {
     const childRel = rel === "" ? d.name : posix.join(rel, d.name);
     if (d.isSymbolicLink()) {
@@ -729,11 +732,14 @@ async function walkCopy(
       continue;
     }
     if (d.isDirectory()) {
-      await mkdir(posix.join(staging, childRel), { recursive: true });
+      await mkdir(filesystemPath.join(staging, childRel), { recursive: true });
       await walkCopy(publicDir, staging, childRel, copied, diagnostics);
     } else if (d.isFile()) {
-      await mkdir(posix.join(staging, posix.dirname(childRel)), { recursive: true });
-      await copyFile(posix.join(publicDir, childRel), posix.join(staging, childRel));
+      await mkdir(filesystemPath.join(staging, posix.dirname(childRel)), { recursive: true });
+      await copyFile(
+        filesystemPath.join(publicDir, childRel),
+        filesystemPath.join(staging, childRel),
+      );
       copied.push(childRel);
     }
     // fifo/socket/device entries are not copied — they are not files.

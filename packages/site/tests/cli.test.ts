@@ -16,8 +16,8 @@
 //
 // Ports: the dev tests use an EPHEMERAL port (no `dev` key in the config)
 // and parse the bound port from the worker's stdout URL line; the
-// EADDRINUSE case probes a free high random port with a retry (the test-only
-// collision escape hatch — the dev server itself never auto-increments).
+// EADDRINUSE case keeps an ephemeral IPv4 socket open and configures that
+// exact address (the dev server itself never auto-increments).
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
@@ -123,21 +123,6 @@ function cliLive(args: string[]) {
   };
 }
 
-/** Probe a free high random port, retrying on collision (test-only). */
-async function freePort(): Promise<number> {
-  for (let i = 0; i < 10; i++) {
-    const port = 40000 + Math.floor(Math.random() * 20000);
-    try {
-      const probe = Bun.serve({ hostname: "127.0.0.1", port, fetch: () => new Response("x") });
-      probe.stop(true);
-      return port;
-    } catch {
-      // taken — try again
-    }
-  }
-  throw new Error("could not find a free port after 10 tries");
-}
-
 /**
  * Windows cannot emulate Ctrl-C: `proc.kill("SIGINT")` there is a plain
  * TerminateProcess — the wrapper's JS handler never runs, so it neither
@@ -182,7 +167,7 @@ async function exists(path: string): Promise<boolean> {
 // ---------------------------------------------------------------------------
 
 function configSource(port?: number): string {
-  const dev = port === undefined ? "" : `  dev: { port: ${port} },`;
+  const dev = port === undefined ? "" : `  dev: { hostname: "127.0.0.1", port: ${port} },`;
   return [
     `import { defineSite, html } from ${JSON.stringify(SRC_INDEX)};`,
     "export default defineSite({",
@@ -627,15 +612,36 @@ describe("crust-site dev (e2e)", () => {
 
   test("a configured port in use exits 1 with dev.port-in-use (no auto-increment, no stdout)", async () => {
     const root = await tmp("crust-site-cli-devport-");
-    const port = await freePort();
-    const cfg = await makeSite(root, port);
-    const holder = Bun.serve({ hostname: "127.0.0.1", port, fetch: () => new Response("held") });
+    const holder = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("held") });
+    const port = holder.port;
     try {
-      const r = await cli("dev", cfg);
-      expect(r.code).toBe(1);
-      expect(r.stdout).toBe("");
-      expect(r.stderr).toContain("error[dev.port-in-use]");
-      expect(r.stderr).toContain(String(port));
+      const cfg = await makeSite(root, port);
+      const proc = Bun.spawn(["bun", CLI, "dev", cfg], {
+        stdin: "ignore",
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      let timedOut = false;
+      const timer = setTimeout(() => {
+        timedOut = true;
+        killSession(proc);
+      }, 10_000);
+      try {
+        const [code, stdout, stderr] = await Promise.all([
+          proc.exited,
+          new Response(proc.stdout).text(),
+          new Response(proc.stderr).text(),
+        ]);
+        expect(timedOut).toBe(false);
+        expect(code).toBe(1);
+        expect(stdout).toBe("");
+        expect(stderr).toContain("error[dev.port-in-use]");
+        expect(stderr).toContain(String(port));
+      } finally {
+        clearTimeout(timer);
+        killSession(proc);
+        await proc.exited;
+      }
       // the holder was never touched
       expect(await (await fetch(`http://127.0.0.1:${port}/`)).text()).toBe("held");
       // and no staging litter from the refused start
@@ -643,5 +649,5 @@ describe("crust-site dev (e2e)", () => {
     } finally {
       holder.stop(true);
     }
-  });
+  }, 15_000);
 });
