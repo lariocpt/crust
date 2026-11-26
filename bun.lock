@@ -16,7 +16,7 @@
     },
     "packages/site": {
       "name": "@crust/site",
-      "version": "0.1.0",
+      "version": "0.4.2",
       "bin": {
         "crust-site": "./src/cli.ts",
       },

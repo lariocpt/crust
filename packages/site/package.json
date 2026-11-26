@@ -1,6 +1,6 @@
 {
   "name": "@crust/site",
-  "version": "0.1.0",
+  "version": "0.4.2",
   "description": "The crust site generator: an SSG with a fenced html template API, run under plain Bun (bunx @crust/site build).",
   "license": "MIT",
   "engines": {
