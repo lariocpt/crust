@@ -2088,6 +2088,13 @@ By default the mock is stateless — every request replays the spec's example.
 - `PATCH`/`PUT /things/{id}` **merge** the body over the stored entity.
 - `DELETE /things/{id}` removes it and returns `204`; unknown ids `404`.
 
+**Trailing-slash collections share state with their item route.** A documented
+`/things/` collection associates with `/things/{id}` when `/things` is absent.
+If both `/things` and `/things/` are documented, they remain separate and
+`/things/{id}` uses `/things`. HTTP routing stays exact: this does not add
+aliases or redirects. Seed files and persistent storage use the original
+collection template, including its trailing slash.
+
 **Entity envelopes are detected and honored.** If the collection POST's
 201 example (or schema-synthesized body) is an object with exactly one
 object-valued property and no top-level `id` — e.g.
