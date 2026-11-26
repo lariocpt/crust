@@ -157,7 +157,7 @@ import {
   quoteStringLiteral,
   sortSpecifiers,
 } from "./layout";
-import { deepEqual, type ProofViolation, prove } from "./proof";
+import { deepEqual, type ProofViolation, prove, provenValid } from "./proof";
 import {
   emitRequestHelpers,
   mergeParameters,
@@ -697,11 +697,11 @@ function distinctVariant(base: unknown, i: number, schema: Schema | undefined): 
   else if (Array.isArray(base)) candidate = [...base, i];
   else if (base && typeof base === "object") candidate = { ...(base as object), crustSeq: i };
   else candidate = `${base}${i}`;
-  // The validator never invents a violation, so an empty verdict here is a real pass for every
-  // keyword it judges — and the ones it does not judge cannot make this worse than the duplicate.
-  return validateSchema(candidate, schema, {} as OpenApiSpec, "").length === 0
-    ? candidate
-    : undefined;
+  // The proof, not the permissive validator: a variant that violates `multipleOf`, `const` or a
+  // nested `uniqueItems` reads as acceptable to the validator, which would reintroduce the
+  // silently-unsound base body this function exists to avoid. Refusing is the honest answer, and
+  // the caller keeps the duplicate and discloses it.
+  return provenValid(candidate, schema) ? candidate : undefined;
 }
 
 export function validValue(s: Schema | undefined, key = ""): unknown {
@@ -1002,14 +1002,21 @@ function unsoundFieldsProven(body: Record<string, unknown>, schema: unknown): Ma
 function enumDeadEnd(node: Schema): string | null {
   const en = node.enum as unknown[] | undefined;
   if (!Array.isArray(en) || en.length === 0) return null;
-  const verdicts = en.map((m) => validateSchema(m, node, {} as OpenApiSpec, ""));
-  if (verdicts.some((v) => v.length === 0)) return null;
+  // "No member satisfies this node" is a positive claim, so it needs a proven violation per member,
+  // not the absence of a permissive pass. A member with no violations might be valid or merely
+  // unjudgeable — either way crust cannot claim the enum is empty. `incomplete` does not veto the
+  // verdict: `prove` never invents a violation, so a member that HAS one is proven invalid even when
+  // an unrelated keyword (an unknown `format`) is something crust cannot judge.
+  const verdicts = en.map((m) => prove(m, node));
+  if (verdicts.some((v) => v.violations.length === 0)) return null;
+  const rules = [...new Set(verdicts.flatMap((v) => v.violations.map((x) => x.rule)))]
+    .sort()
+    .join("/");
   const shown =
     en
       .slice(0, 3)
       .map((m) => JSON.stringify(m))
       .join(", ") + (en.length > 3 ? ", …" : "");
-  const rules = [...new Set(verdicts.flat().map((v) => v.rule))].sort().join("/");
   return `enum [${shown}] fails ${rules}`;
 }
 
