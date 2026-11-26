@@ -434,13 +434,20 @@ describe("gen-fixtures", () => {
       '{"name":"gen-value-x"} | POST $GEN_URL_API_THINGS -H "$GEN_AUTH_HEADER" | assert (r => r.status === 201) | (r => r.json()) | capture GEN_ID_API_THINGS (b => b.id)',
     );
     expect(pipes).toContain("capture GEN_ID_API_ANIMALS (b => b.animal.id)");
-    // read: id must round-trip
+    // read: the id must round-trip AT ITS OWN PATH. A substring test over the whole body passed for
+    // the wrong resource — `{"id":"wrong","note":"<id>"}` satisfied it — so the assertion names the
+    // path `idPathFor` derived for the capture.
     expect(pipes).toContain(
-      'GET $GEN_URL_API_THINGS/$GEN_ID_API_THINGS -H "$GEN_AUTH_HEADER" | assert (r => r.status === 200) | (r => r.json()) | assert (j => JSON.stringify(j).includes(process.env.GEN_ID_API_THINGS ?? " "))',
+      'GET $GEN_URL_API_THINGS/$GEN_ID_API_THINGS -H "$GEN_AUTH_HEADER" | assert (r => r.status === 200) | (r => r.json()) | assert (j => process.env.GEN_ID_API_THINGS !== undefined && String(j.id ?? "") === process.env.GEN_ID_API_THINGS)',
     );
-    // update prefers PATCH with a single-field body; {} is the DELETE trigger
+    // update prefers PATCH, and it must CHANGE something: the same deterministic value the create
+    // step posted would prove only that the endpoint accepts a body. The read-back then checks the
+    // new value actually persisted. {} is the DELETE trigger.
     expect(pipes).toContain(
-      '{"name":"gen-value-x"} | PATCH $GEN_URL_API_THINGS/$GEN_ID_API_THINGS -H "$GEN_AUTH_HEADER" | expect 200',
+      '{"name":"gen-value-x1"} | PATCH $GEN_URL_API_THINGS/$GEN_ID_API_THINGS -H "$GEN_AUTH_HEADER" | expect 200',
+    );
+    expect(pipes).toContain(
+      'GET $GEN_URL_API_THINGS/$GEN_ID_API_THINGS -H "$GEN_AUTH_HEADER" | assert (r => r.status === 200) | (r => r.json()) | assert (j => String(j.name ?? "") === "gen-value-x1")',
     );
     expect(pipes).toContain(
       '{} | DELETE $GEN_URL_API_THINGS/$GEN_ID_API_THINGS -H "$GEN_AUTH_HEADER" | expect 204',
@@ -579,7 +586,8 @@ export function resolvePath(ctx, template) {
       expect(result.flowCount).toBe(1);
       const report = await runPipes({ target: required(result.flowFile) });
       expect(report.results.filter((r) => r.status === "fail")).toEqual([]);
-      expect(report.totals).toEqual({ pass: 5, fail: 0, files: 1 });
+      // 6, not 5: the read-after-update step is new, and it passes — the mock persisted the PATCH.
+      expect(report.totals).toEqual({ pass: 6, fail: 0, files: 1 });
     } finally {
       await srv.stop();
       delete process.env.CRUST_GENFX_BASE;
@@ -676,7 +684,8 @@ export function resolvePath(ctx, template) {
       expect(pipes).toContain("capture GEN_ID_API_GADGETS (b => b.gadget.id)");
       const report = await runPipes({ target: required(result.flowFile) });
       expect(report.results.filter((r) => r.status === "fail")).toEqual([]);
-      expect(report.totals).toEqual({ pass: 5, fail: 0, files: 1 });
+      // 6, not 5: the read-after-update step is new, and it passes through the envelope.
+      expect(report.totals).toEqual({ pass: 6, fail: 0, files: 1 });
     } finally {
       await srv.stop();
       delete process.env.CRUST_GENFX_WRAP_BASE;
@@ -786,9 +795,10 @@ export function resolvePath(ctx, template) {
     expect(result.flowCount).toBe(1);
     const pipes = await Bun.file(required(result.flowFile)).text();
     // PUT carries the FULL schema-valid body from the PUT op's own schema
-    // (both required fields), not the POST's one-field base body.
+    // (both required fields), not the POST's one-field base body — and one of
+    // them is perturbed, so the step actually changes the resource.
     expect(pipes).toContain(
-      '{"name":"gen-value-x","color":"gen-value-x"} | PUT $GEN_URL_API_GADGETS/$GEN_ID_API_GADGETS -H "$GEN_AUTH_HEADER" | expect 200',
+      '{"name":"gen-value-x1","color":"gen-value-x"} | PUT $GEN_URL_API_GADGETS/$GEN_ID_API_GADGETS -H "$GEN_AUTH_HEADER" | expect 200',
     );
     // The create step still uses the POST schema (name only).
     expect(pipes).toContain('{"name":"gen-value-x"} | POST $GEN_URL_API_GADGETS');

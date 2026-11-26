@@ -109,7 +109,8 @@ function isObj(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function deepEqual(a: unknown, b: unknown): boolean {
+/** Structural equality, used to tell whether an update actually changed anything. */
+export function deepEqual(a: unknown, b: unknown): boolean {
   if (a === b) return true;
   if (Array.isArray(a) && Array.isArray(b)) {
     return a.length === b.length && a.every((x, i) => deepEqual(x, b[i]));

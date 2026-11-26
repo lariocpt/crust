@@ -132,7 +132,7 @@ import {
   quoteStringLiteral,
   sortSpecifiers,
 } from "./layout";
-import { type ProofViolation, prove } from "./proof";
+import { deepEqual, type ProofViolation, prove } from "./proof";
 import {
   emitRequestHelpers,
   mergeParameters,
@@ -848,6 +848,23 @@ function baseBody(schema: Schema): Record<string, unknown> {
 function unsoundFields(body: Record<string, unknown>, schema: unknown): Map<string, string> {
   const bad = new Map<string, string>();
   for (const v of validateSchema(body, schema, {} as OpenApiSpec, "")) {
+    const field = v.pointer.replace(/^\//, "").split("/")[0];
+    if (!bad.has(field)) bad.set(field, v.rule);
+  }
+  return bad;
+}
+
+/**
+ * The same question, asked of the fail-closed proof instead of the mock validator.
+ *
+ * `unsoundFields` inherits every keyword the mock passes without judging — `multipleOf`, `const`,
+ * `uniqueItems`, `not`, `oneOf`'s exactly-one — so a body violating one of those reads as sound and
+ * ships. The flow's create step is a single request whose 2xx the whole flow hangs on, so it gets
+ * the stricter question.
+ */
+function unsoundFieldsProven(body: Record<string, unknown>, schema: unknown): Map<string, string> {
+  const bad = new Map<string, string>();
+  for (const v of prove(body, schema).violations) {
     const field = v.pointer.replace(/^\//, "").split("/")[0];
     if (!bad.has(field)) bad.set(field, v.rule);
   }
@@ -2124,12 +2141,18 @@ function deriveFlows(
 
     // The create step posts a schema-valid body and asserts a 2xx. A body crust cannot fill — a
     // required field whose pattern it cannot build — 400s against a correct implementation on the
-    // FIRST step, so the flow would fail for a reason nobody wrote. Unless the setup module supplies
-    // the body (the documented escape for exactly this), skip the flow and say why.
-    if (!override?.body) {
-      const bad = [...unsoundFields(baseBody(bodySchema), bodySchema)].filter(
-        ([field]) => field !== "",
-      );
+    // FIRST step, so the flow would fail for a reason nobody wrote.
+    //
+    // The MERGED body is what gets posted, so the merged body is what gets checked. This used to
+    // wave the check through whenever the setup module supplied a body at all, but the merge is a
+    // shallow spread: `body: {}` contributes nothing and the unsound schema-derived body shipped
+    // unchanged, with the notice that would have named it silenced by the same override. An
+    // override is allowed to FIX a body, not to certify one.
+    {
+      const merged = { ...baseBody(bodySchema), ...(override?.body ?? {}) };
+      // The strict proof, not the mock validator: `multipleOf`, `const` and `uniqueItems` bind the
+      // create step exactly as `pattern` does, and the permissive validator passes all three.
+      const bad = [...unsoundFieldsProven(merged, bodySchema)].filter(([field]) => field !== "");
       if (bad.length > 0) {
         const blame = blameFields(bodySchema, bad);
         skipped.push({
@@ -2152,6 +2175,34 @@ function deriveFlows(
     f.envName = n === 1 ? base : `${base}_${n}`;
   }
   return { flows, skipped };
+}
+
+/**
+ * Where a created field reappears in the read response, following the same envelope `idPathFor`
+ * follows: bare (`{id, name}`) or wrapped one level (`{gadget: {id, name}}`). Null when the field
+ * cannot be located, which is the caller's cue to assert the status instead of a value — an
+ * assertion against a path the spec never stated is a false failure waiting for a different server.
+ */
+function fieldPathFor(op: Operation, field: string): string[] | null {
+  const code = lowest2xx(op);
+  if (code === null) return null;
+  const media = op.responses?.[String(code)]?.content?.["application/json"];
+  if (!media) return null;
+  if (isPlainRecord(media.example)) {
+    if (field in media.example) return [field];
+    for (const [k, v] of Object.entries(media.example)) {
+      if (isPlainRecord(v) && field in v) return [k, field];
+    }
+    return null;
+  }
+  const props = media.schema?.properties;
+  if (!props) return null;
+  if (field in props) return [field];
+  for (const [k, v] of Object.entries(props)) {
+    const eff = effectiveSchema(v);
+    if (eff?.properties && field in eff.properties) return [k, field];
+  }
+  return null;
 }
 
 // `b`, ["billing", "id"] -> `b.billing.id` (bracket form for non-identifier keys).
@@ -2183,38 +2234,86 @@ function emitFlow(f: FlowPlan): string {
   if (f.itemOps.get) {
     steps.push("read");
     const s = lowest2xx(f.itemOps.get) ?? 200;
+    // Identity at the captured path, not a substring of the response. `JSON.stringify(j).includes(id)`
+    // passes for the WRONG resource whenever the id appears anywhere in the body — `{"id":"wrong",
+    // "note":"<id>"}` satisfied it, as did any body containing a space once the env var was unset and
+    // the fallback became `" "`. The exact path is already known: `idPathFor` derived it for the
+    // capture two lines above, and the assertion never used it.
+    const acc = accessExpr("j", f.idPath);
     lines.push(
-      `GET ${itemUrl} ${H} | assert (r => r.status === ${s}) | (r => r.json()) | assert (j => JSON.stringify(j).includes(process.env.GEN_ID_${T} ?? " "))`,
+      `GET ${itemUrl} ${H} | assert (r => r.status === ${s}) | (r => r.json()) | assert (j => process.env.GEN_ID_${T} !== undefined && String(${acc} ?? "") === process.env.GEN_ID_${T})`,
     );
   }
 
   const update = f.itemOps.patch ?? f.itemOps.put;
+  let changed: { field: string; value: unknown } | null = null;
   if (update) {
     steps.push("update");
     const verb = f.itemOps.patch ? "PATCH" : "PUT";
     const s = lowest2xx(update) ?? 200;
     const updateSchema = update.requestBody?.content?.["application/json"]?.schema;
+    // Composed (an update schema can declare its properties only inside an `allOf` branch), while
+    // keeping the original rule: an update schema with nothing of its own still borrows the POST's.
+    const composedUpdate = updateSchema ? composedObject(updateSchema) : null;
+    const props =
+      composedUpdate && Object.keys(composedUpdate.properties).length > 0
+        ? composedUpdate.properties
+        : composedObject(bodySchema).properties;
     let body: Record<string, unknown>;
     if (verb === "PATCH") {
-      // PATCH is a partial update — a single perturbed field is the point.
-      // First schema property with a valid value (the update op's own schema
-      // when it has one, else the POST's).
-      // Composed (an update schema can declare its properties only inside an `allOf` branch), while
-      // keeping the original rule: an update schema with nothing of its own still borrows the POST's.
-      const composedUpdate = updateSchema ? composedObject(updateSchema) : null;
-      const props =
-        composedUpdate && Object.keys(composedUpdate.properties).length > 0
-          ? composedUpdate.properties
-          : composedObject(bodySchema).properties;
-      const firstKey = Object.keys(props)[0];
-      body = firstKey ? { [firstKey]: validValue(props[firstKey], firstKey) } : {};
+      // A PATCH that declares `required` has to carry them. Emitting one field of a two-required
+      // schema is a body its OWN request schema rejects, so the step 400s against a correct
+      // server for a reason no spec states. With no `required` declared, the partial-update rule
+      // stands: one field, perturbed.
+      const req = (composedUpdate?.required ?? []).filter((k) => k in props);
+      if (req.length > 0) {
+        body = {};
+        for (const k of req) body[k] = validValue(props[k], k);
+      } else {
+        const firstKey = Object.keys(props)[0];
+        body = firstKey ? { [firstKey]: validValue(props[firstKey], firstKey) } : {};
+      }
     } else {
       // PUT is full-replace: a single-field body 400s on any op with other
       // required fields — send a full schema-valid body from the update op's
       // own request schema (falling back to the POST's).
       body = baseBody(updateSchema ?? bodySchema);
     }
+    // An update that changes nothing proves nothing. The value came from the same deterministic
+    // sampler over the same field as the create body, so for the common `$ref`-shared schema it was
+    // byte-identical — the step only showed the endpoint accepts a body. Perturb one field the
+    // schema admits a second value for, and keep it so the read-back can check it landed.
+    for (const k of Object.keys(body)) {
+      if (!(k in base) || !deepEqual(body[k], base[k])) continue;
+      const alt = distinctVariant(base[k], 1, props[k]);
+      if (alt !== undefined) {
+        body[k] = alt;
+        changed = { field: k, value: alt };
+        break;
+      }
+    }
     lines.push(`${JSON.stringify(body)} | ${verb} ${itemUrl} ${H} | expect ${s}`);
+    // Status alone says the server acknowledged the PATCH; it says nothing about the value being
+    // stored. Read it back and compare the field that was changed — at the path the READ op's own
+    // response declares, because a wrapped resource (`{"gadget": {…}}`) does not put it at the top.
+    if (changed && f.itemOps.get) {
+      const gs = lowest2xx(f.itemOps.get) ?? 200;
+      // The read op's own response first; failing that, the create response — the flow already
+      // reads the captured id out of the GET body at the path derived from the POST, so the two
+      // shapes are assumed to be the same resource throughout. Neither documented means crust
+      // states no location, and it asserts the status instead of guessing one.
+      const path =
+        fieldPathFor(f.itemOps.get, changed.field) ?? fieldPathFor(f.post, changed.field);
+      if (path) {
+        steps.push("read-after-update");
+        lines.push(
+          `GET ${itemUrl} ${H} | assert (r => r.status === ${gs}) | (r => r.json()) | assert (j => String(${accessExpr("j", path)} ?? "") === ${JSON.stringify(String(changed.value))})`,
+        );
+      } else {
+        steps.push("read-after-update(status-only)");
+        lines.push(`GET ${itemUrl} ${H} | expect ${gs}`);
+      }
+    }
   }
 
   if (f.itemOps.delete) {
