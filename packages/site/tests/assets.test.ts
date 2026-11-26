@@ -8,8 +8,14 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { buildAssets, copyPublicDir, manifestLookup, publicCollisions } from "../src/assets.ts";
+import { join, posix, win32 } from "node:path";
+import {
+  type AssetManifest,
+  buildAssets,
+  copyPublicDir,
+  manifestLookup,
+  publicCollisions,
+} from "../src/assets.ts";
 import { defineSite, resolveConfigPaths } from "../src/config.ts";
 import type { Diagnostic } from "../src/diagnostics.ts";
 import type { AssetsConfig, ResolvedSite } from "../src/types.ts";
@@ -233,10 +239,10 @@ describe("buildAssets", () => {
     // is content-driven (name-independent) and the name is declaration-driven
     // (content-independent). Identical name+hash therefore implies identical
     // content (collision-safety argument in src/assets.ts).
-    // Measured: Bun embeds a `// <source path>` banner in the output, so two
-    // DIFFERENT source files never share final bytes; the honest way to get
-    // identical emitted bytes through two entrypoints is one file declared
-    // twice — which is exactly the case that must not overwrite itself.
+    // The honest way to get identical emitted bytes through two entrypoints
+    // is one file declared twice — which is exactly the case that must not
+    // overwrite itself. (Two DIFFERENT files with identical content share a
+    // hash too, once the cwd-relative banner is stripped — pinned below.)
     const { site } = await project(
       { "src/same.ts": `console.log("same");\n` },
       scripts({ one: "src/same.ts", two: "src/same.ts" }),
@@ -379,6 +385,196 @@ describe("buildAssets", () => {
     expect(manifest.size).toBe(0);
     expect(diagnostics).toEqual([]);
     expect(await listing(join(staging, "assets"))).toBeUndefined();
+  });
+});
+
+/**
+ * Manifest access for the tests below: a missing key is a labeled failure,
+ * never a cryptic `TypeError: … of undefined (reading 'file')` — a broken
+ * build must be reported, not masked (design rule 1).
+ */
+function assetFile(manifest: AssetManifest, name: string): string {
+  const entry = manifest.get(name);
+  if (entry === undefined) throw new Error(`asset "${name}" is not in the build manifest`);
+  return entry.file;
+}
+
+describe("Bun banner strip (cross-cwd determinism)", () => {
+  // Bun 1.4.x prepends a cwd-relative path banner to the bundled output;
+  // buildAssets strips it (src/assets.ts, stripBundlerBanner) so the hash and
+  // the emitted bytes never depend on the working directory.
+
+  test("single-file entries: identical hashes and byte-identical files from THREE different cwds", async () => {
+    const { dir, site } = await project(
+      {
+        "src/app.ts": `const a = 1;\nexport { a };\n`,
+        "src/site.css": `.x { color: red; }\n`,
+      },
+      { scripts: { app: "src/app.ts" }, styles: { site: "src/site.css" } },
+    );
+    // Three structurally different cwds relative to the project — the
+    // banner would render three different forms (e.g. `src/app.ts`,
+    // `../<proj>/src/app.ts`, `../../../<proj>/src/app.ts`), so any
+    // cwd leakage in the bytes (or hashes) is visible.
+    const deepRoot = await tmp("crust-site-cwd-deep-");
+    const cwds = [dir, await tmp("crust-site-cwd-shallow-"), join(deepRoot, "deep", "er")];
+    await mkdir(join(deepRoot, "deep", "er"), { recursive: true });
+    const stags = [
+      await tmp("crust-site-staging-"),
+      await tmp("crust-site-staging-"),
+      await tmp("crust-site-staging-"),
+    ];
+    const original = process.cwd();
+    const results: Awaited<ReturnType<typeof buildAssets>>[] = [];
+    try {
+      for (const cwd of cwds) {
+        process.chdir(cwd);
+        results.push(await buildAssets(site, stags[results.length]));
+      }
+    } finally {
+      process.chdir(original);
+    }
+    for (const r of results) expect(r.diagnostics).toEqual([]);
+    // identical manifests: same names, same hashed file names, same byte counts
+    const asJson = (m: (typeof results)[number]["manifest"]) => JSON.stringify([...m.entries()]);
+    expect(asJson(results[1].manifest)).toBe(asJson(results[0].manifest));
+    expect(asJson(results[2].manifest)).toBe(asJson(results[0].manifest));
+    // and the emitted files are byte-identical across all three builds
+    for (const [name, entry] of results[0].manifest) {
+      const a = await readFile(join(stags[0], entry.file));
+      expect(a.equals(await readFile(join(stags[1], assetFile(results[1].manifest, name))))).toBe(
+        true,
+      );
+      expect(a.equals(await readFile(join(stags[2], assetFile(results[2].manifest, name))))).toBe(
+        true,
+      );
+    }
+  });
+
+  test("the leading banner is gone from single-file outputs (JS and CSS); content intact", async () => {
+    const { site } = await project(
+      {
+        "src/app.ts": `console.log(1);\n`,
+        "src/site.css": `.x { color: red; }\n`,
+      },
+      { scripts: { app: "src/app.ts" }, styles: { site: "src/site.css" } },
+    );
+    const staging = await tmp("crust-site-staging-");
+    const { manifest, diagnostics } = await buildAssets(site, staging);
+    expect(diagnostics).toEqual([]);
+    const js = (await readFile(join(staging, assetFile(manifest, "app")))).toString();
+    const css = (await readFile(join(staging, assetFile(manifest, "site")))).toString();
+    // the banner would be the very first line of the file; the real content
+    // of these fixtures is not a comment
+    expect(js.startsWith("//")).toBe(false);
+    expect(css.startsWith("/*")).toBe(false);
+    expect(js).toContain("console.log");
+    expect(css).toContain("color: red");
+  });
+
+  test("a hashbang entry keeps its hashbang; the banner after it is stripped", async () => {
+    const { site } = await project(
+      { "src/app.ts": `#!/usr/bin/env node\nconsole.log(1);\n` },
+      scripts({ app: "src/app.ts" }),
+    );
+    const staging = await tmp("crust-site-staging-");
+    const { manifest, diagnostics } = await buildAssets(site, staging);
+    expect(diagnostics).toEqual([]);
+    const text = (await readFile(join(staging, assetFile(manifest, "app")))).toString();
+    expect(text.startsWith("#!/usr/bin/env node\n")).toBe(true);
+    // no banner line anywhere (it sat after one blank line, post-hashbang)
+    expect(text).not.toContain("// ");
+    expect(text).toContain("console.log");
+  });
+
+  test("a user comment equal to its own banner: Bun drops the comment, we drop the banner", async () => {
+    // The over-strip guard, stated against measured Bun 1.4.4 behavior: the
+    // transpiler drops the entry's OWN comment line before the banner is
+    // prepended, so the output holds exactly ONE such line — the banner.
+    // The strip must remove that one line and nothing else, leaving the
+    // pure code. (The comment line is gone from the bundle entirely — a
+    // documented consequence of Bun's comment-free transpile, not a loss
+    // this strip could cause either way.)
+    const { dir, site } = await project(
+      { "src/app.ts": `console.log(1);\n` },
+      scripts({ app: "src/app.ts" }),
+    );
+    const abs = join(dir, "src/app.ts");
+    const rel =
+      process.platform === "win32"
+        ? win32.relative(process.cwd(), abs).replace(/\\/g, "/")
+        : posix.relative(process.cwd(), abs);
+    await writeFile(abs, `// ${rel}\nconsole.log(1);\n`);
+    const staging = await tmp("crust-site-staging-");
+    const { manifest, diagnostics } = await buildAssets(site, staging);
+    expect(diagnostics).toEqual([]);
+    const text = (await readFile(join(staging, assetFile(manifest, "app")))).toString();
+    expect(text).toBe("console.log(1);\n");
+    expect(text).not.toContain(rel);
+  });
+
+  test("a template-literal line that LOOKS like the banner is never touched", async () => {
+    // Why the strip is an exact match and never a pattern: the transpiler
+    // is comment-free, but backtick-string content is emitted VERBATIM —
+    // a line of it can be byte-identical to the banner and sit in the
+    // output as a plain line. The strip removes only the banner at the
+    // head of the file and must leave such a line intact.
+    const { site } = await project(
+      {
+        "src/app.ts": "const s = `first\n// src/app.ts\nthird`;\nconsole.log(s);\n",
+      },
+      scripts({ app: "src/app.ts" }),
+    );
+    const staging = await tmp("crust-site-staging-");
+    const { manifest, diagnostics } = await buildAssets(site, staging);
+    expect(diagnostics).toEqual([]);
+    const text = (await readFile(join(staging, assetFile(manifest, "app")))).toString();
+    expect(text).toBe("var s = `first\n// src/app.ts\nthird`;\nconsole.log(s);\n");
+  });
+
+  test("identical content in two DIFFERENT files shares one hash (purely content-driven)", async () => {
+    // Pre-strip, the differing banners would have forced different hashes
+    // here; the strip makes the hash a function of content alone (plan §1).
+    const { site } = await project(
+      {
+        "src/a.ts": `console.log("same");\n`,
+        "src/b.ts": `console.log("same");\n`,
+      },
+      scripts({ a: "src/a.ts", b: "src/b.ts" }),
+    );
+    const staging = await tmp("crust-site-staging-");
+    const { manifest, diagnostics } = await buildAssets(site, staging);
+    expect(diagnostics).toEqual([]);
+    const hashOf = (f: string): string => f.slice(f.lastIndexOf("-") + 1, f.lastIndexOf("-") + 17);
+    const a = assetFile(manifest, "a");
+    const b = assetFile(manifest, "b");
+    expect(hashOf(a)).toBe(hashOf(b));
+    expect(a).not.toBe(b);
+  });
+
+  test("a multi-file bundle KEEPS its per-file path comments (documented residual; no over-strip)", async () => {
+    // The leading banner of a multi-file bundle names the FIRST bundled
+    // file (a dependency), not the entry — the exact match against the
+    // entry cannot identify it, and a pattern strip would eat real user
+    // comments. Such bundles therefore stay cwd-sensitive; docs/USAGE.md
+    // documents that. This pins the deliberate NON-strip (honest-failure
+    // control: a future change that strips these comments breaks here).
+    const { site } = await project(
+      {
+        "src/util.ts": `export const n = 1;\n`,
+        "src/app.ts": `import { n } from "./util";\nconsole.log(n);\n`,
+      },
+      scripts({ app: "src/app.ts" }),
+    );
+    const staging = await tmp("crust-site-staging-");
+    const { manifest, diagnostics } = await buildAssets(site, staging);
+    expect(diagnostics).toEqual([]);
+    const text = (await readFile(join(staging, assetFile(manifest, "app")))).toString();
+    // every bundled file keeps its cwd-relative comment (separator is `/`
+    // on every platform — Bun's Loose normalization, Windows included)
+    expect(text).toMatch(/\/\/ .*src\/util\.ts\n/);
+    expect(text).toMatch(/\/\/ .*src\/app\.ts\n/);
+    expect(text).toContain("console.log");
   });
 });
 

@@ -541,10 +541,13 @@ async function writeFileAt(staging: string, file: string, contents: string): Pro
  * page itself would not have. DEV ONLY: a production build never renders
  * drafts at all, so the banner never reaches the output directory.
  *
- * Styled with one inline rule per element (no `<style>` block, no
- * `style=` attribute — the fence's style-body rule is about `<style>`
- * elements, but keeping the banner attribute-free keeps it trivially
- * fence-safe and leaves the site's own CSS in charge of anything richer).
+ * Styled with inline `style=` rules (one per element; no `<style>` block —
+ * the fence's style-body rule bans tracked values inside `<style>` ELEMENTS,
+ * and `style` is not one of the fence's checked attributes). The banner
+ * carries no URL-bearing attribute, no event handler, and no tracked value,
+ * so a draft's banner can never open a fence violation the
+ * page itself would not have. DEV ONLY: a production build never renders
+ * drafts at all, so the banner never reaches the output directory.
  */
 export const DRAFT_BANNER_HTML = `<div data-crust-draft="true"
   style="background:#fff8e1;color:#6d5300;border-bottom:1px solid #e0c05a;padding:8px 16px;font-family:system-ui,sans-serif;font-size:14px">

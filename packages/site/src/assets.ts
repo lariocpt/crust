@@ -22,10 +22,40 @@
 //    about any entrypoint that really does emit several files (an imported
 //    asset like `import logo from "./x.svg"`, JS importing CSS, or real
 //    code-splitting by a future Bun) — one guard covers all of them.
+//  - The TRANSPILE drops EVERY source comment (leading, mid-file, trailing;
+//    `//` and `/* */`; CSS included) before the banner is prepended — the
+//    emitted code never contains a user comment line. It CAN, however,
+//    contain lines that merely LOOK like one: template-literal content is
+//    emitted verbatim, so a line of a backtick string starting with `// `
+//    sits in the output as a plain line (measured, pinned by a test). The
+//    banner strip below is therefore an EXACT match of the banner computed
+//    for the entry, never a pattern.
+//  - A file whose code is EMPTY after the transform (comments only, types
+//    only) emits no banner and zero bytes.
+//  - The output is PREFIXED with a path banner naming the bundled file
+//    relative to process.cwd() — the banner is part of the bytes Bun
+//    returns, so left alone it makes the hash cwd-dependent (measured:
+//    the same entry built from two differently-structured cwds produces
+//    different bytes; pinned by tests/assets.test.ts). For a bundle of a
+//    SINGLE source file the banner sits at the head of the file (after a
+//    preserved hashbang + one blank line, when the entry starts with `#!`)
+//    and names the entry itself, so the exact match is unambiguous and it
+//    is stripped before hashing/writing — see stripBundlerBanner. A
+//    MULTI-file bundle (the entry imports other files, a CSS @imports, an
+//    npm package import) emits one such comment before EVERY bundled file,
+//    and the leading one names the first file (a dependency), not the
+//    entry — the other files' paths are only known after re-resolving
+//    Bun's import graph, and a pattern strip would eat template-literal
+//    lines that look like comments, so multi-file bundles are NOT
+//    stripped: they remain cwd-sensitive (documented in docs/USAGE.md,
+//    Assets).
 //
 // Determinism (plan §4.6): entrypoints are iterated in sorted name order, the
 // manifest is a Map in that insertion order, the public copy traverses sorted
 // per directory, and all returned paths are posix (plan, Windows table).
+// For single-file entrypoints the emitted bytes (banner stripped) are
+// byte-identical across rebuilds from ANY working directory; multi-file
+// bundles keep their cwd-relative per-file comments (see above).
 
 import { createHash } from "node:crypto";
 import {
@@ -39,7 +69,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { posix } from "node:path";
+import { posix, win32 } from "node:path";
 import { compareStrings, type Diagnostic, sortDiagnostics } from "./diagnostics";
 import type { ResolvedSite } from "./types";
 
@@ -158,15 +188,202 @@ function bundleFailed(
   }));
 }
 
+// ---------------------------------------------------------------------------
+// Bundler banner strip (cross-cwd determinism)
+// ---------------------------------------------------------------------------
+
+/**
+ * The path banner Bun's bundler prepends to each bundled source file,
+ * measured through the real bundler on Bun 1.4.4 (pinned by
+ * tests/assets.test.ts, "Bun banner strip" block — do not re-litigate):
+ *
+ *  - the path is the file's path RELATIVE TO PROCESS.CWD (Bun's "pretty"
+ *    path), normalized with its platform-Loose rules: both `/` and `\`
+ *    count as separators, output separators are always `/`, and the common
+ *    prefix is compared byte-exact (even on Windows);
+ *  - a JS chunk comments it `// <path>` on one line — but as a block
+ *    comment when the path contains a newline or any byte > 0x7F; there,
+ *    every star-slash pair (a `*` immediately followed by a `/`) is
+ *    sanitized by replacing the `/` with `_`, looped until no star-slash
+ *    remains, so the block comment cannot terminate early;
+ *  - a CSS chunk always comments it as a block comment, escaping every
+ *    star-slash pair by inserting a `\` before its `/` instead;
+ *  - the banner for the FIRST file of a chunk sits at byte 0 — except that a
+ *    hashbang on the entry's first source line (a leading BOM is dropped by
+ *    Bun before hashbang detection, so BOM + hashbang still counts) is
+ *    preserved first, followed by exactly one blank line, before the banner;
+ *  - a file whose bundled code is empty gets NO banner at all, and a
+ *    multi-file chunk gets one banner per file — in which case the LEADING
+ *    banner names the first bundled file (a dependency), not the entry.
+ */
+function bundlerBannerLine(pretty: string, ext: string): string {
+  if (ext === ".css") {
+    return `/* ${cssEscapeStarSlash(pretty)} */\n`;
+  }
+  if (hasNewlineOrNonAscii(pretty)) {
+    return `/* ${jsSanitizeStarSlash(pretty)} */\n`;
+  }
+  return `// ${pretty}\n`;
+}
+
+/** A newline (LF/CR) or a code point that encodes to bytes > 0x7F (UTF-8). */
+function hasNewlineOrNonAscii(pretty: string): boolean {
+  for (let i = 0; i < pretty.length; i++) {
+    const cp = pretty.codePointAt(i) ?? 0; // unreachable for i < length; 0 matches no check below
+    if (cp === 0x0a || cp === 0x0d || cp > 0x7f) return true;
+    if (cp > 0xffff) i++; // consume the trailing surrogate of an astral pair
+  }
+  return false;
+}
+
+/** Bun's JS multiline sanitizer: every star-slash pair keeps its `*`, its `/` becomes `_`, looped. */
+function jsSanitizeStarSlash(pretty: string): string {
+  let out = pretty;
+  let i = out.indexOf("*/");
+  while (i !== -1) {
+    out = `${out.slice(0, i + 1)}_${out.slice(i + 2)}`;
+    i = out.indexOf("*/");
+  }
+  return out;
+}
+
+/** Bun's CSS escape: a `\` is inserted before every `/` that follows a `*`. */
+function cssEscapeStarSlash(pretty: string): string {
+  let out = "";
+  for (let i = 0; i < pretty.length; i++) {
+    if (pretty[i] === "/" && i > 0 && pretty[i - 1] === "*") out += "\\";
+    out += pretty[i];
+  }
+  return out;
+}
+
+/**
+ * The cwd-relative path forms the banner could carry, in match order. Bun's
+ * Loose platform differs from Node's in two measured corners, so this
+ * generates candidates instead of asserting one:
+ *  - output separator: Loose always emits `/` (Node win32 emits `\`);
+ *  - Windows drive-letter case: Node win32 uppercases drive letters while
+ *    Bun preserves the case it was given, and the common-prefix compare is
+ *    byte-exact (Node win32 is case-insensitive) — so same-drive paths whose
+ *    drive letters disagree in case get their case folded per operand.
+ * Off-Platforms win32, Node's posix relative IS Bun's algorithm (same
+ * Node-derived relative, same separator) — one candidate. A candidate list
+ * can never match real content by accident: a match means the bytes literally
+ * are the banner we would have computed, and a NO-match (new Bun version,
+ * exotic path) simply means "leave the bytes alone" — never a corrupted strip.
+ */
+function bannerPathCandidates(absPath: string): string[] {
+  const cwd = process.cwd();
+  const foldDrive = (p: string): string[] => {
+    if (!/^[A-Za-z]:/.test(p)) return [p];
+    const drive = p[0];
+    const folded =
+      (drive === drive.toUpperCase() ? drive.toLowerCase() : drive.toUpperCase()) + p.slice(1);
+    return [p, folded];
+  };
+  const out: string[] = [];
+  const push = (p: string): void => {
+    if (!out.includes(p)) out.push(p);
+  };
+  if (process.platform === "win32") {
+    for (const from of foldDrive(toPosix(cwd))) {
+      for (const to of foldDrive(toPosix(absPath))) {
+        try {
+          push(win32.relative(from, to).replace(/\\/g, "/"));
+        } catch {
+          // mixed absolute/relative (should not happen: config paths are
+          // resolved against the config dir, cwd is absolute) — no candidate
+        }
+      }
+    }
+  } else {
+    if (!posix.isAbsolute(cwd) || !posix.isAbsolute(absPath)) return out;
+    push(posix.relative(cwd, absPath));
+  }
+  return out;
+}
+
+/**
+ * The byte offset of the banner when the entry's first source line is a
+ * hashbang (Bun keeps the hashbang line, adds its newline, then ONE blank
+ * line, then the banner), or -1 when the entry has no hashbang (or cannot be
+ * read, in which case the banner is simply not stripped).
+ */
+async function hashbangBannerOffset(entryPath: string): Promise<number> {
+  let head: Buffer;
+  try {
+    head = await readFile(entryPath);
+  } catch {
+    return -1;
+  }
+  const isBom = head[0] === 0xef && head[1] === 0xbb && head[2] === 0xbf;
+  const line =
+    head
+      .subarray(isBom ? 3 : 0)
+      .toString("utf8")
+      .split("\n")[0] ?? "";
+  if (!line.startsWith("#!")) return -1;
+  return line.length + 1 /* the hashbang's own newline */ + 1 /* Bun's blank line */;
+}
+
+/**
+ * Strip the LEADING path banner from the emitted bytes (before hashing and
+ * before writing to staging), so the hash and the file are independent of
+ * the working directory the build ran from (plan §4.6, cross-cwd
+ * byte-identity). The strip is an EXACT match of the single banner line we
+ * would compute for THIS entrypoint, at the head of the file (or after a
+ * preserved hashbang + one blank line). It never pattern-matches: the
+ * transpiled code is comment-free, but template-literal content is emitted
+ * verbatim and can produce a line that merely looks like a banner — only an
+ * exact match of the computed banner is safe to remove. Returns the same
+ * bytes object unchanged when nothing matches (a multi-file bundle, whose
+ * leading banner names a dependency; an entry whose code is empty after the
+ * transform, which emits no banner; a future Bun that changed the banner).
+ */
+export async function stripBundlerBanner(
+  bytes: Uint8Array,
+  entryPath: string,
+  ext: string,
+): Promise<Uint8Array> {
+  if (bytes.length === 0) return bytes;
+  const rels = bannerPathCandidates(entryPath);
+  if (rels.length === 0) return bytes;
+  const offsets: number[] = [0];
+  if (ext !== ".css") {
+    const off = await hashbangBannerOffset(entryPath);
+    if (off >= 0) offsets.push(off);
+  }
+  for (const rel of rels) {
+    const banner = new TextEncoder().encode(bundlerBannerLine(rel, ext));
+    for (const off of offsets) {
+      if (bytes.length < off + banner.length) continue;
+      let matches = true;
+      for (let i = 0; i < banner.length; i++) {
+        if (bytes[off + i] !== banner[i]) {
+          matches = false;
+          break;
+        }
+      }
+      if (!matches) continue;
+      const out = new Uint8Array(bytes.length - banner.length);
+      out.set(bytes.subarray(0, off), 0);
+      out.set(bytes.subarray(off + banner.length), off);
+      return out;
+    }
+  }
+  return bytes;
+}
+
 /**
  * Bundle every declared script/style entrypoint into `stagingDir` and return
  * the manifest (plan §4.2). One Bun.build per entrypoint into a fresh mkdtemp
  * dir (stale-leak guard, see header); the build must emit EXACTLY ONE file,
- * which is hashed (sha256, first 16 hex of the final bytes) and copied to
- * `assets/<name>-<hash>.<ext>`. A failing entrypoint produces diagnostics and
- * does NOT cancel its siblings — every problem is collected (config.ts
- * convention), so one run reports every broken asset. All tmpdirs are removed
- * in `finally`, on success and on failure alike.
+ * whose cwd-relative path banner is stripped (single-file bundles — see
+ * stripBundlerBanner), then hashed (sha256, first 16 hex of the final bytes)
+ * and copied to `assets/<name>-<hash>.<ext>`. A failing entrypoint produces
+ * diagnostics and does NOT cancel its siblings — every problem is collected
+ * (config.ts convention), so one run reports every broken asset. All tmpdirs
+ * are removed in `finally`, on success and on failure alike.
  */
 export async function buildAssets(
   resolvedSite: ResolvedSite,
@@ -231,15 +448,24 @@ export async function buildAssets(
         );
         continue;
       }
-      const bytes = await readFile(emittedPath);
+      const raw = await readFile(emittedPath);
+      // Strip the bundler's cwd-relative path banner BEFORE the hash and
+      // before staging (see stripBundlerBanner): a single-file bundle's
+      // banner is at the head (or after a preserved hashbang) and names
+      // THIS entry, so the match is unambiguous. A multi-file bundle's
+      // leading banner names a dependency instead — the exact match fails
+      // and the bytes stay untouched (documented cwd-sensitive residual).
+      const bytes = await stripBundlerBanner(raw, entry.path, ext);
       // Hash contract (plan §1): first 16 hex (64 bits) of sha256 over the
-      // FINAL emitted bytes — post-transform, so any input change moves it.
-      // digest("hex") is lowercase by construction. Collision safety: the
-      // manifest is keyed by the DECLARED name and the emitted name embeds the
-      // hash, so two distinct assets can only overwrite each other if they
-      // share both name (config rejects that) and hash; a 64-bit preimage-free
-      // collision budget over a site's handful of assets is unreachable, so
-      // identical name+hash honestly implies identical content.
+      // FINAL emitted bytes (banner stripped for single-file bundles —
+      // post-transform, so any input change moves it and the cwd never
+      // does). digest("hex") is lowercase by construction. Collision
+      // safety: the manifest is keyed by the DECLARED name and the emitted
+      // name embeds the hash, so two distinct assets can only overwrite
+      // each other if they share both name (config rejects that) and hash;
+      // a 64-bit preimage-free collision budget over a site's handful of
+      // assets is unreachable, so identical name+hash honestly implies
+      // identical content.
       const hash = createHash("sha256").update(bytes).digest("hex").slice(0, 16);
       const file = posix.join(ASSETS_DIR, `${entry.name}-${hash}.${ext.slice(1)}`);
       await mkdir(posix.join(staging, ASSETS_DIR), { recursive: true });

@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "description": "The crust site generator: an SSG with a fenced html template API, run under plain Bun (bunx @crust/site build).",
   "license": "MIT",
+  "engines": {
+    "bun": ">=1.4"
+  },
   "author": "Lario Borges",
   "type": "module",
   "bin": {
