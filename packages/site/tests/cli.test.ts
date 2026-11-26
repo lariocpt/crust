@@ -298,6 +298,52 @@ describe("crust-site build (e2e)", () => {
     expect(r.stdout).toBe("");
     expect(r.stderr).toContain("error[config.load]");
   });
+
+  // The usage/README contract: `build` with NO configFile argument renders
+  // ./site.config.ts in the process cwd. The child's cwd is the site root,
+  // so the default is exercised exactly the way an installer hits it.
+  test("a bare build (no configFile) defaults to ./site.config.ts in the cwd", async () => {
+    const root = await tmp("crust-site-cli-builddefault-");
+    await makeSite(root);
+    const proc = Bun.spawn(["bun", CLI, "build"], {
+      cwd: root,
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [stdout, stderr] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ]);
+    await proc.exited;
+    expect(proc.exitCode ?? -1).toBe(0);
+    expect(stdout.split("\n").filter((l) => l !== "")).toHaveLength(1);
+    expect(stdout).toContain(`→ ${join(root, "dist")}`);
+    expect(stderr).toBe("");
+    expect(await exists(join(root, "dist", "index.html"))).toBe(true);
+  });
+
+  // The default must still fail LOUDLY when the conventional file is absent —
+  // a bare build in an empty directory must never read as a success.
+  test("a bare build without ./site.config.ts exits 1 with config.load naming the resolved path", async () => {
+    const root = await tmp("crust-site-cli-buildnodefault-");
+    await mkdir(root, { recursive: true });
+    const proc = Bun.spawn(["bun", CLI, "build"], {
+      cwd: root,
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [stdout, stderr] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ]);
+    await proc.exited;
+    expect(proc.exitCode ?? -1).toBe(1);
+    expect(stdout).toBe("");
+    expect(stderr).toContain("error[config.load]");
+    expect(stderr).toContain(` --> ${join(root, "site.config.ts")}`);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -524,6 +570,28 @@ describe("crust-site dev (e2e)", () => {
         // already dead
       }
     }
+  });
+
+  // `dev` shares the CLI's configFile default with `build`: an empty
+  // directory must fail with the SAME config.load naming the resolved path.
+  test("a bare dev without ./site.config.ts exits 1 with config.load naming the resolved path", async () => {
+    const root = await tmp("crust-site-cli-devdefault-");
+    await mkdir(root, { recursive: true });
+    const proc = Bun.spawn(["bun", CLI, "dev"], {
+      cwd: root,
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [stdout, stderr] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ]);
+    await proc.exited;
+    expect(proc.exitCode ?? -1).toBe(1);
+    expect(stdout).toBe("");
+    expect(stderr).toContain("error[config.load]");
+    expect(stderr).toContain(` --> ${join(root, "site.config.ts")}`);
   });
 
   test("a configured port in use exits 1 with dev.port-in-use (no auto-increment, no stdout)", async () => {

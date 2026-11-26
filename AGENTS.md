@@ -87,7 +87,10 @@ every example. If you change the grammar, those go red before users do.
 
 ## Tests
 
-`bun test` — the whole suite runs in ~9s; keep it in that range. Every feature
+`bun test` — the whole suite runs in ~45–55s on the current tree (measured
+2026-11-26: 44.3s and 45.9s on consecutive runs, 2584 tests across 81 files,
+and that includes `packages/site`'s own suite, which the root run picks up
+through the workspace). Keep it in that range. Every feature
 lands with tests (see `tests/test-fixture.test.ts` and
 `tests/pipeline.test.ts` for the harness patterns — throwaway Bun.serve +
 tmpdir fixtures). Pre-commit runs lint-staged (biome) but NOT the suite —
@@ -147,3 +150,23 @@ behaviour change as unshipped until the `crust-website` PR is open too, and veri
 pipeline does:
 
     cd ../crust-website && bun run build && bun scripts/lint-examples.mjs ../crust/bin/crust
+
+**`packages/site` has the same shape, with its own bridge.** Its reference
+(`packages/site/docs/USAGE.md`) and npm page (`packages/site/README.md`) are
+gated by `packages/site/scripts/lint-docs.mjs`, which type-checks every
+` ```ts ` fence against the package's public types — `crust --check` cannot
+help there because site examples are TypeScript, not crust lines. The gate is
+wired into `bun test` through `packages/site/tests/docs.test.ts`, with a
+minLines canary like `docs-lint.test.ts` uses, so a scanner that finds zero
+examples fails. The website rule applies unchanged: a site behaviour change is
+**unshipped** until the `crust-website` PR (its `docs/site/**` pages +
+Grammar:site gate) is open too.
+
+Quick facts about `packages/site`: workspace member of the root `package.json`
+(`packages/*`), own `package.json` and semver, deps are **`markdown-it` +
+`yaml` only**, `engines.bun >= 1.4`, and its tests run inside the root
+`bun test` — no separate command needed. It ships as a plain npm package run
+under Bun (`bunx @crust/site`); the crust binary carries only the `site`
+redirect stub — see `docs/INTERNAL.md` for why there is no third binary
+variant.
+

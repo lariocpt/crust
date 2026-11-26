@@ -12,6 +12,7 @@ import crustMcp from "../skills/crust-mcp/SKILL.md" with { type: "text" };
 import crustMockServer from "../skills/crust-mock-server/SKILL.md" with { type: "text" };
 import crustPipelines from "../skills/crust-pipelines/SKILL.md" with { type: "text" };
 import crustProcs from "../skills/crust-procs/SKILL.md" with { type: "text" };
+import crustSite from "../skills/crust-site/SKILL.md" with { type: "text" };
 import crustVerifyWebLinks from "../skills/crust-verify-web-links/SKILL.md" with { type: "text" };
 
 export interface EmbeddedSkill {
@@ -28,6 +29,7 @@ export const EMBEDDED_SKILLS: EmbeddedSkill[] = [
   { name: "crust-mock-server", content: crustMockServer },
   { name: "crust-pipelines", content: crustPipelines },
   { name: "crust-procs", content: crustProcs },
+  { name: "crust-site", content: crustSite },
   { name: "crust-verify-web-links", content: crustVerifyWebLinks },
 ];
 

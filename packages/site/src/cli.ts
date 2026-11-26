@@ -47,6 +47,11 @@ const COMMANDS = new Set(["build", "dev"]);
 const WORKER_ENV = "CRUST_SITE_DEV_WORKER";
 /** The worker's sentinel exit: "code/config changed — restart me". */
 const RESTART_EXIT = 75;
+/** The CLI's configFile default (the usage/README contract): the conventional
+ * name in the process cwd, resolved by loadResolvedConfig. The LIBRARY's
+ * build()/startDev() keep the explicit contract — an omitted configFile there
+ * is still a config.load error; only the CLI applies the default. */
+const DEFAULT_CONFIG = "./site.config.ts";
 
 function messageOf(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
@@ -63,7 +68,7 @@ function printDiagnostics(diags: readonly Diagnostic[]): void {
 
 async function runBuild(configFile: string | undefined): Promise<number> {
   try {
-    const result = await build({ configFile: configFile ?? "" });
+    const result = await build({ configFile: configFile ?? DEFAULT_CONFIG });
     if (result.warnings.length > 0) printDiagnostics(result.warnings);
     const assets = Object.keys(result.assets).length;
     process.stdout.write(
@@ -95,7 +100,7 @@ async function runDevWorker(configFile: string | undefined): Promise<number> {
   let server: Awaited<ReturnType<typeof startDev>>;
   try {
     server = await startDev({
-      configFile: configFile ?? "",
+      configFile: configFile ?? DEFAULT_CONFIG,
       onCodeChange: () => process.exit(RESTART_EXIT),
     });
   } catch (e) {
