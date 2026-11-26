@@ -202,6 +202,9 @@ interface ManifestLite {
       envelope: string;
       source: string;
       target: { loc: string[]; kind: string };
+      constraint?: string;
+      attribution?: "status" | "field" | "constraint";
+      errorType?: string;
     };
     prerequisites: string[];
   }[];

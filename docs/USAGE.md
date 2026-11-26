@@ -1705,7 +1705,17 @@ Derived cases:
   applied to a **schema-valid base body** (with format-aware synthesis:
   emails, uuids, dates, and values built from the field's own `pattern` — classes, quantifiers and
   groups, each verified against the regex before it is used), so exactly one thing
-  is wrong per case.
+  is wrong per case — and each mutated body is **proven** to violate the schema at
+  the field the case names before the case is emitted. A mutation proven still-valid
+  is dropped with a notice, because emitting it would assert `400` against a server
+  that correctly answers `200`: an enum containing the sentinel crust injects, a
+  `pattern: "^.*$"` that matches the pattern sentinel, and `minimum: 1e20` where
+  `minimum - 1` rounds straight back to the minimum all used to ship as false tests.
+  A rejection that is proven only at the object — a union branch that demands the
+  field — keeps its status assertion and gives up the location it cannot earn.
+  On an **item path** (`PUT /items/{id}`) the matrix needs a resource that exists;
+  without `resolveKnownPath` in the setup module these cases are skipped with a
+  notice rather than pointed at a random uuid a correct server answers `404`.
 - **400 boundary violations**, for ALL body properties — required *and*
   optional — in fixed per-field order: too short (`minLength`), too long
   (`maxLength`; skipped above 4096 to keep checked-in files reviewable),
@@ -1924,6 +1934,19 @@ every app-specific detail and must export:
   with `{param}` placeholders, substitutes scope params from ctx,
   substitutes any other `{param}` with a random uuid, and prefixes the API
   base URL; returns the absolute request URL.
+- `resolveKnownPath?(ctx, template: string): string` — optional, and the only
+  way to get a validation matrix on an **item path** (`PUT /items/{id}`). A
+  random uuid names no resource, and a server that resolves the resource
+  before reading the body answers `404` — so a case that sends an invalid body
+  to `{itemId}` would fail against a correct implementation, for a reason no
+  spec states. crust cannot know which order a server uses, and it emits the
+  `-> 404` case for that same random id, so it will not also assert `400`
+  there: those cases are skipped with a notice naming them, and the manifest
+  records each under `unsupported`. Export `resolveKnownPath` to get them
+  back — same job as `resolvePath`, but every non-scope `{param}` is filled
+  with the id of a resource that **exists**, one `shared()` created. Cases that
+  need it are emitted through this function and the manifest names the
+  requirement as `known-resource:<param>` instead of `resource:<param>`.
 - `scopeParam: string | null` — the template param name that marks a path as
   scope-gated (e.g. `"buildingId"`). An op is scope-gated when its path's
   FIRST template param has this name. `null` disables 403 derivation
@@ -1934,7 +1957,8 @@ every app-specific detail and must export:
 - `JSON_HEADERS: Record<string, string>` — plain unauthenticated JSON
   headers, used for role `"none"`.
 - `expectations?: { validationStatus?: number; validationEnvelope?:
-  "crust" | "fastapi"; concealment?: "404" | "403"; operations?:
+  "crust" | "fastapi"; concealment?: "404" | "403"; serverErrorStatus?:
+  boolean; validationErrorTypes?: Record<string, string>; operations?:
   Record<string, { validationStatus?: number; validationEnvelope?: "crust" |
   "fastapi"; errorStatus?: number }> }` — new in 0.3.6: reviewed expectation
   overrides for backends whose contract disagrees with the 400 convention, so
@@ -1949,11 +1973,38 @@ every app-specific detail and must export:
   contradicts it — a documented `400` beats a configured `422` even with an
   envelope set — and configured cases carry `configured:<setup-module>`
   provenance in the manifest. Validated hard at generation time — unknown
-  keys, non-integer or out-of-range statuses (< 400 or ≥ 600), an envelope
+  keys, non-integer or out-of-range statuses, an envelope
   value that is neither `crust` nor `fastapi`, or operation keys the spec
   does not have refuse the generation with exit 2 and write nothing (a
   typo'd key would silently configure nothing, so it is an error, not a
   warning).
+
+  Configured statuses are **4xx** (`400–499`). A fixture cannot hold a server
+  to "this request makes it fail": a `500` expectation plus an error-shaped
+  body turns a crash into a passing negative test. `serverErrorStatus: true`
+  is the explicit opt-in for a gateway that genuinely surfaces validation as a
+  `5xx`; it widens the bound to `400–599` for the global and per-operation
+  statuses and prints a notice on every generation that uses it, because a
+  case that passes on a crash must never be quiet about it.
+
+  `validationErrorTypes` upgrades a `fastapi` matcher from "an error named this
+  field" to "**this rule** failed". It maps a crust constraint name — `required`,
+  `type`, `enum`, `pattern`, `minLength`, `maxLength`, `minimum`, `maximum`,
+  `additionalProperties` — to the error code this API puts in the entry's `type`
+  for it; pydantic v2 answers `minLength` with `string_too_short`, `required`
+  with `missing`. Where a constraint is mapped the matcher asserts that code, so
+  an unrelated error at the right location (`type: "unrelated_failure"`) fails
+  the case instead of satisfying it. An unmapped constraint stays
+  field-attributed: crust will not guess a server's error vocabulary and call
+  the guess a proof. The crust envelope carries no machine-readable rule code at
+  all, so it stays field-attributed by construction.
+
+  Every validation case records how strong its matcher actually is as
+  `validationOracle.attribution`: `"status"` (rejected, location not claimed),
+  `"field"` (an error named this field) or `"constraint"` (the named rule
+  failed, per a configured code). `validationOracle.constraint` names the
+  specific keyword — finer than the mutation `kind`, which collapses
+  `minLength`/`maxLength`/`minimum`/`maximum` into `bound`.
 
   `validationEnvelope` (new in 0.3.8) sets the **shape** of the expected
   validation response — never its status, and never inferred from one.
@@ -1964,7 +2015,9 @@ every app-specific detail and must export:
   (`["body", "<field>"]`, derived from the mutated schema field, never
   parsed from a case name; an unexpected-property case targets the synthetic
   field `crustUnexpectedProp`) with nonempty string `msg` and `type`. No
-  message text is ever matched — the location is the contract. A wrong-field
+  message text is ever matched — the location is the contract, and the rule
+  behind it only becomes part of that contract when `validationErrorTypes`
+  names the code this API emits for it. A wrong-field
   error, a query/path location, a malformed entry or a generic body fails
   under **either** envelope, and a case whose mutation cannot be attributed
   to a body location is dropped and disclosed in the manifest's `unsupported`
@@ -1973,10 +2026,12 @@ every app-specific detail and must export:
   Envelope selection does not resolve auth or resource-validity attribution,
   dual-status attribution, mutation safety or approvals: the manifest still
   records generation only. The manifest records the choice as
-  `validationOracle: { envelope, source, target }` on the entries it applies
+  `validationOracle: { envelope, source, target, constraint, attribution }` on
+  the entries it applies
   to — `source` is `"default"` for the omitted convention and
   `configured:<setup-module>` for an explicit choice, `target` the body
-  location with its mutation kind — while `expectationSource` keeps its
+  location with its mutation kind, `attribution` how strong the emitted
+  matcher is — while `expectationSource` keeps its
   status-provenance semantics.
 
   ```ts
@@ -1984,6 +2039,8 @@ every app-specific detail and must export:
     validationStatus: 422, // this backend answers 422, never 400
     validationEnvelope: "fastapi", // …and 422 bodies are FastAPI-shaped
     concealment: "404", // unknown ids and outsiders both get 404
+    // pydantic names the rule, so the case can assert the rule, not just the field
+    validationErrorTypes: { minLength: "string_too_short", required: "missing" },
     operations: {
       // this one really does 400, Crust-shaped — per-operation beats global
       "POST /api/reports": { validationStatus: 400, validationEnvelope: "crust" },

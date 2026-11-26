@@ -65,6 +65,15 @@
  *     template with `{param}` placeholders, substitutes scope params from
  *     ctx, substitutes any other `{param}` with a random uuid, and prefixes
  *     the API base URL; returns the absolute request URL.
+ *   - `resolveKnownPath?(ctx, template: string): string` — optional, and the
+ *     only way to get a validation matrix on an ITEM path (`PUT /items/{id}`).
+ *     Same contract as `resolvePath` except every non-scope `{param}` is
+ *     filled with the id of a resource that EXISTS — one `shared()` created.
+ *     Without it those cases are skipped with a notice: a random uuid names no
+ *     resource, and a server that resolves the resource before reading the body
+ *     answers 404, so the case would fail against a correct implementation.
+ *     crust cannot know which order a server uses, and it emits the `-> 404`
+ *     case for that same random id, so it will not also assert 400 there.
  *   - `scopeParam: string | null` — the template param name that marks a path
  *     as scope-gated (e.g. "buildingId"). An op is scope-gated when its
  *     path's FIRST template param has this name. `null` disables 403
@@ -81,6 +90,8 @@
  *     generation time.
  *   - `expectations?: { validationStatus?: number; concealment?: "404" | "403";
  *     validationEnvelope?: "crust" | "fastapi";
+ *     serverErrorStatus?: boolean;
+ *     validationErrorTypes?: Record<string, string>;
  *     operations?: Record<"METHOD /path", { validationStatus?: number;
  *     errorStatus?: number; validationEnvelope?: "crust" | "fastapi" }> }`
  *     — reviewed expectation overrides for backends whose contract disagrees
@@ -102,8 +113,22 @@
  *     configured statuses carry `configured:<module>` provenance in the
  *     manifest; the envelope carries its own provenance in the manifest's
  *     `validationOracle.source` (`"default"` for the omitted convention,
- *     `configured:<module>` for an explicit choice). Validated hard at
- *     generation time: unknown keys, statuses outside 400–599, envelope
+ *     `configured:<module>` for an explicit choice). Configured statuses are
+ *     4xx: a fixture cannot hold a server to "this request makes it fail", so
+ *     `serverErrorStatus: true` is the explicit opt-in for a gateway that
+ *     really surfaces validation as a 5xx, and it prints a notice every
+ *     generation that uses it. `validationErrorTypes` maps a crust constraint
+ *     name (`required`, `type`, `enum`, `pattern`, `minLength`, `maxLength`,
+ *     `minimum`, `maximum`, `additionalProperties`) to the error code this API
+ *     emits for it — pydantic v2 answers `minLength` with `string_too_short`.
+ *     Where a constraint is mapped, the fastapi matcher asserts that code and
+ *     the case proves the NAMED rule failed; unmapped constraints stay
+ *     field-attributed, because crust will not guess a server's error
+ *     vocabulary and call the guess a proof. The manifest records the strength
+ *     of every case as `validationOracle.attribution`: `status`, `field` or
+ *     `constraint`. Validated hard at
+ *     generation time: unknown keys, statuses outside 400–499 (400–599 with
+ *     the opt-in), envelope
  *     values other than `"crust"`/`"fastapi"`, or unknown operation keys
  *     refuse the generation (exit 2) rather than being ignored.
  */
@@ -505,6 +530,12 @@ interface ScopeConfig {
   flowOverrides: Record<string, FlowOverride>;
   /** Validated `expectations` export of the setup module; null when absent. */
   expectations: ExpectationOverrides | null;
+  /**
+   * Whether the setup module exports `resolveKnownPath` — i.e. whether a path param can be
+   * filled with a resource that EXISTS. Decides whether the validation matrix of an item path
+   * can be emitted at all; see `NoResourceOp`.
+   */
+  knownResource: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -1199,6 +1230,15 @@ export interface GenCase {
   };
   /** documented response schema for expectStatus (inline post-deref) */
   responseSchema?: unknown;
+  /**
+   * The case's path has a `{param}` that `resolvePath` fills with a RANDOM id, and
+   * the assertion only holds against a resource that EXISTS. A validation-matrix
+   * case is the family that needs this: crust itself emits a `-> 404` case for that
+   * same random id, so asserting `-> 400` on it claims the server validates an
+   * unknown resource — true only for a server that validates before it routes.
+   * Emitted through `resolveKnownPath` when the setup module provides one.
+   */
+  needsKnownResource?: boolean;
 }
 
 /**
@@ -1270,6 +1310,30 @@ type MutationProof =
   | { keep: false; reason: string };
 
 /**
+ * An operation whose validation matrix sits on a path crust cannot point at an existing resource.
+ *
+ * `resolvePath` fills a non-scope `{param}` with a random uuid — that is its documented contract,
+ * and it is what makes the unknown-id `-> 404` family work. Reusing it for the validation matrix
+ * sends an invalid body to a resource that does not exist, and a server that resolves the resource
+ * before reading the body answers 404: the case fails against a CORRECT implementation, for a
+ * reason no spec states. crust cannot know which order a server uses, and its own `-> 404` case for
+ * the same random id says the resource is unknown. So the matrix is emitted only where the setup
+ * module can name a resource that exists (`resolveKnownPath`); otherwise these cases are dropped and
+ * named, because a matrix that is red for the wrong reason is worse than a smaller one that is
+ * honest about what is missing.
+ */
+interface NoResourceOp {
+  template: string;
+  /** The path params that need an existing resource, and the cases that need them. */
+  params: string[];
+  cases: string[];
+  /** Cases this operation still has. Zero means it is left with no negative coverage at all. */
+  kept: number;
+  /** True when the setup module does provide `resolveKnownPath` (so nothing was dropped). */
+  resolved: boolean;
+}
+
+/**
  * The operation's request body, when the method can actually carry one.
  *
  * A body on GET or HEAD is a body nobody can send: fetch refuses to build the request at all
@@ -1305,6 +1369,7 @@ function deriveCases(
   bodyless: BodylessOp[],
   noMatrix: NoMatrixOp[],
   unproven: UnprovenOp[],
+  noResource: NoResourceOp[],
   requestPlan?: RequestPlan,
 ): GenCase[] {
   const cases: GenCase[] = [];
@@ -1511,6 +1576,10 @@ function deriveCases(
      * re-dropped here under a reason that sends the reader to the wrong cause.
      */
     const matrixEntries: { c: GenCase; field: string; askedStatusOnly: boolean }[] = [];
+    // Does this path need a resource that EXISTS? A scope param is filled from ctx and the scope
+    // root is real by construction; every other `{param}` is a random uuid, which names nothing.
+    const needsKnown = otherParams.length > 0;
+    const unresolvable: string[] = [];
     const pushMatrixCase = (
       suffix: string,
       field: string,
@@ -1520,6 +1589,10 @@ function deriveCases(
       statusOnly = false,
     ): void => {
       const name = `${method.toUpperCase()} ${path} ${suffix} -> ${matrixStatus}`;
+      if (needsKnown && !scope.knownResource) {
+        unresolvable.push(name);
+        return;
+      }
       const c: GenCase = {
         name,
         auth: validAuth,
@@ -1530,6 +1603,7 @@ function deriveCases(
         expectationSource: matrixSource,
         ...(statusOnly ? { expectValidationCode: true } : { expectValidationField: field }),
         ...validationCaseFields(field, kind, constraint),
+        ...(needsKnown ? { needsKnownResource: true } : {}),
       };
       matrixEntries.push({ c, field, askedStatusOnly: statusOnly });
       cases.push(c);
@@ -1702,6 +1776,15 @@ function deriveCases(
         dropped: proofDropped,
         unproven: proofUnproven,
         statusOnly: proofStatusOnly,
+      });
+    }
+    if (needsKnown && !scope.knownResource && unresolvable.length > 0) {
+      noResource.push({
+        template: `${method.toUpperCase()} ${path}`,
+        params: otherParams,
+        cases: unresolvable,
+        kept: cases.length,
+        resolved: false,
       });
     }
   } else if (bodySchema) {
@@ -1880,7 +1963,10 @@ function prerequisitesOf(c: GenCase): string[] {
     pre.push(`query:${p.name}`);
   }
   for (const m of c.path.matchAll(/\{(\w+)\}/g)) {
-    const name = `resource:${m[1]}`;
+    // `known-resource:` is a stronger claim than `resource:` — the case needs that param filled
+    // with an id that EXISTS, not merely substituted. A reader of the manifest can tell which
+    // setup export has to provide it.
+    const name = c.needsKnownResource ? `known-resource:${m[1]}` : `resource:${m[1]}`;
     if (!pre.includes(name)) pre.push(name);
   }
   return pre;
@@ -1988,6 +2074,11 @@ function emitFixture(
   request: string | undefined,
 ): string {
   const query = c.requestPlan?.query ?? [];
+  // A case that needs an EXISTING resource goes through `resolveKnownPath` — it only exists in the
+  // output when the setup module exports that function (derivation drops the cases otherwise), so
+  // naming it here can never emit a call to something the setup module does not have.
+  const pathFn = c.needsKnownResource ? "resolveKnownPath" : "resolvePath";
+  if (c.needsKnownResource) used.add("resolveKnownPath");
   const lines: string[] = [
     "  {",
     `    name: ${quoteStringLiteral(c.name, style)},`,
@@ -2005,7 +2096,7 @@ function emitFixture(
           "url: await ",
           "genUrl",
           [
-            formatCall(style, 4, "", "resolvePath", ["ctx", quoteStringLiteral(c.path, style)], ""),
+            formatCall(style, 4, "", pathFn, ["ctx", quoteStringLiteral(c.path, style)], ""),
             "ctx",
             quoteStringLiteral(`${c.method.toUpperCase()} ${c.path}`, style),
             `${request}.query`,
@@ -2017,14 +2108,7 @@ function emitFixture(
   } else {
     lines.push(
       pad(3) +
-        formatCall(
-          style,
-          3,
-          "url: ",
-          "resolvePath",
-          ["ctx", quoteStringLiteral(c.path, style)],
-          ",",
-        ),
+        formatCall(style, 3, "url: ", pathFn, ["ctx", quoteStringLiteral(c.path, style)], ","),
     );
   }
   lines.push(`${pad(3)}method: ${quoteStringLiteral(c.method.toUpperCase(), style)},`);
@@ -2683,6 +2767,8 @@ export async function generateFixtures(opts: GenerateOpts): Promise<GenerateResu
   const scope: ScopeConfig = {
     scopeParam: setupMod.scopeParam ?? null,
     scopeRoots: setupMod.scopeRoots ?? [],
+    knownResource:
+      typeof (setupMod as { resolveKnownPath?: unknown }).resolveKnownPath === "function",
     flowOverrides:
       (setupMod as { flowOverrides?: Record<string, FlowOverride> }).flowOverrides ?? {},
     // Validated here, before the --out dir is touched: a bad expectations
@@ -2708,6 +2794,7 @@ export async function generateFixtures(opts: GenerateOpts): Promise<GenerateResu
   }
   const unsound: UnsoundOp[] = [];
   const unproven: UnprovenOp[] = [];
+  const noResource: NoResourceOp[] = [];
   const bodyless: BodylessOp[] = [];
   const noMatrix: NoMatrixOp[] = [];
   const requestUnsupported: { operation: string; assumption: string }[] = [];
@@ -2763,6 +2850,7 @@ export async function generateFixtures(opts: GenerateOpts): Promise<GenerateResu
         bodyless,
         noMatrix,
         unproven,
+        noResource,
         plan,
       );
       for (const c of derived) {
@@ -2826,6 +2914,19 @@ export async function generateFixtures(opts: GenerateOpts): Promise<GenerateResu
         `gen-fixtures: ${u.unproven.length} case(s) for ${u.template} are kept although crust cannot prove the mutation invalid — ${u.unproven.join("; ")}`,
       );
     }
+  }
+
+  // The validation matrix of an item path asks a question crust cannot answer with `resolvePath`
+  // alone: it sends an invalid body to a `{param}` filled with a random uuid, and a server that
+  // resolves the resource before reading the body answers 404. crust has no way to know which
+  // order a server uses — and it emits the `-> 404` case for that same unknown id, so asserting
+  // 400 there would contradict its own output. The cases are dropped, named, and the fix is one
+  // setup export: `resolveKnownPath`, which fills the param with a resource `shared()` created.
+  for (const u of noResource) {
+    log(
+      `gen-fixtures: ${u.cases.length} case(s) skipped for ${u.template} — the path param {${u.params.join("}, {")}} is filled with a random id, so the request reaches an unknown resource that a correct server answers 404 before validating. Export resolveKnownPath(ctx, template) in the setup module to point these at a resource shared() creates: ${u.cases.join("; ")}`,
+    );
+    if (u.kept === 0) withNoCases++;
   }
 
   // The other way an operation can be left with no negative cases: it documents a body on a
@@ -2905,7 +3006,14 @@ export async function generateFixtures(opts: GenerateOpts): Promise<GenerateResu
         prerequisites: prerequisitesOf(c),
       });
     }
-    const used = new Set<string>(["resolvePath", "shared"]);
+    // `resolvePath` is imported only when something in this file still calls it: a file whose every
+    // case needs an existing resource imports `resolveKnownPath` alone, and an unused import in a
+    // generated file is a lint error the user did not write.
+    const used = new Set<string>(
+      cases.some((c) => !c.needsKnownResource)
+        ? ["resolvePath", "shared"]
+        : ["resolveKnownPath", "shared"],
+    );
     const requests = new Map<RequestPlan, string>();
     const headerPlans = new Set<RequestPlan>();
     let hasQuery = false;
@@ -3055,6 +3163,15 @@ ${fixtures}
             "but not at the field the case names, so no error location is claimed",
         })),
       ]),
+      ...noResource.flatMap((u) =>
+        u.cases.map((c) => ({
+          operation: u.template,
+          assumption:
+            `the '${c}' case needs path param {${u.params.join("}, {")}} to name an EXISTING ` +
+            "resource; resolvePath fills it with a random id, which a correct server answers 404 " +
+            "before validating — export resolveKnownPath in the setup module to recover it",
+        })),
+      ),
     ],
   };
   const manifestPath = resolve(outDir, "gen-manifest.json");
