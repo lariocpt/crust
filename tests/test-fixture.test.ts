@@ -516,6 +516,39 @@ describe("output.schema", () => {
     expect(bad.failures.some((f) => String(f.expected).includes("maxLength"))).toBe(true);
   });
 
+  test("additionalProperties: false is enforced — the runner asserts, the mock does not", async () => {
+    // The mock server leaves `additionalProperties` unsupported on purpose: live traffic must not
+    // 422 because a server added a field. `output.schema` is the opposite case — the user declared
+    // the shape as an assertion, and silently not checking it is a false pass.
+    const file = await writeFixture(
+      "schema-strict.crust.ts",
+      `export default [
+        {
+          name: "extra field",
+          input: { url: "${baseUrl}/users/42" },
+          output: {
+            status: 200,
+            schema: { type: "object", additionalProperties: false, required: ["id"], properties: { id: { type: "integer" } } },
+          },
+        },
+        {
+          name: "control: no keyword, extras allowed",
+          input: { url: "${baseUrl}/users/42" },
+          output: { status: 200, schema: { type: "object", required: ["id"], properties: { id: { type: "integer" } } } },
+        },
+      ];`,
+    );
+    const report = await runFixtures({ target: file, threads: 1 });
+    const bad = required(report.results.find((r) => r.name === "extra field"));
+    expect(bad.status).toBe("fail");
+    expect(bad.failures.some((f) => String(f.expected).includes("additionalProperties"))).toBe(
+      true,
+    );
+    // The control keeps the permissive reading: strict mode is opt-in per schema, not global.
+    const ok = required(report.results.find((r) => r.name.startsWith("control")));
+    expect(ok.status).toBe("pass");
+  });
+
   test("functions inside a schema object are never invoked", async () => {
     const file = await writeFixture(
       "schema-shield.crust.ts",

@@ -1439,7 +1439,14 @@ the runner has no spec to resolve references against, so a `$ref` anywhere
 in it is a loud error (the fixture reports `output.schema contains a
 $ref … — inline it`) rather than a silently-passing no-op. The validator is
 the mock-server's subset walker, so its never-invent-a-violation rule
-applies (unknown keywords pass). Functions inside a schema object are never
+applies (unknown keywords pass). It runs in **strict** mode, unlike the mock
+server: a literal `additionalProperties: false` in the schema is enforced,
+because this is an assertion you wrote, not live traffic being judged — a
+server that returns a field your schema forbids fails the fixture with
+`output.data/<key> — additionalProperties: unexpected property '<key>'`. A
+schema that does not declare the keyword is unaffected, and composed nodes
+(`allOf`/`oneOf`/`anyOf`) stay exempt, exactly as under the mock's `--strict`.
+Functions inside a schema object are never
 invoked. `gen-fixtures` emits this key automatically (pre-dereferenced) for
 any case whose expected status documents a response schema.
 

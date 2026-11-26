@@ -215,7 +215,15 @@ async function runOne(
     responseStatus = actual.status;
     const failures = await diffAsync("output", expected, actual, setupCtx);
     if (responseSchema !== undefined) {
-      for (const v of validateSchema(actual.data, responseSchema, { paths: {} })) {
+      // `strict` here, where the mock server deliberately does not use it. The mock must not 422
+      // live traffic because a server added a field, but `output.schema` is an assertion the user
+      // wrote: a schema that says `additionalProperties: false` states that extra fields are an
+      // error, and silently not checking it is a false pass — the one thing this project forbids.
+      // Strict mode still never invents a violation (composed nodes stay exempt), so this only
+      // affects schemas that literally declare the keyword.
+      for (const v of validateSchema(actual.data, responseSchema, { paths: {} }, "", new Set(), {
+        strict: true,
+      })) {
         failures.push({
           path: `output.data${v.pointer}`,
           expected: `${v.rule}: ${v.message}`,
