@@ -353,7 +353,10 @@ export function prove(value: unknown, schema: unknown): Proof {
   walk(out, value, schema, "", 0);
   const seen = new Set<string>();
   out.violations = out.violations.filter((v) => {
-    const key = `${v.pointer} ${v.rule}`;
+    // NUL is the separator on purpose: a JSON pointer and a keyword name can both contain
+    // `:` and `|`, so any printable separator could collide two distinct violations into one
+    // key and silently drop one of them. A NUL cannot appear in either.
+    const key = `${v.pointer}\u0000${v.rule}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;

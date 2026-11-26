@@ -213,6 +213,41 @@ describe("a spec that admits no value is named as the spec's own contradiction",
     expect(r.names.some((n) => n.includes("missing required 'n'"))).toBe(true);
     expect(r.names.some((n) => n.includes("wrong type for 'n'"))).toBe(false);
   });
+
+  test("uniqueItems demanding more distinct items than items can supply is the spec's", async () => {
+    // `minItems: 2` over `items: { enum: ["only"] }` asks for two distinct values from a one-value
+    // set. No array satisfies it, yet crust's sampled array took the blame: the notice read
+    // "crust's own value for 'tags' (minItems) does not satisfy the schema" and sent the reader to
+    // the wrong repo's issue tracker. The distinct-value count is an UPPER bound — a member the
+    // proof cannot judge stays counted — so the verdict is never a guess.
+    const tags = { type: "array", uniqueItems: true, minItems: 2, items: { enum: ["only"] } };
+    const r = await emit("dead-uniq", body({ tags }));
+    const joined = r.notes.join("\n");
+    expect(joined).toContain("the SPEC contradicts itself");
+    expect(joined).toContain("admit at most 1");
+    expect(joined).not.toContain("crust's own value");
+    // The case that removes the field is untouched by the contradiction.
+    expect(r.names.some((n) => n.includes("missing required 'tags'"))).toBe(true);
+
+    // Controls: the same keywords are ordinary when they can be satisfied.
+    const ok = await emit(
+      "live-uniq",
+      body({
+        tags: { type: "array", uniqueItems: true, minItems: 2, items: { enum: ["a", "b"] } },
+      }),
+    );
+    expect(ok.notes.join("\n")).not.toContain("contradicts itself");
+    const noMin = await emit(
+      "live-uniq2",
+      body({ tags: { type: "array", uniqueItems: true, items: { enum: ["a"] } } }),
+    );
+    expect(noMin.notes.join("\n")).not.toContain("contradicts itself");
+    const len = await emit(
+      "dead-items",
+      body({ tags: { type: "array", minItems: 3, maxItems: 1, items: { type: "string" } } }),
+    );
+    expect(len.notes.join("\n")).toContain("minItems 3 exceeds maxItems 1");
+  });
 });
 
 describe("the proof layer answers three questions, not two", () => {

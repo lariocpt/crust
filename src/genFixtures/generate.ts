@@ -1064,6 +1064,34 @@ function windowDeadEnd(node: Schema): string | null {
   return null;
 }
 
+/**
+ * An array node whose own constraints cannot be met: `maxItems` below `minItems`, or `uniqueItems`
+ * demanding more distinct members than its `items` can supply (`minItems: 2` over
+ * `items: { enum: ["only"] }` asks for two distinct values from a one-value set).
+ *
+ * The distinct-value count is taken only where the node itself decides it — a literal `enum` or
+ * `const`. A member the proof layer finds violated is definitely inadmissible; one it cannot judge
+ * stays counted, so the number is an UPPER bound on admissible distinct values and falling short of
+ * `minItems` is a sound conclusion, never a guess. Without this reading the notice blames crust's
+ * sampled array for a contradiction the spec wrote.
+ */
+function arrayDeadEnd(node: Schema): string | null {
+  const min = typeof node.minItems === "number" ? node.minItems : 0;
+  const max = typeof node.maxItems === "number" ? node.maxItems : null;
+  if (max !== null && max < min) return `minItems ${min} exceeds maxItems ${max}`;
+  if (node.uniqueItems !== true || min < 1) return null;
+  const items = node.items;
+  if (!items || typeof items !== "object") return null;
+  let admissible: number | null = null;
+  if (Array.isArray(items.enum)) {
+    admissible = items.enum.filter((m) => prove(m, items).violations.length === 0).length;
+  } else if ("const" in items) {
+    admissible = prove(items.const, items).violations.length === 0 ? 1 : 0;
+  }
+  if (admissible === null || admissible >= min) return null;
+  return `uniqueItems requires ${min} distinct items but its items admit at most ${admissible}`;
+}
+
 /** Does this node admit `null` by its own declaration (either spec version)? */
 function admitsNull(node: Schema): boolean {
   if ((node as { nullable?: unknown }).nullable === true) return true;
@@ -1081,7 +1109,7 @@ function admitsNull(node: Schema): boolean {
 function specDeadEnd(node: unknown, path = "", depth = 0): string | null {
   if (!node || typeof node !== "object" || Array.isArray(node) || depth > 8) return null;
   const n = node as Schema;
-  const dead = enumDeadEnd(n) ?? windowDeadEnd(n);
+  const dead = enumDeadEnd(n) ?? windowDeadEnd(n) ?? arrayDeadEnd(n);
   if (dead) return path ? `${path}: ${dead}` : dead;
   if (admitsNull(n)) return null;
   const union =
