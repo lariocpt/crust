@@ -625,6 +625,10 @@ describe("gen-fixtures — validationEnvelope (configured validation-response en
       expect(gapCase?.validationOracle).toEqual({
         envelope: "crust",
         source: "default",
+        // The crust envelope carries no machine-readable rule code, so this case
+        // proves an error named the field — not that the named rule failed.
+        attribution: "field",
+        constraint: "required",
         target: { loc: ["body", "token"], kind: "missing-required" },
       });
       // The documented-400 op stays 400 under the configured 422 (the

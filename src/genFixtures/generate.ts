@@ -259,6 +259,18 @@ export interface ExpectationsConfig {
    * out loud.
    */
   serverErrorStatus?: boolean;
+  /**
+   * Constraint-level attribution for the `fastapi` envelope: maps a crust
+   * constraint name (`required`, `type`, `enum`, `pattern`, `minLength`,
+   * `maxLength`, `minimum`, `maximum`, `additionalProperties`) to the error
+   * code this API puts in the entry's `type` for it — pydantic v2, for
+   * instance, answers `minLength` with `string_too_short`. Where a constraint
+   * is mapped, the emitted matcher asserts that code, and the case proves the
+   * NAMED rule failed rather than that some error mentioned the field. Where it
+   * is not, the case stays field-attributed and says so: crust will not guess a
+   * server's error vocabulary and call the guess a proof.
+   */
+  validationErrorTypes?: Record<string, string>;
   /** Per-operation overrides keyed exactly `"METHOD /path"` — the manifest's operation key style. */
   operations?: Record<string, ExpectationOverride>;
 }
@@ -273,6 +285,7 @@ interface ExpectationOverrides {
   concealment?: number;
   validationEnvelope?: "crust" | "fastapi";
   serverErrorStatus?: boolean;
+  validationErrorTypes?: Record<string, string>;
   operations: Record<string, ExpectationOverride>;
 }
 
@@ -341,6 +354,7 @@ function validateExpectations(
     "concealment",
     "validationEnvelope",
     "serverErrorStatus",
+    "validationErrorTypes",
     "operations",
   ]);
   const src = raw as ExpectationsConfig;
@@ -356,6 +370,43 @@ function validateExpectations(
     out.serverErrorStatus = src.serverErrorStatus;
   }
   const allow5xx = out.serverErrorStatus === true;
+  if (src.validationErrorTypes !== undefined) {
+    const raw = src.validationErrorTypes;
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+      throw new ConfigError(
+        `expectations.validationErrorTypes must be an object of constraint names (got ${JSON.stringify(raw)})`,
+      );
+    }
+    // The names crust actually derives. An unrecognised key would silently
+    // disable attribution for one case family, and a silent no-op in a
+    // reviewed config is the same class of fault as a typo in `operations`.
+    const known = [
+      "required",
+      "type",
+      "enum",
+      "pattern",
+      "minLength",
+      "maxLength",
+      "minimum",
+      "maximum",
+      "additionalProperties",
+    ];
+    const map: Record<string, string> = {};
+    for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+      if (!known.includes(key)) {
+        throw new ConfigError(
+          `expectations.validationErrorTypes: unknown constraint "${key}" — crust derives ${known.join(", ")}`,
+        );
+      }
+      if (typeof value !== "string" || value.length === 0) {
+        throw new ConfigError(
+          `expectations.validationErrorTypes["${key}"] must be a non-empty error-code string (got ${JSON.stringify(value)})`,
+        );
+      }
+      map[key] = value;
+    }
+    out.validationErrorTypes = map;
+  }
   if (src.validationStatus !== undefined) {
     out.validationStatus = checkConfigStatus(
       "expectations.validationStatus",
@@ -1129,6 +1180,20 @@ export interface GenCase {
     loc: string[];
     /** The mutation family that produced the case. */
     kind: "missing-required" | "wrong-type" | "enum" | "bound" | "pattern" | "unexpected-property";
+    /**
+     * The specific schema keyword the case violates — finer than `kind`, which
+     * collapses minLength/maxLength/minimum/maximum into `"bound"`. This is
+     * what a constraint-level oracle needs, and it is what a
+     * `validationErrorTypes` mapping is keyed by.
+     */
+    constraint?: string;
+    /**
+     * The server's own error code for `constraint`, resolved from
+     * `expectations.validationErrorTypes` at derivation time. Present means the
+     * emitted matcher asserts it, so the case proves the NAMED rule failed;
+     * absent means the case is field-attributed only.
+     */
+    errorType?: string;
     /** The mutated body property ("crustUnexpectedProp" for the extra-property case). */
     field: string;
   };
@@ -1277,10 +1342,21 @@ function deriveCases(
   const validationCaseFields = (
     field: string,
     kind: NonNullable<GenCase["validationTarget"]>["kind"],
+    constraint?: string,
   ): Pick<GenCase, "validationEnvelope" | "validationEnvelopeSource" | "validationTarget"> => ({
     validationEnvelope,
     validationEnvelopeSource,
-    validationTarget: { loc: ["body", field], kind, field },
+    validationTarget: {
+      loc: ["body", field],
+      kind,
+      ...(constraint === undefined ? {} : { constraint }),
+      // Resolved here, not in the emitter: derivation is where the constraint
+      // is known, and the matcher only ever asserts a code the config stated.
+      ...(constraint !== undefined && exp?.validationErrorTypes?.[constraint] !== undefined
+        ? { errorType: exp.validationErrorTypes[constraint] }
+        : {}),
+      field,
+    },
   });
   // Provenance for a family status: `contract:` whenever the spec documents
   // that exact status (even one the configuration also asked for), `configured:`
@@ -1440,6 +1516,7 @@ function deriveCases(
       field: string,
       body: Record<string, unknown>,
       kind: NonNullable<GenCase["validationTarget"]>["kind"],
+      constraint?: string,
       statusOnly = false,
     ): void => {
       const name = `${method.toUpperCase()} ${path} ${suffix} -> ${matrixStatus}`;
@@ -1452,7 +1529,7 @@ function deriveCases(
         expectStatus: matrixStatus,
         expectationSource: matrixSource,
         ...(statusOnly ? { expectValidationCode: true } : { expectValidationField: field }),
-        ...validationCaseFields(field, kind),
+        ...validationCaseFields(field, kind, constraint),
       };
       matrixEntries.push({ c, field, askedStatusOnly: statusOnly });
       cases.push(c);
@@ -1460,7 +1537,13 @@ function deriveCases(
 
     for (const field of required) {
       const { [field]: _omitted, ...withoutField } = base;
-      pushMatrixCase(`missing required '${field}'`, field, withoutField, "missing-required");
+      pushMatrixCase(
+        `missing required '${field}'`,
+        field,
+        withoutField,
+        "missing-required",
+        "required",
+      );
       // Only when the value is ACTUALLY rejected. A field whose schema constrains nothing —
       // `{properties: {...}}` with no `type`, a description-only node — has no wrong value, and the
       // case would assert `-> 400` for a request a correct API answers 200. That is a false test: it
@@ -1471,6 +1554,7 @@ function deriveCases(
         field,
         { ...base, [field]: wrongTypeFor(props[field]) },
         "wrong-type",
+        "type",
       );
     }
     for (const [field, rawFs] of Object.entries(props)) {
@@ -1483,6 +1567,7 @@ function deriveCases(
           field,
           { ...base, [field]: "__not_a_real_enum_value__" },
           "enum",
+          "enum",
         );
       }
     }
@@ -1493,21 +1578,32 @@ function deriveCases(
     for (const [field, rawFs] of Object.entries(props)) {
       const fs = effectiveSchema(rawFs);
       if (!fs) continue;
-      const push = (suffix: string, wrongValue: unknown, kind: "bound" | "pattern") =>
-        pushMatrixCase(`${suffix} '${field}'`, field, { ...base, [field]: wrongValue }, kind);
+      const push = (
+        suffix: string,
+        wrongValue: unknown,
+        kind: "bound" | "pattern",
+        constraint: string,
+      ) =>
+        pushMatrixCase(
+          `${suffix} '${field}'`,
+          field,
+          { ...base, [field]: wrongValue },
+          kind,
+          constraint,
+        );
       const ft = primaryType(fs);
       const isString = ft === "string";
       const isNumeric = ft === "integer" || ft === "number";
       if (isString && typeof fs.minLength === "number" && fs.minLength >= 1) {
-        push("too short", "x".repeat(fs.minLength - 1), "bound");
+        push("too short", "x".repeat(fs.minLength - 1), "bound", "minLength");
       }
       // maxLength > 4096 is skipped on purpose: a 100KB literal in a
       // checked-in generated file is unreviewable.
       if (isString && typeof fs.maxLength === "number" && fs.maxLength <= 4096) {
-        push("too long", "x".repeat(fs.maxLength + 1), "bound");
+        push("too long", "x".repeat(fs.maxLength + 1), "bound", "maxLength");
       }
       if (isNumeric && typeof fs.minimum === "number") {
-        push("below minimum", fs.minimum - 1, "bound");
+        push("below minimum", fs.minimum - 1, "bound", "minimum");
       }
       // Real specs use MAX_SAFE_INTEGER as an "unbounded" sentinel — +1 would
       // not even round-trip through JSON faithfully, so skip those. The minimum
@@ -1518,14 +1614,14 @@ function deriveCases(
         typeof fs.maximum === "number" &&
         fs.maximum + 1 <= Number.MAX_SAFE_INTEGER
       ) {
-        push("above maximum", fs.maximum + 1, "bound");
+        push("above maximum", fs.maximum + 1, "bound", "maximum");
       }
       if (fs.pattern) {
         // For required constrained-string fields the wrong-type case already
         // sends wrongTypeFor's string sentinel — a pattern violation in
         // disguise. Dedupe to avoid an identical-in-substance case.
         const covered = required.includes(field) && wrongTypeFor(rawFs) === "!!not-a-valid-value!!";
-        if (!covered) push("pattern violation", "!!pattern-violation!!", "pattern");
+        if (!covered) push("pattern violation", "!!pattern-violation!!", "pattern", "pattern");
       }
     }
 
@@ -1540,6 +1636,7 @@ function deriveCases(
         "crustUnexpectedProp",
         { ...base, crustUnexpectedProp: "gen-extra" },
         "unexpected-property",
+        "additionalProperties",
         true,
       );
     }
@@ -1705,6 +1802,16 @@ export interface GenManifestCase {
     envelope: "crust" | "fastapi";
     source: string;
     target: { loc: string[]; kind: string };
+    /** The specific keyword violated, when the family names one. */
+    constraint?: string;
+    /**
+     * How strong the emitted matcher is: `status` (rejected, location not
+     * claimed), `field` (an error named this field) or `constraint` (the named
+     * rule failed, per a configured error code).
+     */
+    attribution: "status" | "field" | "constraint";
+    /** The server's error code asserted, when `attribution` is `constraint`. */
+    errorType?: string;
   };
   prerequisites: string[];
 }
@@ -1813,9 +1920,17 @@ function fastapiPredicateLines(
 ): string[] {
   const loc = target.loc;
   const locChecks = loc.map((seg, i) => `e.loc[${i}] === ${quoteStringLiteral(seg, style)}`);
+  // Without a configured error code the matcher can only prove an entry EXISTS at this location —
+  // `type: "unrelated_failure"` satisfied it, as did "database unavailable" on the crust side. With
+  // one, the case proves the named rule failed. The code is never guessed: it comes from
+  // `expectations.validationErrorTypes`, and an unmapped constraint stays field-attributed.
+  const typeCheck =
+    target.errorType === undefined
+      ? 'typeof e.type === "string" && e.type.length > 0'
+      : `typeof e.type === "string" && e.type === ${quoteStringLiteral(target.errorType, style)}`;
   const chain =
     `Array.isArray(e.loc) && e.loc.length === ${loc.length} && ${locChecks.join(" && ")} && ` +
-    'typeof e.msg === "string" && e.msg.length > 0 && typeof e.type === "string" && e.type.length > 0';
+    `typeof e.msg === "string" && e.msg.length > 0 && ${typeCheck}`;
   const lines: string[] = [
     `${pad(3)}data: (d: { detail?: unknown }) =>`,
     `${pad(4)}Array.isArray(d.detail) &&`,
@@ -1838,9 +1953,13 @@ function fastapiPredicateLines(
       ...locChecks.map((c) => `${pad(6)}${c} &&`),
       `${pad(6)}typeof e.msg === "string" &&`,
       `${pad(6)}e.msg.length > 0 &&`,
-      `${pad(6)}typeof e.type === "string" &&`,
-      `${pad(6)}e.type.length > 0`,
-      `${pad(5)});`,
+      ...(target.errorType === undefined
+        ? [`${pad(6)}typeof e.type === "string" &&`, `${pad(6)}e.type.length > 0`, `${pad(5)});`]
+        : [
+            `${pad(6)}typeof e.type === "string" &&`,
+            `${pad(6)}e.type === ${quoteStringLiteral(target.errorType, style)}`,
+            `${pad(5)});`,
+          ]),
     );
   }
   lines.push(`${pad(4)}}),`);
@@ -2764,6 +2883,22 @@ export async function generateFixtures(opts: GenerateOpts): Promise<GenerateResu
                 envelope: c.validationEnvelope ?? "crust",
                 source: c.validationEnvelopeSource ?? "default",
                 target: { loc: c.validationTarget.loc, kind: c.validationTarget.kind },
+                // What the emitted matcher actually proves. `constraint` is the
+                // finer keyword name; `attribution` names the strength, so a
+                // reader can tell a field-level check from a rule-level one
+                // without reading the generated predicate.
+                ...(c.validationTarget.constraint === undefined
+                  ? {}
+                  : { constraint: c.validationTarget.constraint }),
+                attribution:
+                  c.validationTarget.errorType !== undefined
+                    ? "constraint"
+                    : c.expectValidationCode === true
+                      ? "status"
+                      : "field",
+                ...(c.validationTarget.errorType === undefined
+                  ? {}
+                  : { errorType: c.validationTarget.errorType }),
               },
             }
           : {}),
