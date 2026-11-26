@@ -640,6 +640,81 @@ describe("envelope-aware CRUD", () => {
   });
 });
 
+describe("trailing-slash state association", () => {
+  const slashSpec = (): OpenApiSpec => {
+    const spec = structuredClone(WRAPPED_SPEC);
+    const paths = required(spec.paths);
+    paths["/api/things/"] = paths["/api/things"];
+    delete paths["/api/things"];
+    return spec;
+  };
+
+  test("item envelope falls back to the slash collection's create envelope", async () => {
+    const spec = slashSpec();
+    const itemPath = required(required(spec.paths)["/api/things/{thingId}"]);
+    itemPath.get = { responses: { "200": { description: "one" } } };
+    expect(computeEnvelopes(buildRoutes(spec), spec).get("/api/things/")).toEqual({
+      create: "thing",
+      item: "thing",
+      req: "thing",
+    });
+    await withServer({ spec }, async (server, base) => {
+      const created = await fetch(`${base}/api/things/`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ thing: { id: "slash", name: "Created" } }),
+      });
+      expect(created.status).toBe(201);
+      expect(await created.json()).toEqual({ thing: { id: "slash", name: "Created" } });
+      expect(await (await fetch(`${base}/api/things/slash`)).json()).toEqual({
+        thing: { id: "slash", name: "Created" },
+      });
+      expect(await server.backend.get("/api/things/", "slash")).toEqual({
+        id: "slash",
+        name: "Created",
+      });
+      expect(await server.backend.has("/api/things")).toBe(false);
+    });
+  });
+
+  test("slash seed keys survive sqlite restart without phantom non-slash collections", async () => {
+    const spec = slashSpec();
+    const state = sqliteFile();
+    const seed = join(dir, "slash-seed.json");
+    await writeFile(
+      seed,
+      JSON.stringify({
+        "/api/things/": [{ id: "seeded", name: "Original" }],
+        "/api/things": [{ id: "phantom" }],
+      }),
+    );
+    const logs: string[] = [];
+    await withServer(
+      { spec, state, seed, log: (line) => logs.push(line) },
+      async (server, base) => {
+        expect(server.seeded).toBe(1);
+        expect(logs.some((line) => line.includes("'/api/things' matches no route"))).toBe(true);
+        const patched = await fetch(`${base}/api/things/seeded`, {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ thing: { name: "Updated" } }),
+        });
+        expect(patched.status).toBe(200);
+        expect(await patched.json()).toEqual({ thing: { id: "seeded", name: "Updated" } });
+      },
+    );
+    await withServer({ spec, state, seed }, async (server, base) => {
+      expect(server.seeded).toBe(0);
+      expect(await (await fetch(`${base}/api/things/seeded`)).json()).toEqual({
+        thing: { id: "seeded", name: "Updated" },
+      });
+      expect((await fetch(`${base}/api/things/absent`)).status).toBe(404);
+      expect((await fetch(`${base}/api/things/seeded`, { method: "DELETE" })).status).toBe(204);
+      expect(await (await fetch(`${base}/api/things/`)).json()).toEqual({ things: [] });
+    });
+  });
+});
+
 describe("cli --state/--seed args", () => {
   // A path that cannot load — proves conflicts and scheme checks run BEFORE loadSpec
   // (a load attempt would exit 1, not 2).

@@ -126,6 +126,7 @@ function overrideResponse(o: MockOverride): Response {
 
 export async function startServer(opts: ServerOptions): Promise<RunningServer> {
   const routes = buildRoutes(opts.spec);
+  const templates = new Set(Object.keys(opts.spec.paths ?? {}));
   const log = opts.log ?? ((line) => process.stderr.write(`${line}\n`));
   const { backend, map: state } = openStateBackend(opts.state);
   const envelopes = computeEnvelopes(routes, opts.spec);
@@ -136,7 +137,7 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
   let seeded = 0;
   if (opts.seed !== undefined) {
     try {
-      seeded = await applySeed(opts.seed, backend, routes, log);
+      seeded = await applySeed(opts.seed, backend, routes, templates, log);
     } catch (err) {
       await backend.close();
       throw err;
@@ -171,7 +172,7 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
     route: Route,
     params: Record<string, string>,
   ): Promise<Response | null> {
-    const { key: collectionKey, isItem: isItemPath } = collectionKeyOf(route.template);
+    const { key: collectionKey, isItem: isItemPath } = collectionKeyOf(route.template, templates);
     const env = envelopes.get(collectionKey) ?? FLAT_ENVELOPE;
     // Request bodies may arrive under the request envelope ({thing: {…}}).
     const unwrapReq = (b: Record<string, unknown>): Record<string, unknown> => {
@@ -572,6 +573,7 @@ async function applySeed(
   seedPath: string,
   backend: StateBackend,
   routes: Route[],
+  templates: ReadonlySet<string>,
   log: (line: string) => void,
 ): Promise<number> {
   const file = Bun.file(seedPath);
@@ -586,7 +588,7 @@ async function applySeed(
     throw new Error(`seed file ${seedPath} must be a JSON object of collection -> item[]`);
   }
 
-  const knownCollections = new Set(routes.map((r) => collectionKeyOf(r.template).key));
+  const knownCollections = new Set(routes.map((r) => collectionKeyOf(r.template, templates).key));
   let inserted = 0;
   for (const [collection, items] of Object.entries(parsed)) {
     if (!knownCollections.has(collection)) {

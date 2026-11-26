@@ -26,9 +26,18 @@ export const FLAT_ENVELOPE: EnvelopeInfo = { create: null, item: null, req: null
 // collection key is "/things" — the same key a bare "/things" template maps to.
 const TRAILING_PARAM = /\/\{[^/}]+\}$/;
 
-export function collectionKeyOf(template: string): { key: string; isItem: boolean } {
+export function collectionKeyOf(
+  template: string,
+  templates: ReadonlySet<string> = new Set(),
+): { key: string; isItem: boolean } {
   const isItem = TRAILING_PARAM.test(template);
-  return { key: isItem ? template.replace(TRAILING_PARAM, "") : template, isItem };
+  const key = isItem ? template.replace(TRAILING_PARAM, "") : template;
+  // Keep explicitly distinct resources separate. Only associate with the
+  // slash collection when the conventional non-slash path is undocumented.
+  return {
+    key: isItem && !templates.has(key) && templates.has(`${key}/`) ? `${key}/` : key,
+    isItem,
+  };
 }
 
 /**
@@ -46,8 +55,9 @@ export function detectEnvelopeKey(body: unknown): string | null {
 export function computeEnvelopes(routes: Route[], spec: OpenApiSpec): Map<string, EnvelopeInfo> {
   const posts = new Map<string, Route>();
   const itemGets = new Map<string, Route>();
+  const templates = new Set(Object.keys(spec.paths ?? {}));
   for (const r of routes) {
-    const { key, isItem } = collectionKeyOf(r.template);
+    const { key, isItem } = collectionKeyOf(r.template, templates);
     if (!isItem && r.method === "POST" && !posts.has(key)) posts.set(key, r);
     if (isItem && r.method === "GET" && !itemGets.has(key)) itemGets.set(key, r);
   }
