@@ -42,6 +42,7 @@ import {
   resolveIndentUnit,
   styleForBiomeConfig,
 } from "../src/genFixtures/indent";
+import { required } from "./support/required";
 
 const ENTRY = `${import.meta.dir}/../src/index.ts`;
 
@@ -739,14 +740,16 @@ const FLOWS_SETUP_NATIVE = [
   "    // Flows carry exactly ONE auth header ($GEN_AUTH_HEADER) — silently",
   "    // dropping the rest would make every generated request fail mysteriously.",
   "    throw new Error(",
-  "      `gen flows: headersFor(ctx, 'member') returned ${auth.length} auth headers (${auth",
+  "      `gen flows: headersFor(ctx, 'member') returned $" +
+    "{auth.length} auth headers ($" +
+    "{auth",
   "        .map(([k]) => k)",
   "        .join(",
   '          ", ",',
   "        )}) — generated flows can send only one; reduce headersFor to a single auth header`,",
   "    );",
   "  }",
-  "  process.env.GEN_AUTH_HEADER = `${auth[0]![0]}: ${auth[0]![1]}`;",
+  "  process.env.GEN_AUTH_HEADER = `$" + "{auth[0]![0]}: $" + "{auth[0]![1]}`;",
   '  process.env.GEN_URL_API_THINGS = resolvePath(ctx, "/api/things");',
   "}",
 ];
@@ -770,14 +773,16 @@ const FLOWS_SETUP_TAB = [
   "\t\t// Flows carry exactly ONE auth header ($GEN_AUTH_HEADER) — silently",
   "\t\t// dropping the rest would make every generated request fail mysteriously.",
   "\t\tthrow new Error(",
-  "\t\t\t`gen flows: headersFor(ctx, 'member') returned ${auth.length} auth headers (${auth",
+  "\t\t\t`gen flows: headersFor(ctx, 'member') returned $" +
+    "{auth.length} auth headers ($" +
+    "{auth",
   "\t\t\t\t.map(([k]) => k)",
   "\t\t\t\t.join(",
   '\t\t\t\t\t", ",',
   "\t\t\t\t)}) — generated flows can send only one; reduce headersFor to a single auth header`,",
   "\t\t);",
   "\t}",
-  "\tprocess.env.GEN_AUTH_HEADER = `${auth[0]![0]}: ${auth[0]![1]}`;",
+  "\tprocess.env.GEN_AUTH_HEADER = `$" + "{auth[0]![0]}: $" + "{auth[0]![1]}`;",
   '\tprocess.env.GEN_URL_API_THINGS = resolvePath(ctx, "/api/things");',
   "}",
 ];
@@ -801,14 +806,16 @@ const FLOWS_SETUP_SPACE4 = [
   "        // Flows carry exactly ONE auth header ($GEN_AUTH_HEADER) — silently",
   "        // dropping the rest would make every generated request fail mysteriously.",
   "        throw new Error(",
-  "            `gen flows: headersFor(ctx, 'member') returned ${auth.length} auth headers (${auth",
+  "            `gen flows: headersFor(ctx, 'member') returned $" +
+    "{auth.length} auth headers ($" +
+    "{auth",
   "                .map(([k]) => k)",
   "                .join(",
   '                    ", ",',
   "                )}) — generated flows can send only one; reduce headersFor to a single auth header`,",
   "        );",
   "    }",
-  "    process.env.GEN_AUTH_HEADER = `${auth[0]![0]}: ${auth[0]![1]}`;",
+  "    process.env.GEN_AUTH_HEADER = `$" + "{auth[0]![0]}: $" + "{auth[0]![1]}`;",
   '    process.env.GEN_URL_API_THINGS = resolvePath(ctx, "/api/things");',
   "}",
 ];
@@ -831,12 +838,14 @@ const FLOWS_SETUP_LEGACY = [
   "    // Flows carry exactly ONE auth header ($GEN_AUTH_HEADER) — silently",
   "    // dropping the rest would make every generated request fail mysteriously.",
   "    throw new Error(",
-  "      `gen flows: headersFor(ctx, 'member') returned ${auth.length} auth headers (${auth",
+  "      `gen flows: headersFor(ctx, 'member') returned $" +
+    "{auth.length} auth headers ($" +
+    "{auth",
   "        .map(([k]) => k)",
   '        .join(", ")}) — generated flows can send only one; reduce headersFor to a single auth header`,',
   "    );",
   "  }",
-  "  process.env.GEN_AUTH_HEADER = `${auth[0]![0]}: ${auth[0]![1]}`;",
+  "  process.env.GEN_AUTH_HEADER = `$" + "{auth[0]![0]}: $" + "{auth[0]![1]}`;",
   '  process.env.GEN_URL_API_THINGS = resolvePath(ctx, "/api/things");',
   "}",
 ];
@@ -906,9 +915,9 @@ describe("generateFixtures: a biome.json above --out governs the emit", () => {
       setup: join(proj, "setup.ts"),
       log: (l) => logs.push(l),
     });
-    const widgets = (await Bun.file(result.files.find((f) => f.includes("widgets"))!).text()).split(
-      "\n",
-    );
+    const widgets = (
+      await Bun.file(required(result.files.find((f) => f.includes("widgets")))).text()
+    ).split("\n");
     // Header + the whole first entry, byte for byte.
     expect(widgets.slice(0, WIDGETS_HEADER.length + WIDGETS_ENTRY_401_TAB.length)).toEqual([
       ...WIDGETS_HEADER,
@@ -931,7 +940,7 @@ describe("generateFixtures: a biome.json above --out governs the emit", () => {
       log: () => {},
     });
     const text = await Bun.file(join(proj, "tests", "gen2", "flows", "flows.gen.setup.ts")).text();
-    expect(text).toBe(FLOWS_SETUP_TAB.join("\n") + "\n");
+    expect(text).toBe(`${FLOWS_SETUP_TAB.join("\n")}\n`);
   });
 });
 
@@ -953,9 +962,9 @@ describe("generateFixtures: a space/indentWidth-4 project governs the emit", () 
       setup: join(proj, "setup.ts"),
       log: (l) => logs.push(l),
     });
-    const widgets = (await Bun.file(result.files.find((f) => f.includes("widgets"))!).text()).split(
-      "\n",
-    );
+    const widgets = (
+      await Bun.file(required(result.files.find((f) => f.includes("widgets")))).text()
+    ).split("\n");
     expect(widgets.slice(0, WIDGETS_HEADER.length + WIDGETS_ENTRY_401_SPACE4.length)).toEqual([
       ...WIDGETS_HEADER,
       ...WIDGETS_ENTRY_401_SPACE4,
@@ -981,7 +990,7 @@ describe("generateFixtures: a space/indentWidth-4 project governs the emit", () 
       log: () => {},
     });
     const text = await Bun.file(join(proj, "tests", "gen2", "flows", "flows.gen.setup.ts")).text();
-    expect(text).toBe(FLOWS_SETUP_SPACE4.join("\n") + "\n");
+    expect(text).toBe(`${FLOWS_SETUP_SPACE4.join("\n")}\n`);
   });
 });
 
@@ -1012,9 +1021,9 @@ describe("generateFixtures: no biome.json in the out tree, the cwd's biome.json 
       setup: join(proj, "setup.ts"),
       log: (l) => logs.push(l),
     });
-    const widgets = (await Bun.file(result.files.find((f) => f.includes("widgets"))!).text()).split(
-      "\n",
-    );
+    const widgets = (
+      await Bun.file(required(result.files.find((f) => f.includes("widgets")))).text()
+    ).split("\n");
     expect(widgets.slice(0, WIDGETS_HEADER.length + WIDGETS_ENTRY_401_NATIVE.length)).toEqual([
       ...WIDGETS_HEADER,
       ...WIDGETS_ENTRY_401_NATIVE,
@@ -1035,7 +1044,7 @@ describe("generateFixtures: no biome.json in the out tree, the cwd's biome.json 
       log: () => {},
     });
     const text = await Bun.file(join(proj, "tests", "gen2", "flows", "flows.gen.setup.ts")).text();
-    expect(text).toBe(FLOWS_SETUP_NATIVE.join("\n") + "\n");
+    expect(text).toBe(`${FLOWS_SETUP_NATIVE.join("\n")}\n`);
   });
 });
 
@@ -1092,7 +1101,7 @@ describe("gen-fixtures subprocess: a clean tree keeps the legacy 2-space form", 
     ).toEqual([...WIDGETS_HEADER_LEGACY, ...WIDGETS_ENTRY_401_LEGACY]);
     expect(widgets.join("\n")).not.toMatch(/\t/);
     const setup = await Bun.file(join(out, "flows", "flows.gen.setup.ts")).text();
-    expect(setup).toBe(FLOWS_SETUP_LEGACY.join("\n") + "\n");
+    expect(setup).toBe(`${FLOWS_SETUP_LEGACY.join("\n")}\n`);
   });
 });
 
@@ -1120,16 +1129,16 @@ describe("generateFixtures: the consumer-shaped config resolves like the tab con
       setup: join(proj, "setup.ts"),
       log: (l) => logs.push(l),
     });
-    const widgets = (await Bun.file(result.files.find((f) => f.includes("widgets"))!).text()).split(
-      "\n",
-    );
+    const widgets = (
+      await Bun.file(required(result.files.find((f) => f.includes("widgets")))).text()
+    ).split("\n");
     expect(widgets.slice(0, WIDGETS_HEADER.length + WIDGETS_ENTRY_401_TAB.length)).toEqual([
       ...WIDGETS_HEADER,
       ...WIDGETS_ENTRY_401_TAB,
     ]);
     for (const line of WIDGETS_LATER_LINES.tab) expect(widgets).toContain(line);
     const flows = await Bun.file(join(proj, "tests", "gen", "flows", "flows.gen.setup.ts")).text();
-    expect(flows).toBe(FLOWS_SETUP_TAB.join("\n") + "\n");
+    expect(flows).toBe(`${FLOWS_SETUP_TAB.join("\n")}\n`);
     // The tab unit is not biome's default, so the indent is disclosed.
     expect(logs).toEqual([
       `gen-fixtures: emitting with tab indent (biome.json at ${join(proj, "biome.json")})`,
@@ -1165,7 +1174,7 @@ describe('gen-fixtures subprocess: organizeImports "off" keeps the code-point so
     ]);
     for (const line of WIDGETS_LATER_LINES.tab) expect(widgets).toContain(line);
     const setup = await Bun.file(join(out, "flows", "flows.gen.setup.ts")).text();
-    expect(setup).toBe(FLOWS_SETUP_TAB.join("\n") + "\n");
+    expect(setup).toBe(`${FLOWS_SETUP_TAB.join("\n")}\n`);
   });
 });
 
@@ -1195,7 +1204,7 @@ describe("gen-fixtures subprocess: the project's biome.json governs", () => {
     ]);
     expect(widgets.join("\n")).not.toMatch(/^ /m);
     const setup = await Bun.file(join(out, "flows", "flows.gen.setup.ts")).text();
-    expect(setup).toBe(FLOWS_SETUP_TAB.join("\n") + "\n");
+    expect(setup).toBe(`${FLOWS_SETUP_TAB.join("\n")}\n`);
   });
 });
 
@@ -1228,7 +1237,7 @@ describe("gen-fixtures subprocess: a space/4 project's biome.json governs", () =
     expect(text).not.toMatch(/^ {2}(?! )/m);
     expect(text).not.toMatch(/^ {6}(?! )/m);
     const setup = await Bun.file(join(out, "flows", "flows.gen.setup.ts")).text();
-    expect(setup).toBe(FLOWS_SETUP_SPACE4.join("\n") + "\n");
+    expect(setup).toBe(`${FLOWS_SETUP_SPACE4.join("\n")}\n`);
   });
 });
 
@@ -1281,6 +1290,6 @@ describe("gen-fixtures subprocess: --out outside the working project falls back 
     ]);
     expect(widgets.join("\n")).not.toMatch(/^ /m);
     const setup = await Bun.file(join(elsewhere, "gen", "flows", "flows.gen.setup.ts")).text();
-    expect(setup).toBe(FLOWS_SETUP_TAB_OUTSIDE.join("\n") + "\n");
+    expect(setup).toBe(`${FLOWS_SETUP_TAB_OUTSIDE.join("\n")}\n`);
   });
 });

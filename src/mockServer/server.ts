@@ -126,7 +126,7 @@ function overrideResponse(o: MockOverride): Response {
 
 export async function startServer(opts: ServerOptions): Promise<RunningServer> {
   const routes = buildRoutes(opts.spec);
-  const log = opts.log ?? ((line) => process.stderr.write(line + "\n"));
+  const log = opts.log ?? ((line) => process.stderr.write(`${line}\n`));
   const { backend, map: state } = openStateBackend(opts.state);
   const envelopes = computeEnvelopes(routes, opts.spec);
   const violations: Violation[] = [];
@@ -152,9 +152,10 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
       violations.shift();
       dropped++;
     }
-    if (opts.report) {
+    const report = opts.report;
+    if (report) {
       reportQueue = reportQueue
-        .then(() => appendFile(opts.report!, `${JSON.stringify(v)}\n`))
+        .then(() => appendFile(report, `${JSON.stringify(v)}\n`))
         .catch(() => {});
       await reportQueue;
     }
@@ -208,7 +209,7 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
         if (isPlainObject(synth)) {
           const arrayProps = Object.keys(synth).filter((k) => Array.isArray(synth[k]));
           if (arrayProps.length === 1) {
-            return jsonResponse(picked.status, { ...synth, [arrayProps[0]!]: items });
+            return jsonResponse(picked.status, { ...synth, [arrayProps[0]]: items });
           }
         }
         return jsonResponse(picked.status, items);
@@ -218,7 +219,7 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
 
     if (!(await backend.has(collectionKey))) return null;
     const names = paramNames(route.template);
-    const id = params[names[names.length - 1]!] ?? "";
+    const id = params[names[names.length - 1]] ?? "";
     const item = await backend.get(collectionKey, id);
 
     if (route.method === "GET") {
@@ -239,7 +240,8 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
     return null;
   }
 
-  const proxyMode = typeof opts.proxy === "string" && opts.proxy.length > 0;
+  const proxy = opts.proxy;
+  const proxyMode = typeof proxy === "string" && proxy.length > 0;
   const validateMode = opts.validate === true;
   const statefulMode =
     opts.stateful === true || opts.state !== undefined || opts.seed !== undefined;
@@ -250,7 +252,7 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
   const takeOverride = (method: string, pathname: string, rawBody: ArrayBuffer | null) => {
     const m = method.toUpperCase();
     for (let i = 0; i < overrides.length; i++) {
-      const o = overrides[i]!;
+      const o = overrides[i];
       if (o.method !== m || o.path !== pathname) continue;
       if (o.match?.bodyContains !== undefined) {
         const text = rawBody ? new TextDecoder().decode(rawBody) : "";
@@ -395,7 +397,7 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
               url,
               req.headers,
               rawBody,
-              opts.proxy!,
+              proxy,
               opts.proxyTimeoutMs ?? DEFAULT_PROXY_TIMEOUT_MS,
             );
             if (lookup.matched) {
@@ -597,7 +599,7 @@ async function applySeed(
     // Empty-only: collections that already have rows are left untouched.
     if (await backend.has(collection)) continue;
     for (let i = 0; i < items.length; i++) {
-      const item = items[i]!;
+      const item = items[i];
       if (!isPlainObject(item)) {
         throw new Error(`seed collection '${collection}' contains a non-object item`);
       }

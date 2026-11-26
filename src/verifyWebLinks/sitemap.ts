@@ -19,14 +19,15 @@ export interface DiscoverResult {
 }
 
 export async function discoverSeeds(opts: DiscoverOpts): Promise<DiscoverResult> {
-  if (opts.sitemapUrl) {
-    const body = await loadSitemapBody(opts.sitemapUrl, opts);
+  const sitemapUrl = opts.sitemapUrl;
+  if (sitemapUrl) {
+    const body = await loadSitemapBody(sitemapUrl, opts);
     const seeds = await parseSitemap(body, opts);
     if (seeds.length === 0) throw new Error(`sitemap at ${opts.sitemapUrl} contained no URLs`);
     return {
       seeds,
-      origin: new URL(seeds[0]!),
-      seedSources: seeds.map((url) => ({ url, sitemap: opts.sitemapUrl! })),
+      origin: new URL(seeds[0]),
+      seedSources: seeds.map((url) => ({ url, sitemap: sitemapUrl })),
     };
   }
 
@@ -129,7 +130,7 @@ function extractLocs(xml: string): string[] {
   const out: string[] = [];
   const re = /<loc>\s*([^<]+?)\s*<\/loc>/gi;
   for (const m of xml.matchAll(re)) {
-    out.push(decodeXmlEntities(m[1]!));
+    out.push(decodeXmlEntities(m[1]));
   }
   return out;
 }

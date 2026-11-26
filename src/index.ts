@@ -31,7 +31,7 @@ usage:
   crust                    start interactive REPL
   crust <tool> <args…>     run one tool as a command (skills, mock-server,
                            verify-web-links, gen-fixtures, test-fixture,
-                           test-pipes) — the same verbs as at the REPL. The
+                           test-pipes, site) — the same verbs as at the REPL. The
                            session verbs (cd, export, alias, source, dotenv,
                            logs) are not: they need a running session.
   crust <file.crust>       run a script file and exit
@@ -121,7 +121,7 @@ async function main(): Promise<void> {
   {
     const i = argv.findIndex((a) => a === "--env-file" || a.startsWith("--env-file="));
     if (i !== -1) {
-      const a = argv[i]!;
+      const a = argv[i];
       if (a.startsWith("--env-file=")) {
         envFile = a.slice("--env-file=".length);
         argv.splice(i, 1);
@@ -141,7 +141,7 @@ async function main(): Promise<void> {
   }
 
   if (argv.length > 0) {
-    const flag = argv[0]!;
+    const flag = argv[0];
     if (flag === "-h" || flag === "--help") {
       process.stdout.write(USAGE);
       process.exit(0);
@@ -188,7 +188,7 @@ async function main(): Promise<void> {
       const ctx = await bootstrapCtx([], envFile);
       // Fail fast: stop at the first failing line and exit with ITS code —
       // previously a later success masked an earlier failure.
-      await shutdown(await runLines(argv[1]!, ctx));
+      await shutdown(await runLines(argv[1], ctx));
     }
     // Parse without running: the linter for documented examples. Building a
     // pipeline touches no filesystem and runs nothing — every source is a lazy
@@ -209,7 +209,7 @@ async function main(): Promise<void> {
       // Same line-splitting as the runtime, so what the linter checks is what
       // crust runs — including `\` continuation, which is how the multi-line
       // examples in docs and on the website are written.
-      for (const raw of splitLines(argv[1]!)) {
+      for (const raw of splitLines(argv[1])) {
         const line = raw.trim();
         if (!line || line.startsWith("#")) continue;
         // A builtin line is not a pipeline — the parser would classify it as an

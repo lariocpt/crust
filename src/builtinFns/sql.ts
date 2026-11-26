@@ -27,7 +27,7 @@ function getClient(): BunSqlTemplate {
     cachedClient = new SQL(url);
     return cachedClient;
   }
-  if (bunSql && bunSql.unsafe) {
+  if (bunSql?.unsafe) {
     cachedClient = bunSql;
     return cachedClient;
   }

@@ -14,6 +14,7 @@ import {
 import { matchesPattern, PATTERN_FALLBACK, sampleFromPattern } from "../src/mockServer/schemaTypes";
 import { startServer } from "../src/mockServer/server";
 import { validateSchema } from "../src/mockServer/validateRequest";
+import { required } from "./support/required";
 
 const minimalSpec = {
   openapi: "3.0.0",
@@ -108,7 +109,7 @@ describe("loadSpec", () => {
     const { spec, origin } = await loadSpec(path);
     expect(origin).toBe(path);
     expect(spec.paths).toBeTruthy();
-    expect(Object.keys(spec.paths!).length).toBeGreaterThan(0);
+    expect(Object.keys(required(spec.paths)).length).toBeGreaterThan(0);
   });
 
   test("loads YAML from a local file", async () => {
@@ -141,7 +142,7 @@ describe("loadSpec", () => {
     });
     try {
       const { spec } = await loadSpec(`http://localhost:${server.port}/spec.json`);
-      expect(spec.paths!["/pets"]).toBeTruthy();
+      expect(required(spec.paths)["/pets"]).toBeTruthy();
     } finally {
       server.stop();
     }
@@ -236,21 +237,21 @@ describe("response synthesis", () => {
   const spec = minimalSpec as unknown as OpenApiSpec;
 
   test("picks 200 by preference", () => {
-    const op = spec.paths!["/pets"]!.get!;
+    const op = required(spec.paths)["/pets"].get;
     const picked = pickResponse(op);
     expect(picked.status).toBe(200);
     expect(picked.media).toBeTruthy();
   });
 
   test("uses provided example when present", () => {
-    const op = spec.paths!["/pets"]!.post!;
+    const op = required(spec.paths)["/pets"].post;
     const picked = pickResponse(op);
     const body = synthesizeBody(picked.media, spec);
     expect(body).toEqual({ id: 42, name: "Rex" });
   });
 
   test("walks schema $ref and applies defaults + enum first", () => {
-    const op = spec.paths!["/pets/{id}"]!.get!;
+    const op = required(spec.paths)["/pets/{id}"].get;
     const picked = pickResponse(op);
     const body = synthesizeBody(picked.media, spec) as Record<string, unknown>;
     expect(body.id).toBe(0);
@@ -259,7 +260,7 @@ describe("response synthesis", () => {
   });
 
   test("synthesises arrays of $ref items", () => {
-    const op = spec.paths!["/pets"]!.get!;
+    const op = required(spec.paths)["/pets"].get;
     const picked = pickResponse(op);
     const body = synthesizeBody(picked.media, spec) as unknown[];
     expect(Array.isArray(body)).toBe(true);
@@ -291,7 +292,9 @@ describe("response synthesis", () => {
       },
     };
     const body = synthesizeBody(
-      cyclic.paths!["/x"]!.get!.responses!["200"]!.content!["application/json"]!,
+      required(required(required(cyclic.paths)["/x"].get.responses)["200"].content)[
+        "application/json"
+      ],
       cyclic,
     ) as Record<string, unknown>;
     // This assertion used to read `toBeNull()`. Terminating the recursion is still the point, but
@@ -302,7 +305,7 @@ describe("response synthesis", () => {
   });
 
   test("204 path has no body to synthesise", () => {
-    const op = spec.paths!["/pets/{id}"]!.delete!;
+    const op = required(spec.paths)["/pets/{id}"].delete;
     const picked = pickResponse(op);
     expect(picked.status).toBe(204);
     expect(picked.media).toBeNull();
@@ -335,7 +338,9 @@ describe("response synthesis", () => {
       },
     };
     const body = synthesizeBody(
-      local.paths!["/x"]!.get!.responses!["200"]!.content!["application/json"]!,
+      required(required(required(local.paths)["/x"].get.responses)["200"].content)[
+        "application/json"
+      ],
       local,
     ) as Record<string, string>;
     expect(body.email).toBe("user@example.com");
@@ -530,7 +535,7 @@ describe("stateful mode", () => {
         items: Array<{ name: string }>;
       };
       // still the spec example, not the posted item
-      expect(list.items[0]!.name).toBe("Example");
+      expect(list.items[0].name).toBe("Example");
       expect(server.state.size).toBe(0);
     } finally {
       await server.stop();
@@ -809,7 +814,7 @@ describe("$ref'd response objects", () => {
   } as unknown as OpenApiSpec;
 
   test("the documented body is synthesised, not null", () => {
-    const route = buildRoutes(refSpec)[0]!;
+    const route = buildRoutes(refSpec)[0];
     const picked = pickResponse(route.operation, refSpec);
     expect(picked.media).not.toBeNull();
     const body = synthesizeBody(picked.media, refSpec) as Record<string, unknown>;
@@ -818,7 +823,7 @@ describe("$ref'd response objects", () => {
   });
 
   test("and it self-conforms: the validator accepts what the mock produced", () => {
-    const route = buildRoutes(refSpec)[0]!;
+    const route = buildRoutes(refSpec)[0];
     const picked = pickResponse(route.operation, refSpec);
     const schema = (picked.media as { schema?: unknown })?.schema;
     const body = synthesizeBody(picked.media, refSpec);
@@ -842,7 +847,7 @@ describe("$ref'd response objects", () => {
         },
       },
     } as unknown as OpenApiSpec;
-    const route = buildRoutes(inline)[0]!;
+    const route = buildRoutes(inline)[0];
     expect(pickResponse(route.operation, inline).media).not.toBeNull();
   });
 });
@@ -852,7 +857,7 @@ describe("$ref'd response objects", () => {
 // openconcho's 41 checkable operations failed this way — page/size pagination fields. genFixtures'
 // validValue already honoured minimum; the mock did not.
 describe("numeric bounds in synthesised bodies", () => {
-  const wrap = (schema: unknown) =>
+  const wrap = (_schema: unknown) =>
     ({ openapi: "3.1.0", info: { title: "n", version: "1" }, paths: {} }) as unknown as OpenApiSpec;
 
   test("minimum is honoured", () => {
@@ -1133,7 +1138,7 @@ describe("pattern sampling", () => {
             schema: { type: "object", properties: { v: { type: "string", pattern, ...extra } } },
           } as never,
           wrap,
-        ) as any
+        ) as { v: unknown }
       ).v,
     );
 
@@ -2609,10 +2614,16 @@ describe("the truncation warning does not claim validity it cannot deliver", () 
   const build = () => {
     const schemas: Record<string, unknown> = {};
     schemas.Word = { type: "string" };
-    const leaf: any = { type: "object", properties: {} };
+    const leaf: { type: string; properties: Record<string, unknown> } = {
+      type: "object",
+      properties: {},
+    };
     for (let i = 0; i < 10; i++) leaf.properties[`f${i}`] = { $ref: "#/components/schemas/Word" };
     schemas.Leaf = leaf;
-    const mid: any = { type: "object", properties: {} };
+    const mid: { type: string; properties: Record<string, unknown> } = {
+      type: "object",
+      properties: {},
+    };
     for (let i = 0; i < 70; i++)
       mid.properties[`m${i}`] = {
         type: "array",
@@ -2631,7 +2642,11 @@ describe("the truncation warning does not claim validity it cannot deliver", () 
       properties: { needed: { $ref: "#/components/schemas/Word" } },
     };
     schemas.Tail = { type: "array", minItems: 1, items: { $ref: "#/components/schemas/Strict" } };
-    const top: any = { type: "object", required: ["tail"], properties: {} };
+    const top: { type: string; required: string[]; properties: Record<string, unknown> } = {
+      type: "object",
+      required: ["tail"],
+      properties: {},
+    };
     for (let i = 0; i < 70; i++)
       top.properties[`t${i}`] = {
         type: "array",
@@ -2647,16 +2662,16 @@ describe("the truncation warning does not claim validity it cannot deliver", () 
     const spec = build();
     const written: string[] = [];
     const real = process.stderr.write.bind(process.stderr);
-    (process.stderr as any).write = (chunk: any) => {
+    process.stderr.write = (chunk: string | Uint8Array) => {
       written.push(String(chunk));
       return true;
     };
     try {
-      const body = synthesizeBody({ schema: { $ref: "#/components/schemas/Top" } } as any, spec);
-      const top = (spec as any).components.schemas.Top;
+      const body = synthesizeBody({ schema: { $ref: "#/components/schemas/Top" } }, spec);
+      const top = spec.components?.schemas?.Top;
       return { body, errs: validateSchema(body, top, spec, ""), warning: written.join("") };
     } finally {
-      (process.stderr as any).write = real;
+      process.stderr.write = real;
     }
   };
 
@@ -2667,7 +2682,7 @@ describe("the truncation warning does not claim validity it cannot deliver", () 
   // The behaviour the claim was wrong about. True before and after the fix — the control that
   // proves the warning had something real to be wrong about.
   test("a budget-truncated body can violate its own schema", () => {
-    expect((once.body as any).tail).toEqual([]);
+    expect((once.body as { tail: unknown }).tail).toEqual([]);
     expect(once.errs.map((e) => e.rule)).toContain("minItems");
   });
 
@@ -2725,10 +2740,9 @@ describe("a cycle through an allOf-wrapped array still honours minItems", () => 
     }) as unknown as OpenApiSpec;
 
   const innerItems = (s: OpenApiSpec) => {
-    const body: any = synthesizeBody(
-      { schema: { $ref: "#/components/schemas/Section" } } as any,
-      s,
-    );
+    const body = synthesizeBody({ schema: { $ref: "#/components/schemas/Section" } }, s) as {
+      Items?: { Section?: { Items?: unknown[] } }[];
+    } | null;
     return body?.Items?.[0]?.Section?.Items;
   };
 
@@ -2736,8 +2750,9 @@ describe("a cycle through an allOf-wrapped array still honours minItems", () => 
     const s = spec([]);
     const items = innerItems(s);
     expect(Array.isArray(items)).toBe(true);
+    if (!items) throw new Error("expected terminating section items");
     expect(items.length).toBeGreaterThanOrEqual(1);
-    expect(validateSchema(items[0], (s as any).components.schemas.Item, s, "")).toHaveLength(0);
+    expect(validateSchema(items[0], s.components?.schemas?.Item, s, "")).toHaveLength(0);
   });
 
   // Control: honouring the bound with an element that carries none of its own required properties

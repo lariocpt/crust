@@ -181,7 +181,7 @@ describe("controls: the $(…) that belongs to sh", () => {
   });
 
   test("a template literal with a $ in a lambda body is untouched by the guard", async () => {
-    const r = await run("range(0,1) | (x => `n=${x}`)");
+    const r = await run("range(0,1) | (x => `n=$" + "{x}`)");
     expect(r.code).toBe(0);
     expect(r.stdout.trim().split("\n")).toEqual(["n=0", "n=1"]);
   });

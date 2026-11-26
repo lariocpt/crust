@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { Pipeline } from "../src/pipeline";
 import { GET, glob, load, range, read, tail } from "../src/sources";
 import { pidsMatching } from "./procFind";
+import { required } from "./support/required";
 
 // Can this kernel host an IPv6 loopback listener at all? Asked once, by trying:
 // Bun.listen({hostname:"::1"}) THROWS EADDRNOTAVAIL where IPv6 is disabled, so
@@ -314,8 +315,8 @@ describe("GET", () => {
     try {
       const responses = await GET(`http://localhost:${server.port}/`).collect();
       expect(responses).toHaveLength(1);
-      expect(responses[0]!.status).toBe(200);
-      expect(await responses[0]!.text()).toBe("ok");
+      expect(responses[0].status).toBe(200);
+      expect(await responses[0].text()).toBe("ok");
     } finally {
       server.stop();
     }
@@ -463,8 +464,8 @@ describe.concurrent("procs readiness and ordering", () => {
       );
       const ready = lines.find((l) => l.stream === "ready" && l.line.startsWith("ready after"));
       expect(ready).toBeDefined();
-      expect(ready!.proc).toBe("web");
-      expect(ready!.line).toMatch(/^ready after \d+ms \(http:\/\/localhost:/);
+      expect(required(ready).proc).toBe("web");
+      expect(required(ready).line).toMatch(/^ready after \d+ms \(http:\/\/localhost:/);
       expect(lines.some((l) => l.line.startsWith("not ready"))).toBe(false);
     } finally {
       srv.stop();
@@ -542,7 +543,7 @@ describe.concurrent("procs readiness and ordering", () => {
       );
       const ready = lines.find((l) => l.line.startsWith("ready after"));
       expect(ready).toBeDefined();
-      expect(ready!.line).toContain(`(port:${listener.port})`);
+      expect(required(ready).line).toContain(`(port:${listener.port})`);
     } finally {
       listener.stop(true);
     }
@@ -698,7 +699,7 @@ describe.concurrent("procs readiness and ordering", () => {
         probeTimeoutMs: 500,
       });
       expect(res).not.toBeNull();
-      expect(res!.attempts).toBe(1);
+      expect(required(res).attempts).toBe(1);
     } finally {
       server.stop(true);
     }
@@ -856,8 +857,8 @@ describe.concurrent("procs liveness", () => {
       expect(fail2).toBeLessThan(fatal);
       expect(fatal).toBeLessThan(exited);
       expect(exited).toBeLessThan(respawn);
-      expect(lines[fatal]!.stream).toBe("live");
-      expect(lines[fatal]!.line).toContain("— restarting");
+      expect(lines[fatal].stream).toBe("live");
+      expect(lines[fatal].line).toContain("— restarting");
     } finally {
       srv.stop();
     }
@@ -886,7 +887,7 @@ describe.concurrent("procs liveness", () => {
       );
       const recovered = lines.find((l) => l.line.startsWith("recovered after"));
       expect(recovered).toBeDefined();
-      expect(recovered!.line).toMatch(/^recovered after \d+ failed probe\(s\)/);
+      expect(required(recovered).line).toMatch(/^recovered after \d+ failed probe\(s\)/);
       expect(lines.some((l) => l.line.startsWith("unhealthy"))).toBe(false);
       expect(lines.some((l) => l.line.startsWith("exited"))).toBe(false);
     } finally {
@@ -948,7 +949,7 @@ describe.concurrent("procs liveness", () => {
         (l) => l.line.startsWith("giving up"),
       );
       expect(lines.filter((l) => l.line.startsWith("unhealthy")).length).toBe(2);
-      expect(lines.at(-1)!.line).toBe("giving up after 1 restart(s)");
+      expect(required(lines.at(-1)).line).toBe("giving up after 1 restart(s)");
     } finally {
       ok.stop();
       down.stop();
@@ -973,7 +974,7 @@ describe.concurrent("procs liveness", () => {
           // Injected floor: any pre-streak uptime counts as a healthy stretch.
           { healthyUptimeMs: 1 },
         ),
-        (l, all) => all.filter((x) => x.line.startsWith("unhealthy")).length >= 3,
+        (_line, all) => all.filter((x) => x.line.startsWith("unhealthy")).length >= 3,
       );
       expect(lines.some((l) => l.line.startsWith("giving up"))).toBe(false);
       expect(lines.filter((l) => l.line.startsWith("unhealthy")).length).toBe(3);
@@ -1013,7 +1014,7 @@ describe("procs kill escalation", () => {
     const iter = pipeline.lines()[Symbol.asyncIterator]();
     // First line proves the child is up and the SIGINT handler is installed.
     const first = await iter.next();
-    expect(first.value!.line).toBe("up");
+    expect(first.value.line).toBe("up");
     const added = process.listeners("SIGINT").filter((l) => !before.has(l));
     expect(added).toHaveLength(1);
     // Simulate Ctrl-C twice — the second call must reuse the in-flight
@@ -1047,8 +1048,8 @@ describe("load", () => {
     // targets: 4 + 8 = 12; wide tolerance for loaded CI hosts
     expect(ticks.length).toBeGreaterThanOrEqual(6);
     expect(ticks.length).toBeLessThanOrEqual(12);
-    expect(ticks[0]!.phase).toBe(0);
-    expect(ticks[ticks.length - 1]!.phase).toBe(1);
+    expect(ticks[0].phase).toBe(0);
+    expect(ticks[ticks.length - 1].phase).toBe(1);
     const ns = ticks.map((t) => t.n);
     expect(ns).toEqual([...ns].sort((a, b) => a - b));
     for (const t of ticks) expect(t.lagMs).toBeGreaterThanOrEqual(0);

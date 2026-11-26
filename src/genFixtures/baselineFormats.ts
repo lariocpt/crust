@@ -11,7 +11,7 @@ function calendarDate(value: string): boolean {
   if (year < 1 || month < 1 || month > 12 || day < 1) return false;
   const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
   const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-  return day <= days[month - 1]!;
+  return day <= days[month - 1];
 }
 
 function dateTime(value: string): boolean {
@@ -19,7 +19,7 @@ function dateTime(value: string): boolean {
     /^(\d{4}-\d{2}-\d{2})[Tt](\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:[Zz]|[+-](\d{2}):(\d{2}))$/.exec(
       value,
     );
-  if (!match || !calendarDate(match[1]!)) return false;
+  if (!match || !calendarDate(match[1])) return false;
   return (
     Number(match[2]) <= 23 &&
     Number(match[3]) <= 59 &&
@@ -55,17 +55,17 @@ function httpUri(value: string): boolean {
   const match = /^https?:\/\/([^/?#]+)([^?#]*)(?:\?([^#]*))?(?:#(.*))?$/i.exec(value);
   if (!match || /%(?![0-9a-f]{2})/i.test(value)) return false;
   const component = /^[A-Za-z0-9._~!$&'()*+,;=:@/%?-]*$/;
-  if (![match[2], match[3] ?? "", match[4] ?? ""].every((part) => component.test(part!))) {
+  if (![match[2], match[3] ?? "", match[4] ?? ""].every((part) => component.test(part))) {
     return false;
   }
-  const authority = /^([^:]+)(?::([0-9]+))?$/.exec(match[1]!);
-  if (!authority || !dnsName(authority[1]!)) return false;
+  const authority = /^([^:]+)(?::([0-9]+))?$/.exec(match[1]);
+  if (!authority || !dnsName(authority[1])) return false;
   if (authority[2] !== undefined && Number(authority[2]) > 65535) return false;
   try {
     const url = new URL(value);
     // Reject URL's alternate/normalized IPv4 spellings rather than proving
     // something other than the authority supplied in the static baseline.
-    return url.hostname === authority[1]!.toLowerCase();
+    return url.hostname === authority[1].toLowerCase();
   } catch {
     return false;
   }

@@ -108,6 +108,7 @@ describe("every tool builtin answers --help the same way", () => {
     "mock-server",
     "verify-web-links",
     "dotenv",
+    "site",
   ])("%s --help exits 0 with usage", async (name) => {
     const r = await cli(`${name} --help`);
     expect(r.code).toBe(0);

@@ -211,7 +211,7 @@ describe("filter classification", () => {
   test("pipe inside the lambda stays one stage", () => {
     const tokens = tokenize('range(0,3) | filter (l => l.includes("|") || l.ok)');
     expect(tokens.length).toBe(2);
-    expect(classify(tokens[1]!.text).kind).toBe("filter");
+    expect(classify(tokens[1].text).kind).toBe("filter");
   });
 
   test("bare filter and filter-with-flags fall through to shell", () => {
@@ -312,7 +312,7 @@ describe("review fixes — grammar", () => {
   test("backslash-escaped quotes inside double quotes stay one stage", () => {
     const tokens = tokenize('{"size":"6\\" nominal"} | POST :3000/x');
     expect(tokens).toHaveLength(2);
-    expect(classify(tokens[0]!.text).kind).toBe("json");
+    expect(classify(tokens[0].text).kind).toBe("json");
   });
 
   test("parallel 0 is a loud error, not a hang", () => {

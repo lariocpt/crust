@@ -69,7 +69,7 @@ function pickMedia(
   const content = node.content;
   if (!content) return { media: null, mediaType: null };
   if (content["application/json"]) {
-    return { media: content["application/json"]!, mediaType: "application/json" };
+    return { media: content["application/json"], mediaType: "application/json" };
   }
   for (const [type, v] of Object.entries(content)) if (v) return { media: v, mediaType: type };
   return { media: null, mediaType: null };

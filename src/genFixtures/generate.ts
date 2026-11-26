@@ -1691,7 +1691,7 @@ function emitFixture(
       const header = `data: (d: { code?: string; fieldErrors?: Record<string, unknown> }) =>`;
       const chain = `d.code === "validation" && d.fieldErrors !== undefined && ${fieldLit} in d.fieldErrors`;
       if (!style.legacy && fits(style, 3, `${header} ${chain},`)) {
-        lines.push(pad(3) + `${header} ${chain},`);
+        lines.push(`${pad(3)}${header} ${chain},`);
       } else {
         // Below the arrow (biome joins the one-liner only when it fits; the
         // legacy template always broke here — keep that shape byte for byte).
@@ -1858,7 +1858,7 @@ function deriveFlows(
     let itemTemplate = "";
     for (const k of templates) {
       if (!k.startsWith(template) || !/^\/\{[^/}]+\}$/.test(k.slice(template.length))) continue;
-      const m = paths[k]!;
+      const m = paths[k];
       const ops: ItemOps = { get: m.get, put: m.put, patch: m.patch, delete: m.delete };
       if (ops.get || ops.put || ops.patch || ops.delete) {
         itemOps = ops;
@@ -1886,7 +1886,7 @@ function deriveFlows(
     // Only the scope param may appear in the collection template — a nested
     // collection's parent id is not derivable from the spec alone.
     const params = [...template.matchAll(/\{(\w+)\}/g)].map((m) => m[1] as string);
-    const scoped = params.length > 0 && isScopeGated(template, params[0]!, scope);
+    const scoped = params.length > 0 && isScopeGated(template, params[0], scope);
     const extraParams = scoped ? params.slice(1) : params;
     if (extraParams.length > 0) {
       skipped.push({ template, reason: `nested path params {${extraParams.join("}, {")}}` });
@@ -1945,12 +1945,14 @@ function emitFlow(f: FlowPlan): string {
   const url = `$GEN_URL_${T}`;
   const itemUrl = `$GEN_URL_${T}/$GEN_ID_${T}`;
   const H = `-H "$GEN_AUTH_HEADER"`;
-  const bodySchema = f.post.requestBody!.content!["application/json"]!.schema!;
+  const bodySchema = f.post.requestBody?.content?.["application/json"]?.schema;
+  if (!bodySchema) throw new Error(`gen flows: missing JSON request schema for ${f.template}`);
   const base = { ...baseBody(bodySchema), ...f.bodyOverride };
   const lines: string[] = [];
   const steps: string[] = ["create"];
 
-  const postStatus = lowest2xx(f.post)!;
+  const postStatus = lowest2xx(f.post);
+  if (postStatus === null) throw new Error(`gen flows: missing success status for ${f.template}`);
   lines.push(
     `${JSON.stringify(base)} | POST ${url} ${H} | assert (r => r.status === ${postStatus}) | (r => r.json()) | capture GEN_ID_${T} (b => ${accessExpr("b", f.idPath)})`,
   );
@@ -2055,7 +2057,11 @@ function emitFlowsSetup(flows: FlowPlan[], specifier: string, style: EmitStyle):
     "throw ",
     "new Error",
     [
-      "`gen flows: headersFor(ctx, 'member') returned ${auth.length} auth headers (${auth\n" +
+      "`gen flows: headersFor(ctx, 'member') returned " +
+        "$" +
+        "{auth.length} auth headers (" +
+        "$" +
+        "{auth\n" +
         `${pad(4)}.map(([k]) => k)\n${pad(4)}${joinCall}`,
     ],
     ";",

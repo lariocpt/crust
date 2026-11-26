@@ -39,7 +39,7 @@ export function detectEnvelopeKey(body: unknown): string | null {
   if (!isPlainObject(body)) return null;
   if (Object.hasOwn(body, "id")) return null;
   const objectKeys = Object.keys(body).filter((k) => isPlainObject(body[k]));
-  return objectKeys.length === 1 ? objectKeys[0]! : null;
+  return objectKeys.length === 1 ? objectKeys[0] : null;
 }
 
 /** Per-collection envelope descriptors, computed once at startServer. */

@@ -248,7 +248,7 @@ export async function runLine(line: string, ctx: Context, tty?: ReplTty): Promis
     });
     if (tty) suspend.beginRun();
     try {
-      const result = await builtins[exHead]!(args, ctx);
+      const result = await builtins[exHead](args, ctx);
       return suspended ? 148 : fired ? 130 : (result ?? 0);
     } catch (err) {
       process.stderr.write(`crust: ${(err as Error).message}\n`);
@@ -306,7 +306,7 @@ export async function runLine(line: string, ctx: Context, tty?: ReplTty): Promis
       // must keep inherit-stdio `sh -c` byte-for-byte. The native stage only
       // engages mid-pipeline in MIXED pipelines — where block-buffering bites.
       if (kind.kind !== "shell" && kind.kind !== "grep") return false;
-      const h = t.text.trim().split(/\s+/)[0]!;
+      const h = t.text.trim().split(/\s+/)[0];
       return !ctx.functions.has(h);
     });
 
@@ -334,7 +334,7 @@ export async function runLine(line: string, ctx: Context, tty?: ReplTty): Promis
       // is for: `range(1,$(echo 3))` classifies as shell and would reach sh
       // as a syntax error. Mask the spans and reclassify; a genuine shell
       // head (`echo $(seq 3)`) masks back to shell and runs untouched.
-      rejectHiddenSubstitution(tokens[0]!.text);
+      rejectHiddenSubstitution(tokens[0].text);
       // One crust builtin among the stages and sh reports `command not found`
       // for a tool crust runs in-process. Check every stage, not just the head:
       // `echo hi | mock-server spec.json` is the common shape of this mistake.

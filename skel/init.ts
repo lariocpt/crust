@@ -4,7 +4,7 @@
 declare const crust: {
   alias(name: string, cmd: string): void;
   unalias(name: string): void;
-  fn(name: string, handler: (...args: any[]) => any): void;
+  fn<Args extends unknown[], Result>(name: string, handler: (...args: Args) => Result): void;
   prompt?: (cwd: string, gitBranch: string | null) => string;
   onBeforeStart?: () => void | Promise<void>;
   onExit?: (code: number) => void | Promise<void>;

@@ -129,7 +129,7 @@ describe("grepStage — matcher semantics", () => {
 
 describe("grep e2e in pipelines", () => {
   test("range | lambda | grep filters formatted items", async () => {
-    const got = await drain("range(1, 20) | (n => `item-${n}`) | grep 'item-1[0-9]'");
+    const got = await drain("range(1, 20) | (n => `item-$" + "{n}`) | grep 'item-1[0-9]'");
     expect(got).toEqual(Array.from({ length: 10 }, (_, i) => `item-1${i}`));
   });
 

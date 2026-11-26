@@ -447,7 +447,7 @@ export function isJsonContentType(contentType: string | null): boolean {
 
 function baseContentType(contentType: string | null | undefined): string | null {
   if (!contentType) return null;
-  const base = contentType.split(";")[0]!.trim().toLowerCase();
+  const base = contentType.split(";")[0].trim().toLowerCase();
   return base.length > 0 ? base : null;
 }
 
@@ -642,7 +642,8 @@ function validateParamValue(
   ctx: ViolationContext,
   opts: ValidateOpts = {},
 ): Violation[] {
-  const name = param.name!;
+  const name = param.name;
+  if (name === undefined) return [];
   const coerced = coerceByType(raw, declaredType(param.schema, spec));
   if (coerced.error) {
     return [
@@ -671,7 +672,8 @@ function validateQueryValues(
   ctx: ViolationContext,
   opts: ValidateOpts = {},
 ): Violation[] {
-  const name = param.name!;
+  const name = param.name;
+  if (name === undefined) return [];
   const type = declaredType(param.schema, spec);
   if (type === "array") {
     // Serialization: explode:true (the form-style default) means repeated keys
@@ -683,7 +685,7 @@ function validateQueryValues(
     if (param.explode === false) {
       const style = typeof param.style === "string" ? param.style : "form";
       if (style !== "form" || values.length !== 1) return [];
-      items = values[0]!.split(",");
+      items = values[0].split(",");
     }
     // exploded repeated keys (or the comma-split above) → array; coerce each
     // item by the items schema type
@@ -693,7 +695,7 @@ function validateQueryValues(
     const out: Violation[] = [];
     const coercedItems: unknown[] = [];
     for (let i = 0; i < items.length; i++) {
-      const c = coerceByType(items[i]!, itemType);
+      const c = coerceByType(items[i], itemType);
       if (c.error) {
         out.push(
           toViolation(
@@ -720,7 +722,7 @@ function validateQueryValues(
     }
     return out;
   }
-  return validateParamValue(values[0]!, param, spec, "query", ctx, opts);
+  return validateParamValue(values[0], param, spec, "query", ctx, opts);
 }
 
 // ---------------------------------------------------------------------------

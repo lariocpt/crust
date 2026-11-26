@@ -180,7 +180,7 @@ export function base64(...args: unknown[]): string {
     return render(Buffer.from(binary), opts);
   }
   if (opts.file !== undefined) {
-    if (operands.length > 0) refuseTwoInputs(operands[0]!, "file");
+    if (operands.length > 0) refuseTwoInputs(operands[0], "file");
     return render(readTheFile(opts.file), opts);
   }
   if (operands.length === 0) {
@@ -192,7 +192,7 @@ export function base64(...args: unknown[]): string {
         "or --file <path>",
     );
   }
-  const value = operands[0]!;
+  const value = operands[0];
   if (isFile(value)) {
     // The shadow, said out loud at the moment someone would be bitten by it.
     // The answer is still the text — that is what this verb means here — so the

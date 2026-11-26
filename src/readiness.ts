@@ -13,7 +13,7 @@ export function parseReadyTarget(s: string): ReadyTarget {
   const t = s.trim();
   const portMatch = t.match(/^port:(\d+)$/);
   if (portMatch) {
-    const port = parseInt(portMatch[1]!, 10);
+    const port = parseInt(portMatch[1], 10);
     if (port < 1 || port > 65535) throw new Error(`readiness: port out of range in "${s}"`);
     return { kind: "tcp", host: "localhost", port };
   }
@@ -34,7 +34,7 @@ export function parseDuration(s: string): number {
     .trim()
     .match(/^(\d+(?:\.\d+)?)(ms|s|m)?$/);
   if (!m) throw new Error(`bad duration "${s}" — expected e.g. "300ms", "30s", "2m"`);
-  const n = parseFloat(m[1]!);
+  const n = parseFloat(m[1]);
   const unit = m[2] ?? "ms";
   return n * (unit === "ms" ? 1 : unit === "s" ? 1000 : 60_000);
 }
@@ -60,7 +60,7 @@ const loopbackFanout = (host: string): string[] => (host === "localhost" ? LOOPB
 // the slowest (Promise.all) would make a black-holed family cost a probe its
 // whole timeout even when the other answered instantly.
 function anyTrue(tasks: Array<() => Promise<boolean>>): Promise<boolean> {
-  if (tasks.length === 1) return tasks[0]!();
+  if (tasks.length === 1) return tasks[0]();
   return new Promise<boolean>((resolve) => {
     let pending = tasks.length;
     let settled = false;

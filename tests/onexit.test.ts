@@ -120,16 +120,18 @@ async function pollUntil(cond: () => boolean, capMs: number): Promise<boolean> {
   return true;
 }
 
-/** Bounded wait for a file to appear; returns its content, or "" at the cap. */
+/** Bounded wait for non-empty file content; returns "" at the cap. */
 async function pollFile(path: string, capMs: number): Promise<string> {
   const deadline = Date.now() + capMs;
   for (;;) {
     try {
-      return await readFile(path, "utf8");
+      const content = await readFile(path, "utf8");
+      if (content.length > 0) return content;
     } catch {
-      if (Date.now() >= deadline) return "";
-      await new Promise((r) => setTimeout(r, 20));
+      // The writer may not have created its evidence file yet.
     }
+    if (Date.now() >= deadline) return "";
+    await new Promise((r) => setTimeout(r, 20));
   }
 }
 
@@ -152,6 +154,29 @@ const FAIL_LINE = "range(1,2) | (t => { throw new Error('kaboom-line') })";
 // the tick, so they never need the full duration on the happy prediction.
 const LONG_LINE = "load 3s 1/s | (t => { console.log('tick'); return t; })";
 const SHORT_LINE = "load 1.5s 1/s | (t => { console.log('tick'); return t; })";
+
+describe("signal evidence polling", () => {
+  test("an empty file is not evidence until its bytes have been written", async () => {
+    const marker = join(tmp, "poll-delayed.marker");
+    await writeFile(marker, "");
+    let writing: Promise<void> | undefined;
+    const timer = setTimeout(() => {
+      writing = writeFile(marker, "handler-finished\n");
+    }, 80);
+    try {
+      expect(await pollFile(marker, 1000)).toBe("handler-finished\n");
+    } finally {
+      clearTimeout(timer);
+      await writing;
+    }
+  });
+
+  test.each(["missing", "empty"])("%s evidence remains bounded by the cap", async (kind) => {
+    const marker = join(tmp, `poll-${kind}.marker`);
+    if (kind === "empty") await writeFile(marker, "");
+    expect(await pollFile(marker, 0)).toBe("");
+  });
+});
 
 describe("onExit — fail-fast failure paths", () => {
   test("-c with a failing line: onExit ran with the failing code, crust exits with it", async () => {

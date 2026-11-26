@@ -34,7 +34,7 @@ const cdBuiltin: Builtin = (rawArgs, _ctx) => {
     target = process.env.HOME;
   } else if (arg === "-") {
     target = process.env.OLDPWD;
-    if (target) process.stdout.write(target + "\n");
+    if (target) process.stdout.write(`${target}\n`);
   } else if (arg.startsWith("~/")) {
     target = (process.env.HOME ?? "") + arg.slice(1);
   } else {
@@ -192,9 +192,10 @@ function sniffMultiLineShell(text: string): boolean {
   for (const raw of text.split("\n")) {
     const t = raw.trim();
     if (!t || t.startsWith("#")) continue;
-    const first = t.split(/\s+/)[0]!;
-    if (first in BASH_OPENERS) {
-      if (!BASH_OPENERS[first]!.test(t)) return true;
+    const first = t.split(/\s+/)[0];
+    const closer = Object.hasOwn(BASH_OPENERS, first) ? BASH_OPENERS[first] : undefined;
+    if (closer) {
+      if (!closer.test(t)) return true;
     } else if (first === "do" || first === "done" || first === "fi" || first === "esac") {
       return true;
     }
@@ -249,7 +250,7 @@ async function crustFileParses(text: string): Promise<boolean> {
     const t = raw.trim();
     if (!t) continue;
     if (t.startsWith("#")) continue;
-    const head = t.split(/\s+/)[0]!;
+    const head = t.split(/\s+/)[0];
     // Builtin lines execute in-process, one line each — nothing spans lines
     // through them, so they can't be mangled line-by-line.
     if (isBuiltin(head)) continue;
@@ -281,7 +282,7 @@ async function crustFileParses(text: string): Promise<boolean> {
 // an `=` cannot be split — that is refused loudly, never truncated.
 async function sourceShellScript(path: string, text: string): Promise<number> {
   const shebang = shebangShell(text);
-  const wanted = shebang ?? (/\.(bash|zsh)$/.test(path) ? path.match(/\.([a-z]+)$/)![1] : null);
+  const wanted = shebang ?? path.match(/\.(bash|zsh)$/)?.[1] ?? null;
   const bin = await resolveShellBin(wanted);
   if (wanted && bin === "sh" && wanted !== "sh") {
     process.stderr.write(
@@ -379,7 +380,7 @@ const sourceBuiltin: Builtin = async (rawArgs, ctx) => {
 
 const exitBuiltin: Builtin = async (rawArgs, ctx) => {
   const parsed = parseInt(rawArgs.trim() || "0", 10);
-  await ctx.exit(isNaN(parsed) ? 0 : parsed);
+  await ctx.exit(Number.isNaN(parsed) ? 0 : parsed);
   return 0;
 };
 
@@ -552,7 +553,7 @@ function dotenvStatus(ctx: Context): number {
   );
   const idxWidth = String(ctx.dotenv.history.length).length;
   for (let i = 0; i < ctx.dotenv.history.length; i++) {
-    const r = ctx.dotenv.history[i]!;
+    const r = ctx.dotenv.history[i];
     const idx = String(i + 1).padStart(idxWidth, " ");
     const iso = new Date(r.ts).toISOString();
     const shown = r.keys.slice(0, 6).join(", ");
@@ -669,6 +670,21 @@ const runSkillsTool = async (argv: string[]): Promise<number> => {
 const skillsBuiltin: Builtin = async (rawArgs, _ctx) =>
   await runSkillsTool(splitArgs(rawArgs.trim()));
 
+// `site` is a REDIRECT, not a builder (src/builtinFns/site.ts): the site
+// generator ships as the @crust/site package run under plain Bun, and no
+// compiled binary can import a site's config from outside its own bundle
+// (measured — AGENTS.md), so every binary carries the stub. It answers with
+// the redirect and a NONZERO exit (never 0: this process does not build
+// sites), and its registration is what keeps the name out of `sh` — without
+// it, `crust site build` from a shell would exit 127 and read as "the binary
+// is not installed" while the binary is the thing that knows the answer.
+const runSiteTool = async (argv: string[]): Promise<number> => {
+  const { runSiteTool: runSite } = await import("./builtinFns/site");
+  return await runSite(argv);
+};
+
+const siteBuiltin: Builtin = (rawArgs, _ctx) => runSiteTool(splitArgs(rawArgs));
+
 const logsBuiltin: Builtin = async (rawArgs, ctx) => {
   // rawArgs stays UNSPLIT — the source spec is the rest of the line verbatim
   // (splitArgs would mangle procs({...}) literals and quoted commands).
@@ -695,6 +711,7 @@ export const builtins: Record<string, Builtin> = {
   "gen-fixtures": genFixturesBuiltin,
   "mock-server": mockServerBuiltin,
   "verify-web-links": verifyWebLinksBuiltin,
+  site: siteBuiltin,
   logs: logsBuiltin,
 };
 
@@ -723,6 +740,7 @@ export const standaloneTools: Record<string, (argv: string[]) => Promise<number>
   "gen-fixtures": runGenFixturesTool,
   "mock-server": runMockServerTool,
   "verify-web-links": runVerifyWebLinksTool,
+  site: runSiteTool,
 };
 
 /** A word that names a tool, whether or not it is reachable as a command. Used
@@ -775,6 +793,7 @@ const builtinSummaries: Record<string, string> = {
   "gen-fixtures": "generate fixture suites from an OpenAPI spec",
   "mock-server": "serve an OpenAPI spec's examples (optionally --stateful)",
   "verify-web-links": "crawl a site from its sitemap and verify every link",
+  site: "redirect to the @crust/site package (bunx @crust/site build|dev)",
   logs: "interactive search over a held live log stream",
 };
 
@@ -786,7 +805,7 @@ export function renderBuiltinList(): string {
 }
 
 export function isBuiltin(name: string): boolean {
-  return name in builtins;
+  return Object.hasOwn(builtins, name);
 }
 
 /**

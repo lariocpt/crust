@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { runCli } from "../src/testFixture/cli";
 import { runFixtures } from "../src/testFixture/runner";
 import type { FixtureOutput } from "../src/testFixture/types";
+import { required } from "./support/required";
 
 // Compile-time check: `schema` is a declared FixtureOutput field, not an
 // index-signature stowaway.
@@ -85,7 +86,7 @@ describe("test-fixture runner", () => {
     expect(report.totals.pass).toBe(1);
     expect(report.totals.fail).toBe(0);
     expect(report.totals.error).toBe(0);
-    expect(report.results[0]!.status).toBe("pass");
+    expect(report.results[0].status).toBe("pass");
   });
 
   test("failing fixture surfaces failure path", async () => {
@@ -99,11 +100,11 @@ describe("test-fixture runner", () => {
     );
     const report = await runFixtures({ target: file, threads: 1 });
     expect(report.totals.fail).toBe(1);
-    const r = report.results[0]!;
+    const r = report.results[0];
     expect(r.status).toBe("fail");
-    expect(r.failures[0]!.path).toBe("output.status");
-    expect(r.failures[0]!.expected).toBe(200);
-    expect(r.failures[0]!.actual).toBe(500);
+    expect(r.failures[0].path).toBe("output.status");
+    expect(r.failures[0].expected).toBe(200);
+    expect(r.failures[0].actual).toBe(500);
   });
 
   test("async matcher predicates are awaited (pass and fail)", async () => {
@@ -127,7 +128,7 @@ describe("test-fixture runner", () => {
     expect(report.totals.pass).toBe(1);
     // Before diffAsync, a returned Promise was truthy and this silently passed.
     expect(report.totals.fail).toBe(1);
-    expect(report.results[1]!.failures[0]!.path).toBe("output.data");
+    expect(report.results[1].failures[0].path).toBe("output.data");
   });
 
   test("a 0-arg output matcher returning a boolean is an ERROR, not a literal", async () => {
@@ -150,7 +151,7 @@ describe("test-fixture runner", () => {
     const report = await runFixtures({ target: file, threads: 1 });
     expect(report.totals.pass).toBe(0);
     expect(report.totals.error).toBe(1);
-    const msg = report.results[0]!.error!.message;
+    const msg = required(report.results[0].error).message;
     expect(msg).toContain("output.data");
     expect(msg).toContain("zero-argument function returned true");
     expect(msg).toContain("(v) => ...");
@@ -301,7 +302,7 @@ describe("test-fixture runner", () => {
     const file = await writeFixture("broken.crust.ts", `throw new Error("nope");\n`);
     const report = await runFixtures({ target: file, threads: 1 });
     expect(report.totals.error).toBe(1);
-    expect(report.results[0]!.error?.message).toContain("nope");
+    expect(report.results[0].error?.message).toContain("nope");
   });
 
   test("--count repeats each fixture N times and surfaces a stress bucket", async () => {
@@ -314,8 +315,8 @@ describe("test-fixture runner", () => {
     expect(report.results).toHaveLength(10);
     expect(report.totals.pass).toBe(10);
     expect(report.stress).toBeDefined();
-    expect(report.stress!.length).toBe(1);
-    const b = report.stress![0]!;
+    expect(required(report.stress).length).toBe(1);
+    const b = required(report.stress)[0];
     expect(b.count).toBe(10);
     expect(b.pass).toBe(10);
     expect(b.p50).toBeGreaterThanOrEqual(0);
@@ -456,7 +457,7 @@ describe("--timeout and --bail", () => {
     );
     const report = await runFixtures({ target: file, threads: 1, timeoutMs: 10 });
     expect(report.totals.error).toBe(1);
-    expect(report.results[0]!.error?.message).toContain("timed out after 10ms");
+    expect(report.results[0].error?.message).toContain("timed out after 10ms");
     const ok = await runFixtures({ target: file, threads: 1, timeoutMs: 5000 });
     expect(ok.totals.pass).toBe(1);
   });
@@ -505,8 +506,8 @@ describe("output.schema", () => {
       ];`,
     );
     const report = await runFixtures({ target: file, threads: 1 });
-    const ok = report.results.find((r) => r.name === "conforms")!;
-    const bad = report.results.find((r) => r.name === "violates")!;
+    const ok = required(report.results.find((r) => r.name === "conforms"));
+    const bad = required(report.results.find((r) => r.name === "violates"));
     expect(ok.status).toBe("pass");
     expect(bad.status).toBe("fail");
     const paths = bad.failures.map((f) => f.path).join("\n");
@@ -528,7 +529,7 @@ describe("output.schema", () => {
       };`,
     );
     const report = await runFixtures({ target: file, threads: 1 });
-    expect(report.results[0]!.status).toBe("pass");
+    expect(report.results[0].status).toBe("pass");
   });
 
   test("fixtures without schema behave exactly as before", async () => {
@@ -541,7 +542,7 @@ describe("output.schema", () => {
       };`,
     );
     const report = await runFixtures({ target: file, threads: 1 });
-    expect(report.results[0]!.status).toBe("pass");
+    expect(report.results[0].status).toBe("pass");
   });
 
   // A $ref would resolve against the runner's stub spec to nothing and the
@@ -557,7 +558,7 @@ describe("output.schema", () => {
       };`,
     );
     const report = await runFixtures({ target: file, threads: 1 });
-    const r = report.results[0]!;
+    const r = report.results[0];
     expect(r.status).toBe("error");
     expect(r.error?.message).toContain("output.schema contains a $ref (/)");
     expect(r.error?.message).toContain("inline it");
@@ -576,7 +577,7 @@ describe("output.schema", () => {
       };`,
     );
     const report = await runFixtures({ target: file, threads: 1 });
-    const r = report.results[0]!;
+    const r = report.results[0];
     expect(r.status).toBe("error");
     expect(r.error?.message).toContain("$ref (/properties/owner)");
   });
@@ -598,6 +599,6 @@ describe("output.schema", () => {
       };`,
     );
     const report = await runFixtures({ target: file, threads: 1 });
-    expect(report.results[0]!.status).toBe("pass");
+    expect(report.results[0].status).toBe("pass");
   });
 });

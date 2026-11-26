@@ -141,10 +141,10 @@ async function httpRequest(
   // caller-supplied signal (TS API) always wins, and only a MINTED signal's
   // abort may ever be classified as a timeout (a caller's own abort must
   // never be relabeled as one).
-  let minted = false;
+  let mintedTimeoutMs: number | undefined;
   if (timeoutMs !== undefined && !opts?.signal) {
     init.signal = AbortSignal.timeout(timeoutMs);
-    minted = true;
+    mintedTimeoutMs = timeoutMs;
   }
 
   if (body !== undefined && body !== null) {
@@ -164,10 +164,12 @@ async function httpRequest(
 
   try {
     const res = await fetch(url, init);
-    return minted ? labelBodyTimeout(res, method, url, timeoutMs!) : res;
+    return mintedTimeoutMs !== undefined
+      ? labelBodyTimeout(res, method, url, mintedTimeoutMs)
+      : res;
   } catch (err) {
-    if (minted && isTimeoutError(err)) {
-      throw new HttpTimeoutError(method, url, timeoutMs!);
+    if (mintedTimeoutMs !== undefined && isTimeoutError(err)) {
+      throw new HttpTimeoutError(method, url, mintedTimeoutMs);
     }
     if (init.redirect === "error" && isRedirectError(err)) {
       throw new HttpRedirectError(method, url);
@@ -230,7 +232,7 @@ function matches<T>(item: T, matcher: ExpectMatcher<T>): boolean {
   }
   const m = matcher.match(/^(\d)xx$/);
   if (m && item instanceof Response) {
-    const cls = parseInt(m[1]!, 10);
+    const cls = parseInt(m[1], 10);
     return item.status >= cls * 100 && item.status < (cls + 1) * 100;
   }
   return false;
@@ -327,7 +329,7 @@ export function parallel<T, U>(n: number, fn: (x: T) => U | Promise<U>): Pipelin
           while (!sourceDone || inFlight.size > 0 || settled.length > 0 || pendingNext !== null) {
             // Drain finished results first — this is what streams them.
             while (settled.length > 0) {
-              yield settled.shift()!;
+              yield settled.splice(0, 1)[0];
             }
             // Then fail. Yielding what already succeeded before rethrowing
             // mirrors the non-parallel path, where `range | (x => throw at 3)`
@@ -462,7 +464,7 @@ export function expectStatus<T extends { status: number }>(
   if (typeof expected === "string" && !classMatch) {
     throw new Error(`expect: bad matcher "${expected}" — use a 3-digit code or 1xx…5xx`);
   }
-  const lo = classMatch ? parseInt(classMatch[1]!, 10) * 100 : (expected as number);
+  const lo = classMatch ? parseInt(classMatch[1], 10) * 100 : (expected as number);
   const hi = classMatch ? lo + 100 : lo + 1;
   return pipelineStage<T, T>((input) =>
     Pipeline.of(
@@ -581,10 +583,10 @@ function bucketFor(ms: number): number {
   // Binary search for the first bound >= ms.
   let lo = 0;
   let hi = BUCKET_BOUNDS.length - 1;
-  if (ms > BUCKET_BOUNDS[hi]!) return BUCKET_BOUNDS.length; // overflow bucket
+  if (ms > BUCKET_BOUNDS[hi]) return BUCKET_BOUNDS.length; // overflow bucket
   while (lo < hi) {
     const mid = (lo + hi) >> 1;
-    if (BUCKET_BOUNDS[mid]! >= ms) hi = mid;
+    if (BUCKET_BOUNDS[mid] >= ms) hi = mid;
     else lo = mid + 1;
   }
   return lo;
@@ -620,7 +622,7 @@ function newAcc(): StatsAcc {
 }
 
 function observe(acc: StatsAcc, ms: number): void {
-  acc.buckets[bucketFor(ms)]!++;
+  acc.buckets[bucketFor(ms)]++;
   acc.sumMs += ms;
   acc.samples++;
   if (ms > acc.maxMs) acc.maxMs = ms;
@@ -635,7 +637,7 @@ function summarize(acc: StatsAcc, wallMs: number): Record<string, unknown> {
     const target = Math.max(1, Math.ceil((p / 100) * acc.samples));
     let seen = 0;
     for (let i = 0; i < acc.buckets.length; i++) {
-      seen += acc.buckets[i]!;
+      seen += acc.buckets[i];
       if (seen >= target) return BUCKET_BOUNDS[i] ?? acc.maxMs;
     }
     return acc.maxMs;

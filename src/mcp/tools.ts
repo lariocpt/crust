@@ -7,7 +7,9 @@
 // every tailed source. The stop tools report teardown honestly ("teardown
 // still in flight past 10s") and server shutdown tears everything down.
 
-import type { JobManager, MockJob } from "./jobs";
+import { validateProcLaunch } from "../procLaunch";
+import type { ProcSpec } from "../sources";
+import type { MockJob } from "./jobs";
 import { ONE_SHOT_TOOLS } from "./oneshot";
 import type { JsonObject } from "./protocol";
 import {
@@ -20,7 +22,6 @@ import {
   requireKeys,
   type ToolDef,
   ToolError,
-  type ToolResult,
 } from "./support";
 
 const BUFFER_MIN = 1;
@@ -166,7 +167,7 @@ const MOCK_TOOLS: ToolDef[] = [
     async run(jm, args) {
       requireKeys(args, ["id", "limit"], ["id"]);
       const job = jm.get(reqStr(args, "id"));
-      if (!job || job.kind !== "mock") throw new ToolError(`no mock server job ${args.id}`);
+      if (job?.kind !== "mock") throw new ToolError(`no mock server job ${args.id}`);
       const limit = optInt(args, "limit", 1, 1000) ?? 50;
       const all = job.server.violations;
       return ok(
@@ -222,8 +223,58 @@ const STREAM_TOOLS: ToolDef[] = [
         commands: {
           type: "object",
           description:
-            'proc name -> command string, or {cmd, env, after, ready, live, restart} — e.g. {"db": "docker compose up db", "api": {"cmd": "bun api.ts", "after": "db", "ready": ":3000/health"}}',
-          additionalProperties: true,
+            'proc name -> POSIX command string, {cmd}, shell-free {executable, args}, or {shell:"pwsh", script, pwsh?, errorPolicy?}. Shared: cwd, env, after, ready, live, restart. PowerShell native policy is default; strict requires 7.4+ and fails on unhandled native/cmdlet errors. Streams are text, not PowerShell objects.',
+          minProperties: 1,
+          additionalProperties: {
+            oneOf: [
+              { type: "string", minLength: 1 },
+              {
+                type: "object",
+                properties: {
+                  cmd: { type: "string", minLength: 1 },
+                  executable: { type: "string", minLength: 1 },
+                  args: { type: "array", items: { type: "string" } },
+                  shell: { const: "pwsh" },
+                  script: { type: "string", minLength: 1 },
+                  pwsh: { type: "string", minLength: 1 },
+                  errorPolicy: { enum: ["native", "strict"] },
+                  cwd: { type: "string", minLength: 1 },
+                  env: { type: "object", additionalProperties: { type: "string" } },
+                  after: {
+                    oneOf: [{ type: "string" }, { type: "array", items: { type: "string" } }],
+                  },
+                  ready: { oneOf: [{ type: "string" }, { type: "object" }] },
+                  live: { oneOf: [{ type: "string" }, { type: "object" }] },
+                  restart: { oneOf: [{ type: "boolean" }, { type: "object" }] },
+                },
+                oneOf: [
+                  {
+                    required: ["cmd"],
+                    not: {
+                      anyOf: ["executable", "args", "shell", "script", "pwsh", "errorPolicy"].map(
+                        (key) => ({ required: [key] }),
+                      ),
+                    },
+                  },
+                  {
+                    required: ["executable"],
+                    not: {
+                      anyOf: ["cmd", "shell", "script", "pwsh", "errorPolicy"].map((key) => ({
+                        required: [key],
+                      })),
+                    },
+                  },
+                  {
+                    required: ["shell", "script"],
+                    not: {
+                      anyOf: ["cmd", "executable", "args"].map((key) => ({ required: [key] })),
+                    },
+                  },
+                ],
+                additionalProperties: false,
+              },
+            ],
+          },
         },
         buffer: { type: "number", description: "ring buffer capacity (default 10000)" },
       },
@@ -239,12 +290,14 @@ const STREAM_TOOLS: ToolDef[] = [
       const entries = Object.entries(commands as JsonObject);
       if (entries.length === 0) throw new ToolError('invalid "commands": at least one proc');
       for (const [name, v] of entries) {
-        if (typeof v !== "string" && (typeof v !== "object" || v === null || Array.isArray(v))) {
-          throw new ToolError(`invalid "commands.${name}": command string or spec object`);
+        try {
+          validateProcLaunch(typeof v === "string" ? { cmd: v } : v, name);
+        } catch (err) {
+          throw new ToolError((err as Error).message);
         }
       }
       const buffer = optInt(args, "buffer", BUFFER_MIN, BUFFER_MAX) ?? 10_000;
-      const job = await jm.startProcs(commands as Record<string, never>, buffer);
+      const job = await jm.startProcs(commands as Record<string, string | ProcSpec>, buffer);
       return ok(
         `${job.id}: supervising ${entries.length} proc(s): ${entries.map(([n]) => n).join(", ")}\n` +
           "items are {proc, stream, line} objects (stream also carries ready/exit events) — " +

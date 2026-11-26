@@ -581,7 +581,7 @@ function fixRows(lines: string[]): [string, string, string][] {
     if (!line.trim()) continue;
     const m = line.match(/^\s+(\S+)\s+(\S+)\s+(.+)$/);
     if (!m) throw new Error(`fix-list row does not parse as a triple: ${JSON.stringify(line)}`);
-    rows.push([m[1]!, m[2]!, m[3]!]);
+    rows.push([m[1], m[2], m[3]]);
   }
   return rows;
 }
@@ -606,7 +606,7 @@ function parseFixListStderr(stderr: string): {
   const lines = stderr.split("\n");
   const start = lines.findIndex((l) => l.endsWith("— fix list"));
   if (start === -1) return { present: false, rows: [] };
-  return { present: true, lead: lines[start]!.trim(), rows: fixRows(lines.slice(start + 2)) };
+  return { present: true, lead: lines[start].trim(), rows: fixRows(lines.slice(start + 2)) };
 }
 
 describe("F7: every failure names its source page and element", () => {

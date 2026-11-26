@@ -15,6 +15,7 @@ import {
   statusOf,
   toggleAll,
 } from "../src/skillsPicker";
+import { required } from "./support/required";
 
 let dir: string;
 let cwd: string;
@@ -64,14 +65,14 @@ describe("embedded skills", () => {
       const fences = [...s.content.matchAll(/```crust\n([\s\S]*?)```/g)];
       expect(fences.length).toBeGreaterThan(0);
       for (const fence of fences) {
-        for (const rawLine of fence[1]!.split("\n")) {
+        for (const rawLine of fence[1].split("\n")) {
           const line = rawLine.trim();
           if (!line || line.startsWith("#")) continue;
           const tokens = tokenize(line);
           expect(tokens.length).toBeGreaterThan(0);
           for (const t of tokens) {
             const kind = classify(t.text); // must not throw
-            const head = t.text.trim().split(/\s+/)[0]!;
+            const head = t.text.trim().split(/\s+/)[0];
             if (KEYWORDS.has(head)) {
               // A keyword stage that classifies as shell = stale example.
               expect(`${head}:${kind.kind}`).not.toBe(`${head}:shell`);
@@ -95,12 +96,12 @@ describe("skills builtin", () => {
 
   test("re-install is idempotent; a locally-edited file is refused without --force", async () => {
     expect(await runSkills(["install"])).toBe(0);
-    const target = join(dir, ".agents", "skills", EMBEDDED_SKILLS[0]!.name, "SKILL.md");
+    const target = join(dir, ".agents", "skills", EMBEDDED_SKILLS[0].name, "SKILL.md");
     await Bun.write(target, "# locally edited\n");
     expect(await runSkills(["install"])).toBe(1);
     expect(await Bun.file(target).text()).toBe("# locally edited\n");
     expect(await runSkills(["install", "--force"])).toBe(0);
-    expect(await Bun.file(target).text()).toBe(EMBEDDED_SKILLS[0]!.content);
+    expect(await Bun.file(target).text()).toBe(EMBEDDED_SKILLS[0].content);
   });
 
   test("list exits 0; unknown args exit 2", async () => {
@@ -127,7 +128,7 @@ describe("the .claude/skills compatibility entry", () => {
     // Relative, so a moved checkout or a synced $HOME keeps the link alive.
     expect(await readlink(compat("crust-cli"))).toBe("../../.agents/skills/crust-cli");
     expect(await Bun.file(join(compat("crust-cli"), "SKILL.md")).text()).toBe(
-      EMBEDDED_SKILLS.find((s) => s.name === "crust-cli")!.content,
+      required(EMBEDDED_SKILLS.find((s) => s.name === "crust-cli")).content,
     );
   });
 
@@ -154,7 +155,7 @@ describe("the .claude/skills compatibility entry", () => {
     expect(await runSkills(["install", "--select", "crust-logs", "--force"])).toBe(0);
     expect((await lstat(compat("crust-logs"))).isSymbolicLink()).toBe(true);
     expect(await Bun.file(join(compat("crust-logs"), "SKILL.md")).text()).toBe(
-      EMBEDDED_SKILLS.find((s) => s.name === "crust-logs")!.content,
+      required(EMBEDDED_SKILLS.find((s) => s.name === "crust-logs")).content,
     );
   });
 
@@ -180,7 +181,7 @@ describe("skills install --select", () => {
     wipe();
     expect(await runSkills(["install", "--select", "crust-cli,crust-logs"])).toBe(0);
     expect(await Bun.file(join(dir, ".agents/skills/crust-cli/SKILL.md")).text()).toBe(
-      EMBEDDED_SKILLS.find((s) => s.name === "crust-cli")!.content,
+      required(EMBEDDED_SKILLS.find((s) => s.name === "crust-cli")).content,
     );
     expect(await Bun.file(join(dir, ".agents/skills/crust-logs/SKILL.md")).exists()).toBe(true);
     expect(await Bun.file(join(dir, ".agents/skills/crust-procs/SKILL.md")).exists()).toBe(false);
@@ -243,8 +244,8 @@ describe("skill picker logic (the part that decides what gets written)", () => {
   test("the target decides which status is shown, and what counts as installed", () => {
     // Switching target with `g` has to change both the label and the default
     // choice, or the menu offers to overwrite a file that is not there.
-    expect(statusOf(entries[1]!, false)).toBe("current");
-    expect(statusOf(entries[1]!, true)).toBe("missing");
+    expect(statusOf(entries[1], false)).toBe("current");
+    expect(statusOf(entries[1], true)).toBe("missing");
     expect([...defaultChoice(entries, false)]).toEqual(["a", "c"]);
     expect([...defaultChoice(entries, true)]).toEqual(["a", "b"]);
   });

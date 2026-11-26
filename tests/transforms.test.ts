@@ -283,7 +283,7 @@ describe("parallel with a paced source", () => {
     expect(arrivals).toHaveLength(6);
     // The third result must arrive while the source still has items left
     // (< 150ms), not in a final dump after ~180ms.
-    expect(arrivals[2]!).toBeLessThan(150);
+    expect(arrivals[2]).toBeLessThan(150);
   });
 });
 

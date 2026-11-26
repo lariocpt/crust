@@ -14,6 +14,7 @@ import {
 import type { OpenApiSpec } from "../src/mockServer/loadSpec";
 import { buildRoutes } from "../src/mockServer/router";
 import { validateRequest } from "../src/mockServer/validateRequest";
+import { required } from "./support/required";
 
 const securitySchemes = {
   bearer: { type: "http", scheme: "bearer" },
@@ -448,12 +449,12 @@ test("security selects credentials without inventing a 401; query is inherited",
   expect(g.manifest.cases[0].expectStatus).toBe(404);
   expect(g.manifest.cases[0].prerequisites).toContain("auth");
   expect(g.manifest.cases[0].prerequisites).toContain("query:node_type");
-  const fixtures = (await import(g.file!)).default;
+  const fixtures = (await import(g.file)).default;
   const input = await fixtures[0].input({});
   expect(input.headers.Authorization).toBe("Bearer offline");
   expect(new URL(input.url).searchParams.get("node_type")).toBe("Requirement");
   expect(new URL(input.url).searchParams.get("existing")).toBe("keep");
-  const first = await readFile(g.file!, "utf8");
+  const first = await readFile(g.file, "utf8");
   const regen = await generateFixtures({
     swagger: g.specPath,
     setup: g.setupPath,
@@ -461,7 +462,7 @@ test("security selects credentials without inventing a 401; query is inherited",
     flows: false,
     log: () => {},
   });
-  expect(await readFile(regen.files[0]!, "utf8")).toBe(first);
+  expect(await readFile(regen.files[0], "utf8")).toBe(first);
 });
 
 test("explicit public login does not inherit the legacy 401 description heuristic", async () => {
@@ -502,7 +503,7 @@ export const parameterValues = { "GET /nodes/{id}": { tags: ["a&b", "c"], joined
   );
   const setup = await import(g.setupPath);
   expect(setup.calls).toBe(0);
-  const fixtures = (await import(g.file!)).default;
+  const fixtures = (await import(g.file)).default;
   const input = await fixtures[0].input({});
   const url = new URL(input.url);
   expect(setup.calls).toBe(1);
@@ -589,7 +590,7 @@ test("original query schemas prevent ref-sibling assertions from disappearing", 
     root,
   );
   expect(control.result.totalCases).toBe(1);
-  const fixtures = (await import(control.file!)).default;
+  const fixtures = (await import(control.file)).default;
   expect(new URL((await fixtures[0].input({})).url).searchParams.get("kind")).toBe("3");
 });
 
@@ -615,7 +616,7 @@ test("generated baselines enforce referenced code-point bounds on strings and ar
       );
       expect(g.result.totalCases).toBe(minLength === 1 ? 1 : 0);
       if (minLength === 1) {
-        const fixtures = (await import(g.file!)).default;
+        const fixtures = (await import(g.file)).default;
         const url = new URL((await fixtures[0].input({})).url);
         const decoded = array ? url.searchParams.getAll("kind") : url.searchParams.get("kind");
         expect(decoded).toEqual(array ? ["😀"] : "😀");
@@ -631,7 +632,7 @@ test("generation omits unproven formats and emits valid referenced scalar and ar
   for (const { format, valid, invalid } of FORMAT_CASES) {
     for (const array of [false, true]) {
       for (const accepted of [false, true]) {
-        const value = (accepted ? valid : invalid)[0]!;
+        const value = (accepted ? valid : invalid)[0];
         const item = { type: "string", allOf: [{ $ref: "#/components/schemas/Formatted" }] };
         const schema = array
           ? { type: "array", items: item, default: [value] }
@@ -650,7 +651,7 @@ test("generation omits unproven formats and emits valid referenced scalar and ar
         );
         expect(g.result.totalCases).toBe(accepted ? 1 : 0);
         if (accepted) {
-          const fixtures = (await import(g.file!)).default;
+          const fixtures = (await import(g.file)).default;
           const url = new URL((await fixtures[0].input({})).url);
           expect(array ? url.searchParams.getAll("kind") : url.searchParams.get("kind")).toEqual(
             array ? [value] : value,
@@ -676,7 +677,7 @@ test("runtime missing query value rejects input construction", async () => {
     },
     "export const resolveParameter = () => undefined;",
   );
-  const fixtures = (await import(g.file!)).default;
+  const fixtures = (await import(g.file)).default;
   await expect(fixtures[0].input({})).rejects.toThrow("unresolved or unsupported query baseline");
 });
 
@@ -693,7 +694,7 @@ describe("query serialization boundaries", () => {
   });
   const checkWire = (url: URL, paths: Record<string, unknown>) => {
     const spec = { paths } as OpenApiSpec;
-    const route = buildRoutes(spec)[0]!;
+    const route = buildRoutes(spec)[0];
     expect(
       validateRequest(
         {
@@ -732,7 +733,7 @@ describe("query serialization boundaries", () => {
           pathsFor(parameter(lazySchema, mode !== "joined")),
           `export const resolveParameter = () => ${JSON.stringify(value)};`,
         );
-        const fixtures = (await import(g.file!)).default;
+        const fixtures = (await import(g.file)).default;
         await expect(fixtures[0].input({})).rejects.toThrow(
           "gen-fixtures: unresolved or unsupported query baseline",
         );
@@ -754,13 +755,13 @@ describe("query serialization boundaries", () => {
             ),
             runtime ? `export const resolveParameter = () => ${JSON.stringify(value)};` : "",
           );
-          const fixtures = (await import(g.file!)).default;
+          const fixtures = (await import(g.file)).default;
           const url = new URL((await fixtures[0].input({})).url);
           const decoded = !array
             ? url.searchParams.get("kind")
             : mode === "exploded"
               ? url.searchParams.getAll("kind")
-              : url.searchParams.get("kind")!.split(",");
+              : required(url.searchParams.get("kind")).split(",");
           expect(decoded).toEqual(value);
           expect(url.searchParams.get("existing")).toBe("keep");
         }
@@ -830,7 +831,7 @@ describe("query serialization boundaries", () => {
         name,
       }),
     );
-    const fixtures = (await import(g.file!)).default;
+    const fixtures = (await import(g.file)).default;
     expect(new URL((await fixtures[0].input({})).url).searchParams.get(name)).toBe("😀");
   });
 
@@ -859,7 +860,7 @@ describe("query serialization boundaries", () => {
 export const resolveParameter = () => ${JSON.stringify(value)};
 `,
         );
-        const fixtures = (await import(g.file!)).default;
+        const fixtures = (await import(g.file)).default;
         if (!explode) {
           await expect(fixtures[0].input({})).rejects.toThrow("unsupported query baseline");
         } else {
@@ -875,7 +876,7 @@ export const resolveParameter = () => ${JSON.stringify(value)};
     const value = ["a,b", "c"];
     const paths = pathsFor(parameter({ ...arraySchema, default: value }));
     const g = await generate(paths);
-    const fixtures = (await import(g.file!)).default;
+    const fixtures = (await import(g.file)).default;
     const url = new URL((await fixtures[0].input({})).url);
     expect(url.searchParams.getAll("kind")).toEqual(value);
     checkWire(url, paths);
@@ -897,7 +898,7 @@ export const resolveParameter = () => ${JSON.stringify(value)};
 export const resolveParameter = () => ${JSON.stringify(baseline)};
 `,
         );
-        const fixtures = (await import(g.file!)).default;
+        const fixtures = (await import(g.file)).default;
         await expect(fixtures[0].input({})).rejects.toThrow("unsupported query baseline");
       }
     }
@@ -921,9 +922,9 @@ export const resolveParameter = () => ${JSON.stringify(baseline)};
 `
               : "",
           );
-          const fixtures = (await import(g.file!)).default;
+          const fixtures = (await import(g.file)).default;
           const url = new URL((await fixtures[0].input({})).url);
-          const wire = url.searchParams.get("kind")!;
+          const wire = required(url.searchParams.get("kind"));
           const decoded = array ? wire.split(",").map(Number) : Number(wire);
           expect(decoded).toEqual(baseline);
           if (type === "integer") expect(wire).not.toMatch(/[eE]/);
@@ -961,7 +962,7 @@ test("required query is retained in auth and body-validation cases", async () =>
     "",
     { security: [{ bearer: [] }], components: { securitySchemes } },
   );
-  const fixtures = (await import(g.file!)).default;
+  const fixtures = (await import(g.file)).default;
   expect(fixtures.length).toBeGreaterThan(1);
   for (const fixture of fixtures) {
     const input = await fixture.input({});
@@ -977,7 +978,7 @@ test("runtime header guard refuses incomplete AND requirements without exposing 
     "",
     { security: [{ bearer: [], key: [] }], components: { securitySchemes } },
   );
-  const source = await readFile(g.file!, "utf8");
+  const source = await readFile(g.file, "utf8");
   expect(source).toContain("genHeaders(headersFor");
   const setup = await readFile(g.setupPath, "utf8");
   // Use a distinct setup path to avoid Bun's module import cache.
@@ -1057,7 +1058,7 @@ test("a blocked flow step omits the whole flow, including read, update, and clea
   );
   expect(control.result.flowCount).toBe(1);
   expect(control.result.flowSkipped).toBe(0);
-  expect(await readFile(control.result.flowFile!, "utf8")).toContain("DELETE");
+  expect(await readFile(required(control.result.flowFile), "utf8")).toContain("DELETE");
 });
 
 const STYLES = [
@@ -1102,7 +1103,7 @@ describe("request-plan emission style", () => {
   for (const style of STYLES) {
     test(`${style.unit === "\t" ? "tabs" : `${style.unit.length} spaces`}, width ${style.width}, ${style.quote} quotes`, async () => {
       const g = await styledGeneration(style);
-      const source = await readFile(g.file!, "utf8");
+      const source = await readFile(g.file, "utf8");
       const quote = style.quote === "single" ? "'" : '"';
       expect(source).toContain(`name: ${quote}kind${quote}`);
       expect(source).toContain(`prefix: ${quote}bearer ${quote}`);
@@ -1124,7 +1125,7 @@ describe("request-plan emission style", () => {
         }
         expect(line.replaceAll("\t", "  ").length).toBeLessThanOrEqual(style.width);
       }
-      const fixtures = (await import(g.file!)).default;
+      const fixtures = (await import(g.file)).default;
       const input = await fixtures[0].input({});
       expect(new URL(input.url).searchParams.get("kind")).toBe("runtime");
       expect(new URL(input.url).searchParams.getAll("labels")).toEqual(["a'b", 'two"quotes']);
@@ -1136,7 +1137,7 @@ describe("request-plan emission style", () => {
         flows: false,
         log: () => {},
       });
-      expect(await readFile(regenerated.files[0]!, "utf8")).toBe(source);
+      expect(await readFile(regenerated.files[0], "utf8")).toBe(source);
     });
   }
 
@@ -1160,7 +1161,7 @@ describe("request-plan emission style", () => {
         "",
         { components: { securitySchemes } },
       );
-      const source = await readFile(g.file!, "utf8");
+      const source = await readFile(g.file, "utf8");
       expect(source.includes("function genUrl(")).toBe(mode === "query");
       expect(source.includes("function genHeaders(")).toBe(mode === "headers");
       expect(source.includes("const requests =")).toBe(mode === "query" || mode === "headers");
@@ -1173,8 +1174,8 @@ describe("request-plan emission style", () => {
     async () => {
       for (const style of STYLES) {
         const g = await styledGeneration(style);
-        const before = await readFile(g.file!, "utf8");
-        const proc = Bun.spawn([process.execPath, biome, "format", "--write", g.file!], {
+        const before = await readFile(g.file, "utf8");
+        const proc = Bun.spawn([process.execPath, biome, "format", "--write", g.file], {
           cwd: join(g.out, ".."),
           stdout: "pipe",
           stderr: "pipe",
@@ -1184,7 +1185,7 @@ describe("request-plan emission style", () => {
           new Response(proc.stderr).text(),
         ]);
         expect({ code: await proc.exited, output: out + err }).toMatchObject({ code: 0 });
-        expect(await readFile(g.file!, "utf8")).toBe(before);
+        expect(await readFile(g.file, "utf8")).toBe(before);
       }
     },
   );

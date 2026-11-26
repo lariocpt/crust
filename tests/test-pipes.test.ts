@@ -52,9 +52,9 @@ describe("test-pipes runner", () => {
     );
     const report = await runPipes({ target: join(dir, "mix.pipes") });
     expect(report.totals).toEqual({ pass: 1, fail: 1, files: 1 });
-    expect(report.results[0]!.lineNo).toBe(3);
-    expect(report.results[1]!.status).toBe("fail");
-    expect(report.results[1]!.error).toContain("assert");
+    expect(report.results[0].lineNo).toBe(3);
+    expect(report.results[1].status).toBe("fail");
+    expect(report.results[1].error).toContain("assert");
   });
 
   test("sibling setup module seeds env for $VAR interpolation", async () => {
@@ -88,7 +88,7 @@ describe("test-pipes runner", () => {
       timeoutMs: 50,
     });
     expect(report.totals.fail).toBe(1);
-    expect(report.results[0]!.error).toContain("timed out after 50ms");
+    expect(report.results[0].error).toContain("timed out after 50ms");
   });
 
   test("capture chains a POSTed id into the next line", async () => {

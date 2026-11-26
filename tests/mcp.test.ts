@@ -7,16 +7,33 @@ import { realpathSync } from "node:fs";
 import { appendFile, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { required } from "./support/required";
 
 // ------------------------------------------------------------------ client ----
 
-type ReplyFn = (v: any) => void;
+interface RpcResult {
+  protocolVersion: string;
+  capabilities: { tools?: object };
+  instructions: string;
+  serverInfo?: { name: string };
+  tools: { name: string; description: string; inputSchema: { type: string } }[];
+  isError?: boolean;
+  content?: { text?: string }[];
+}
+
+interface RpcReply {
+  id?: string | number | null;
+  result: RpcResult;
+  error?: { code: number; message: string; content?: { text?: string }[] };
+}
+
+type ReplyFn = (v: RpcReply) => void;
 
 class McpClient {
   private pending = new Map<string | number, ReplyFn>();
   /** Frames the server sent that match no request id (parse-error replies
    *  carry id:null) — the bad-frame assertions read these. */
-  unmatched: any[] = [];
+  unmatched: RpcReply[] = [];
   private nextId = 0;
   private proc!: ReturnType<typeof Bun.spawn>;
   private stdinCtl!: ReadableStreamDefaultController<Uint8Array>;
@@ -73,7 +90,7 @@ class McpClient {
   /** Enqueue a raw frame and return a promise for the reply whose id matches
    *  the frame's. The bad-frame test needs to control the id and observe the
    *  ordering between a bad line's -32700 (id:null) and a known reply. */
-  replyFor(frame: string): Promise<any> {
+  replyFor(frame: string): Promise<RpcReply> {
     const id = (JSON.parse(frame) as { id?: number | string }).id;
     return new Promise((res) => {
       if (id !== undefined) this.pending.set(id, res);
@@ -81,20 +98,20 @@ class McpClient {
     });
   }
 
-  async rpc(method: string, params?: object): Promise<any> {
+  async rpc(method: string, params?: object): Promise<RpcReply> {
     const id = ++this.nextId;
-    const p = new Promise<any>((res, rej) => {
+    const p = new Promise<RpcReply>((res, rej) => {
       this.pending.set(id, res);
       setTimeout(() => {
         if (this.pending.delete(id)) rej(new Error(`mcp rpc timeout: ${method}`));
       }, 25_000);
     });
-    this.raw(JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n");
+    this.raw(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
     return p;
   }
 
   note(method: string, params?: object): void {
-    this.raw(JSON.stringify({ jsonrpc: "2.0", method, params }) + "\n");
+    this.raw(`${JSON.stringify({ jsonrpc: "2.0", method, params })}\n`);
   }
 
   async call(name: string, args: object = {}): Promise<{ isError?: boolean; text: string }> {
@@ -415,7 +432,7 @@ describe("mcp mock server lifecycle", () => {
   test("start → serve → list → violations → stop, port released", async () => {
     const start = await c.call("crust_mock_server_start", { spec: specPath(), validate: true });
     expect(start.isError).toBeUndefined();
-    const url = start.text.match(/http:\/\/127\.0\.0\.1:\d+/)![0];
+    const url = required(start.text.match(/http:\/\/127\.0\.0\.1:\d+/))[0];
     const okRes = await fetch(`${url}/things`);
     expect(okRes.status).toBe(200);
     expect(await okRes.json()).toEqual({ things: ["a"] });
@@ -461,7 +478,7 @@ describe("mcp procs + logs sessions", () => {
       commands: { greeter: "sh -c 'echo hello-alpha; echo hello-beta'" },
     });
     expect(start.isError).toBeUndefined();
-    const id = start.text.match(/logs-\d+/)![0];
+    const id = required(start.text.match(/logs-\d+/))[0];
     // give the child its two lines (the pump is async)
     for (
       let i = 0;
@@ -490,7 +507,7 @@ describe("mcp procs + logs sessions", () => {
     const file = join(dir, "logs.txt");
     await writeFile(file, "alpha line\nbeta line\n");
     const open = await c.call("crust_logs_open", { source: `tail -n 10 -F ${file}` });
-    const id = open.text.match(/logs-\d+/)![0];
+    const id = required(open.text.match(/logs-\d+/))[0];
     await Bun.sleep(150); // let the tail's first read land in the buffer
     const miss = await c.call("crust_logs_query", { id, query: 'filter (l => l === "not-here")' });
     expect(miss.isError).toBeUndefined(); // zero is an answer
@@ -504,7 +521,7 @@ describe("mcp procs + logs sessions", () => {
     const file = join(dir, "ndjson.log");
     await writeFile(file, '{"level":40,"m":"info"}\n{"level":50,"m":"warn"}\nplain line\n');
     const open = await c.call("crust_logs_open", { source: `tail -n 10 -F ${file}` });
-    const id = open.text.match(/logs-\d+/)![0];
+    const id = required(open.text.match(/logs-\d+/))[0];
     await Bun.sleep(150); // the tail's first read lands in the ring before the query
     const q = await c.call("crust_logs_query", {
       id,
@@ -521,7 +538,7 @@ describe("mcp procs + logs sessions", () => {
     const file = join(dir, "grow.log");
     await writeFile(file, "");
     const open = await c.call("crust_logs_open", { source: `tail -n 0 -F ${file}` });
-    const id = open.text.match(/logs-\d+/)![0];
+    const id = required(open.text.match(/logs-\d+/))[0];
     const appending = setInterval(() => void appendFile(file, `tick-${Date.now()}\n`), 40);
     const live = await c.call("crust_logs_query", { id, live_ms: 400, limit: 50 });
     clearInterval(appending);
@@ -538,7 +555,7 @@ describe("mcp lifetime", () => {
     const c = await client();
     await c.initialize();
     const ms = await c.call("crust_mock_server_start", { spec: specPath() });
-    const url = ms.text.match(/http:\/\/127\.0\.0\.1:\d+/)![0];
+    const url = required(ms.text.match(/http:\/\/127\.0\.0\.1:\d+/))[0];
     expect((await fetch(`${url}/things`)).status).toBe(200);
     c.closeStdin();
     const code = await Promise.race([

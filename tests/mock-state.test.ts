@@ -16,6 +16,7 @@ import {
   stateDialect,
   stateSql,
 } from "../src/mockServer/state";
+import { required } from "./support/required";
 
 let dir: string;
 let n = 0;
@@ -290,7 +291,7 @@ describe("stateful round-trip over memory + sqlite backends", () => {
 
   test.skipIf(!process.env.CRUST_TEST_PG_URL)("postgres: live e2e round-trip", async () => {
     await withServer(
-      { spec: FLAT_SPEC, state: process.env.CRUST_TEST_PG_URL! },
+      { spec: FLAT_SPEC, state: required(process.env.CRUST_TEST_PG_URL) },
       async (server, base) => {
         await server.resetState();
         const created = await fetch(`${base}/things`, {
@@ -349,7 +350,7 @@ describe("--seed", () => {
       };
       expect(list.items.length).toBe(2);
       expect(list.items.some((i) => i.id === "s-1")).toBe(true);
-      const noId = list.items.find((i) => i.name === "No Id Yet")!;
+      const noId = required(list.items.find((i) => i.name === "No Id Yet"));
       // Deterministic content-derived id, not a random uuid — concurrent
       // seeders of a shared store must converge on identical rows.
       expect(noId.id.startsWith("seed-")).toBe(true);
@@ -362,7 +363,7 @@ describe("--seed", () => {
       const list = (await (await fetch(`${base}/things`)).json()) as {
         items: Array<{ id: string; name: string }>;
       };
-      expect(list.items.find((i) => i.name === "No Id Yet")!.id).toBe(firstDerivedId);
+      expect(required(list.items.find((i) => i.name === "No Id Yet")).id).toBe(firstDerivedId);
     });
   });
 
@@ -536,7 +537,7 @@ describe("envelope-aware CRUD", () => {
     const spec = structuredClone(WRAPPED_SPEC) as {
       paths: Record<string, Record<string, unknown>>;
     };
-    spec.paths["/api/things/{thingId}"]!.get = { responses: { "200": { description: "one" } } };
+    spec.paths["/api/things/{thingId}"].get = { responses: { "200": { description: "one" } } };
     const envs = computeEnvelopes(
       buildRoutes(spec as unknown as OpenApiSpec),
       spec as unknown as OpenApiSpec,
@@ -548,7 +549,7 @@ describe("envelope-aware CRUD", () => {
     const spec = structuredClone(WRAPPED_SPEC) as {
       paths: Record<string, Record<string, unknown>>;
     };
-    spec.paths["/api/things/{thingId}"]!.get = {
+    spec.paths["/api/things/{thingId}"].get = {
       responses: {
         "200": {
           description: "one",

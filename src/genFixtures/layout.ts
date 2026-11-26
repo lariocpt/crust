@@ -62,9 +62,9 @@ export function quoteStringLiteral(value: string, style: EmitStyle): string {
   // Single-quoted: rebuild from the JSON form — unescape \", escape bare '.
   let out = "'";
   for (let i = 1; i < json.length - 1; i++) {
-    const c = json[i]!;
+    const c = json[i];
     if (c === "\\") {
-      const next = json[++i]!;
+      const next = json[++i];
       out += next === '"' ? '"' : `\\${next}`;
     } else if (c === "'") out += "\\'";
     else out += c;

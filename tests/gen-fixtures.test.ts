@@ -17,6 +17,7 @@ import { loadSpec, type OpenApiSpec } from "../src/mockServer/loadSpec";
 import { startServer } from "../src/mockServer/server";
 import { validateSchema } from "../src/mockServer/validateRequest";
 import { runPipes } from "../src/testPipes/runner";
+import { required } from "./support/required";
 
 let dir: string;
 
@@ -252,7 +253,9 @@ describe("gen-fixtures", () => {
     });
     expect(result.files.length).toBe(3);
 
-    const widgets = await Bun.file(result.files.find((f) => f.includes("widgets"))!).text();
+    const widgets = await Bun.file(
+      required(result.files.find((f) => f.includes("widgets"))),
+    ).text();
     // auth-gated -> 401 case; scope-gated -> 403 case
     expect(widgets).toContain("without credentials -> 401");
     expect(widgets).toContain("as non-member -> 403");
@@ -261,12 +264,14 @@ describe("gen-fixtures", () => {
     expect(widgets).toContain("wrong type for 'name' -> 400");
     expect(widgets).toContain("invalid enum for 'kind' -> 400");
 
-    const auth = await Bun.file(result.files.find((f) => f.includes("auth"))!).text();
+    const auth = await Bun.file(required(result.files.find((f) => f.includes("auth")))).text();
     // login's 401 is "Bad credentials", NOT the middleware 401 — no case
     expect(auth).not.toContain("without credentials -> 401");
     expect(auth).toContain("missing required 'email' -> 400");
 
-    const invites = await Bun.file(result.files.find((f) => f.includes("invites"))!).text();
+    const invites = await Bun.file(
+      required(result.files.find((f) => f.includes("invites"))),
+    ).text();
     expect(invites).toContain("with unknown token -> 404");
   });
 
@@ -277,7 +282,7 @@ describe("gen-fixtures", () => {
       setup: join(dir, "setup.ts"),
       log: () => {},
     });
-    const widgetsFile = result.files.find((f) => f.includes("widgets"))!;
+    const widgetsFile = required(result.files.find((f) => f.includes("widgets")));
     const mod = (await import(widgetsFile)) as {
       default: Array<{
         name: string;
@@ -294,7 +299,7 @@ describe("gen-fixtures", () => {
     expect(Array.isArray(mod.default)).toBe(true);
     expect(mod.default.length).toBeGreaterThanOrEqual(7);
 
-    const ctx = await mod.default[0]!.setup();
+    const ctx = await mod.default[0].setup();
     for (const fx of mod.default) {
       const input = fx.input(ctx);
       expect(input.url).toStartWith("http://localhost:9/api/");
@@ -302,7 +307,7 @@ describe("gen-fixtures", () => {
       expect(typeof fx.output.status).toBe("number");
       if (input.body !== undefined) {
         // bodies are pre-stringified JSON
-        expect(() => JSON.parse(input.body!)).not.toThrow();
+        expect(() => JSON.parse(required(input.body))).not.toThrow();
       }
     }
 
@@ -311,7 +316,7 @@ describe("gen-fixtures", () => {
     // pattern fields must use an unparseable STRING, not a number
     const wrongCode = mod.default.find((f) => f.name.includes("wrong type for 'code'"));
     if (wrongCode) {
-      const body = JSON.parse(wrongCode.input(ctx).body!) as { code: unknown };
+      const body = JSON.parse(required(wrongCode.input(ctx).body)) as { code: unknown };
       expect(typeof body.code).toBe("string");
     }
   });
@@ -323,7 +328,7 @@ describe("gen-fixtures", () => {
       setup: join(dir, "setup.ts"),
       log: () => {},
     });
-    const widgetsFile = result.files.find((f) => f.includes("widgets"))!;
+    const widgetsFile = required(result.files.find((f) => f.includes("widgets")));
     const widgets = await Bun.file(widgetsFile).text();
 
     // existing case names are still present — regeneration is additive
@@ -366,11 +371,11 @@ describe("gen-fixtures", () => {
         input: (ctx: unknown) => { body?: string };
       }>;
     };
-    const ctx = await mod.default[0]!.setup();
+    const ctx = await mod.default[0].setup();
     const bodyOf = (suffix: string): Record<string, unknown> => {
       const fx = mod.default.find((f) => f.name.includes(suffix));
       expect(fx).toBeDefined();
-      return JSON.parse(fx!.input(ctx).body!) as Record<string, unknown>;
+      return JSON.parse(required(required(fx).input(ctx).body)) as Record<string, unknown>;
     };
     expect(bodyOf("too short 'name'").name).toBe("x");
     expect((bodyOf("too long 'label'").label as string).length).toBe(31);
@@ -380,7 +385,7 @@ describe("gen-fixtures", () => {
     expect(bodyOf("pattern violation 'code'").code).toBe("!!pattern-violation!!");
     expect(bodyOf("unexpected extra property").crustUnexpectedProp).toBe("gen-extra");
 
-    const auth = await Bun.file(result.files.find((f) => f.includes("auth"))!).text();
+    const auth = await Bun.file(required(result.files.find((f) => f.includes("auth")))).text();
     expect(auth).toContain("too short 'password' -> 400");
   });
 
@@ -422,7 +427,7 @@ describe("gen-fixtures", () => {
     });
     expect(result.flowCount).toBe(2);
     expect(result.flowFile).toBe(join(dir, "out4", "flows", "flows.gen.pipes"));
-    const pipes = await Bun.file(result.flowFile!).text();
+    const pipes = await Bun.file(required(result.flowFile)).text();
 
     // create: base body -> status assert -> json -> capture (derived id path)
     expect(pipes).toContain(
@@ -572,7 +577,7 @@ export function resolvePath(ctx, template) {
         log: () => {},
       });
       expect(result.flowCount).toBe(1);
-      const report = await runPipes({ target: result.flowFile! });
+      const report = await runPipes({ target: required(result.flowFile) });
       expect(report.results.filter((r) => r.status === "fail")).toEqual([]);
       expect(report.totals).toEqual({ pass: 5, fail: 0, files: 1 });
     } finally {
@@ -667,9 +672,9 @@ export function resolvePath(ctx, template) {
         log: () => {},
       });
       expect(result.flowCount).toBe(1);
-      const pipes = await Bun.file(result.flowFile!).text();
+      const pipes = await Bun.file(required(result.flowFile)).text();
       expect(pipes).toContain("capture GEN_ID_API_GADGETS (b => b.gadget.id)");
-      const report = await runPipes({ target: result.flowFile! });
+      const report = await runPipes({ target: required(result.flowFile) });
       expect(report.results.filter((r) => r.status === "fail")).toEqual([]);
       expect(report.totals).toEqual({ pass: 5, fail: 0, files: 1 });
     } finally {
@@ -779,7 +784,7 @@ export function resolvePath(ctx, template) {
       log: () => {},
     });
     expect(result.flowCount).toBe(1);
-    const pipes = await Bun.file(result.flowFile!).text();
+    const pipes = await Bun.file(required(result.flowFile)).text();
     // PUT carries the FULL schema-valid body from the PUT op's own schema
     // (both required fields), not the POST's one-field base body.
     expect(pipes).toContain(
@@ -944,14 +949,14 @@ describe("$ref dereferencing", () => {
       setup: join(dir, "setup.ts"),
       log: () => {},
     });
-    const text = await Bun.file(result.files.find((f) => f.includes("gizmos"))!).text();
+    const text = await Bun.file(required(result.files.find((f) => f.includes("gizmos")))).text();
     expect(text).toContain("missing required 'name' -> 400");
     expect(text).toContain("too short 'name' -> 400");
     expect(text).toContain("too long 'name' -> 400");
     expect(text).toContain("invalid enum for 'kind' -> 400");
     // Flow derivation works through the $ref'd 201 response schema.
     expect(result.flowCount).toBe(1);
-    const flow = await Bun.file(result.flowFile!).text();
+    const flow = await Bun.file(required(result.flowFile)).text();
     expect(flow).toContain("capture GEN_ID_API_GIZMOS");
   });
 
@@ -990,7 +995,7 @@ describe("$ref dereferencing", () => {
       setup: join(dir, "setup.ts"),
       log: () => {},
     });
-    const text = await Bun.file(result.files.find((f) => f.includes("nodes"))!).text();
+    const text = await Bun.file(required(result.files.find((f) => f.includes("nodes")))).text();
     expect(text).toContain("missing required 'name' -> 400");
   });
 });
@@ -1069,7 +1074,7 @@ describe("flowOverrides", () => {
       log: (l: string) => logs.push(l),
     });
     expect(result.flowCount).toBe(1);
-    const flow = await Bun.file(result.flowFile!).text();
+    const flow = await Bun.file(required(result.flowFile)).text();
     expect(flow).toContain('"issueDate":"2026-01-01"');
     expect(flow).not.toContain("GEN_ID_API_TASKS");
     expect(logs.join("\n")).toContain("flowOverrides.skip");
@@ -1122,7 +1127,7 @@ describe("response-schema emission", () => {
       setup: join(dir, "setup.ts"),
       log: () => {},
     });
-    const text = await Bun.file(result.files.find((f) => f.includes("wombats"))!).text();
+    const text = await Bun.file(required(result.files.find((f) => f.includes("wombats")))).text();
     // The 400 matrix cases carry the documented 400 response schema… (formatted in crust's own
     // biome style by the in-process cwd fallback — biome-layout object, not raw JSON).
     expect(text).toContain('schema: { type: "object", required: ["code"]');
@@ -1185,7 +1190,7 @@ describe("openapi 3.1 union types in generated fixtures", () => {
         flows: false,
         log: () => {},
       });
-      const text = await Bun.file(result.files[0]!).text();
+      const text = await Bun.file(result.files[0]).text();
       // before the fix these were absent: the boundary matrix skipped the field entirely
       expect(text).toContain("too short");
       expect(text).toContain("too long");
@@ -2683,9 +2688,12 @@ describe("a $ref with siblings reads the way the mock reads it (F44)", () => {
     );
     const { spec } = await loadSpec(path);
     // F47 moved a 2.0 body parameter into `requestBody`, and the sibling rides along with it.
-    const op = spec.paths!["/itv/deleteaccount"].post!;
+    const op = required(spec.paths)["/itv/deleteaccount"].post;
     expect(op.parameters).toEqual([]); // the body moved; the list is what's left of it
-    const node = op.requestBody!.content!["application/json"]!.schema as Record<string, unknown>;
+    const node = required(required(op.requestBody).content)["application/json"].schema as Record<
+      string,
+      unknown
+    >;
     expect(node.$ref).toBe("#/components/schemas/Req"); // rewritten, sibling untouched
     const inlined = derefSchemas(node, spec) as Record<string, unknown>;
     expect(inlined.type).toBe("object");
@@ -3319,7 +3327,7 @@ describe("expectations — reviewed setup-module configuration (F6)", () => {
       flows: false,
       log: () => {},
     });
-    const file = await Bun.file(result.files[0]!).text();
+    const file = await Bun.file(result.files[0]).text();
     expect(file).toContain("missing required 'name' -> 422");
     expect(file).toContain("status: 422");
     // No permissive anything: every case expects exactly 422, and the 400
@@ -3530,7 +3538,7 @@ describe("expectations — reviewed setup-module configuration (F6)", () => {
     // inert without configuration.
     expect(empty.files.length).toBe(plain.files.length);
     for (const f of plain.files) {
-      const twin = join(join(dir, "exp-mirror-b", "out"), f.split("/").pop()!);
+      const twin = join(join(dir, "exp-mirror-b", "out"), required(f.split("/").pop()));
       expect(await Bun.file(twin).text()).toBe(await Bun.file(f).text());
     }
     expect(await Bun.file(empty.manifestPath).text()).toBe(
@@ -3559,7 +3567,7 @@ describe("expectations — reviewed setup-module configuration (F6)", () => {
     expect(await Bun.file(b.manifestPath).text()).toBe(await Bun.file(a.manifestPath).text());
     expect(a.files.length).toBe(b.files.length);
     for (let i = 0; i < a.files.length; i++) {
-      expect(await Bun.file(b.files[i]!).text()).toBe(await Bun.file(a.files[i]!).text());
+      expect(await Bun.file(b.files[i]).text()).toBe(await Bun.file(a.files[i]).text());
     }
   });
 });

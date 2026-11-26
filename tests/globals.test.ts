@@ -28,13 +28,13 @@ function documentedGlobals(usage: string): string[] {
       // A signature row — take the callee only. Splitting on commas here would
       // harvest PARAMETER names (`range(start, end)` → "end").
       const m = line.match(/^([A-Za-z_$][A-Za-z0-9_$]*)\s*\(/);
-      if (m) names.add(m[1]!);
+      if (m) names.add(m[1]);
       continue;
     }
     // A bare-name row: "Pipeline", "$", or "PUT, PATCH, DELETE".
     for (const part of line.split(",")) {
       const m = part.trim().match(/^([A-Za-z_$][A-Za-z0-9_$]*)$/);
-      if (m) names.add(m[1]!);
+      if (m) names.add(m[1]);
     }
   }
   return [...names].sort();

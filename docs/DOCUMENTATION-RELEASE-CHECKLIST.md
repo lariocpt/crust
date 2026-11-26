@@ -268,3 +268,34 @@ This record does not grant new execution or rollback permissions. Future
 releases require their own candidate review, approvals, validation, and
 publication evidence. Keep secrets, environment files, tokens, journals, and
 reports out of release review.
+
+## Site package (`@crust/site`) release gates — forward template
+
+The first release that ships `@crust/site` (published from the same `v*` tag
+as the crust binaries; see `docs/INTERNAL.md` for the packaging decision)
+adds these gates to the checklist above. They are preparation requirements,
+not claims — check each only with evidence from that release's run.
+
+- [ ] `packages/site` docs gate green: `packages/site/scripts/lint-docs.mjs`
+      (type-checks every ` ```ts ` fence in `packages/site/docs/USAGE.md` and
+      `packages/site/README.md` against the package's public types) passes via
+      `packages/site/tests/docs.test.ts` inside the full root `bun test` on
+      the final released source commit. The README ships to npmjs.org
+      byte-for-byte, exactly like `npm/README.md` — a broken example there
+      reaches every installer.
+- [ ] Root docs gates green on the same commit: `tests/docs-lint.test.ts`
+      (includes the `site` stub lines and `skills/crust-site/SKILL.md`) and
+      `tests/skills.test.ts` (the skill is embedded via `src/skillsData.ts`).
+- [ ] `release.yml` publishes `@crust/site` to npmjs.org from the same tag,
+      after the binaries and launcher steps — it is a JS package (no new
+      binaries), so the binary-before-launcher ordering invariant is untouched
+      but the step must not precede the binary uploads.
+- [ ] The `crust-website` PR is open before the tag is pushed: `docs/site/**`
+      pages plus the Grammar:site gate running the site fence checker over the
+      website's own pages (the crust repo cannot fail for website drift —
+      see AGENTS.md, "Docs are part of the deliverable").
+- [ ] Published-package smoke: `bunx @crust/site build` and `bunx @crust/site
+      dev` run from a scratch project against the published version (plain
+      Bun >= 1.4), and `crust site build` from the published binary prints the
+      redirect with a nonzero exit — never a silent 0, never `sh`'s 127.
+

@@ -221,7 +221,7 @@ function walkSequence(src: string, extra: number, depth: number): string | null 
       i = end + 1;
     } else if (src[i] === ")") {
       return null; // a group this walk did not open
-    } else if ("+*?{".includes(src[i]!)) {
+    } else if ("+*?{".includes(src[i])) {
       return null; // a quantifier with nothing before it
     } else if (src[i] === "|") {
       // A bare `|` here is an alternation the walk cannot choose between. It used to be reached by
@@ -234,7 +234,7 @@ function walkSequence(src: string, extra: number, depth: number): string | null 
       // across the corpus. Decline instead; the caller's fallback is the honest answer.
       return null;
     } else {
-      atom = src[i]!;
+      atom = src[i];
       i += 1;
     }
 
@@ -355,9 +355,9 @@ function pickFromClass(body: string): string | null {
     }
     // a range like a-z, and never the trailing hyphen of "a-z-"
     if (body[i + 1] === "-" && i + 2 < body.length && body[i + 2] !== "]") {
-      return body[i]!;
+      return body[i];
     }
-    if (body[i] !== "-") return body[i]!;
+    if (body[i] !== "-") return body[i];
     i += 1;
   }
   return null;
@@ -399,7 +399,7 @@ function splitTopLevel(src: string, delim: string): string[] {
   let inClass = false;
   let cur = "";
   for (let i = 0; i < src.length; i++) {
-    const c = src[i]!;
+    const c = src[i];
     if (c === "\\") {
       cur += c + (src[i + 1] ?? "");
       i++;

@@ -41,6 +41,6 @@ export async function appendHistory(line: string, history: string[]): Promise<vo
   if (!line.trim()) return;
   if (history[history.length - 1] === line) return;
   await mkdir(dirname(HISTORY_PATH), { recursive: true });
-  await appendFile(HISTORY_PATH, line + "\n");
+  await appendFile(HISTORY_PATH, `${line}\n`);
   history.push(line);
 }

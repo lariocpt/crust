@@ -31,6 +31,7 @@ import * as editor from "../src/editor";
 import * as interrupt from "../src/interrupt";
 import { type ReplTty, runLine, runLines } from "../src/runLine";
 import type { Context } from "../src/types";
+import { required } from "./support/required";
 
 // ---------- harness ----------
 
@@ -192,29 +193,29 @@ describe("assembler units — needsContinuation / joinContinued (src/editor.ts)"
   test("trailing backslash continues", () => {
     const fn = needsContinuation;
     expect(typeof fn).toBe("function");
-    expect(fn!("range(1,3) \\")).toBe(true);
-    expect(fn!("range(1,3) \\\n| wc -l")).toBe(false);
+    expect(required(fn)("range(1,3) \\")).toBe(true);
+    expect(required(fn)("range(1,3) \\\n| wc -l")).toBe(false);
   });
 
   test("an escaped backslash (\\\\) does NOT continue", () => {
     const fn = needsContinuation;
     expect(typeof fn).toBe("function");
-    // Two backslashes at end of line = one escaped backslash: a complete line.
-    expect(fn!("echo \\\\\\")).toBe(false);
+    // Preserve the historical fixture: three literal backslashes.
+    expect(required(fn)(`echo ${String.fromCharCode(92).repeat(3)}`)).toBe(false);
   });
 
   test("unbalanced double quote continues", () => {
     const fn = needsContinuation;
     expect(typeof fn).toBe("function");
-    expect(fn!('echo "abc')).toBe(true);
-    expect(fn!('echo "abc"')).toBe(false);
+    expect(required(fn)('echo "abc')).toBe(true);
+    expect(required(fn)('echo "abc"')).toBe(false);
   });
 
   test("unbalanced ( continues", () => {
     const fn = needsContinuation;
     expect(typeof fn).toBe("function");
-    expect(fn!("range(1,")).toBe(true);
-    expect(fn!("range(1,3)")).toBe(false);
+    expect(required(fn)("range(1,")).toBe(true);
+    expect(required(fn)("range(1,3)")).toBe(false);
   });
 
   test("balanced-but-mismatched (backtick closed by ') does NOT continue", () => {
@@ -222,7 +223,7 @@ describe("assembler units — needsContinuation / joinContinued (src/editor.ts)"
     expect(typeof fn).toBe("function");
     // ` opens, ' closes: the counts balance but the pair does not — a mistyped
     // line must still error immediately, not hang waiting for a match.
-    expect(fn!("echo `abc'")).toBe(false);
+    expect(required(fn)("echo `abc'")).toBe(false);
   });
 
   test("a JSON-literal paste continues (and finishes balanced)", () => {
@@ -230,18 +231,18 @@ describe("assembler units — needsContinuation / joinContinued (src/editor.ts)"
     expect(typeof fn).toBe("function");
     const line1 = `sh -c 'echo {"name":`;
     const full = `sh -c 'echo {"name":\n"crust"}'`;
-    expect(fn!(line1), "line 1 ends mid-quote — the paste must continue").toBe(true);
-    expect(fn!(full), "the whole paste is balanced — submit it").toBe(false);
+    expect(required(fn)(line1), "line 1 ends mid-quote — the paste must continue").toBe(true);
+    expect(required(fn)(full), "the whole paste is balanced — submit it").toBe(false);
   });
 
   test("joinContinued strips then joins, preserving newlines inside stages", () => {
     const fn = joinContinued;
     expect(typeof fn).toBe("function");
     // Backslash line: strip-then-join, mirroring splitLines.
-    expect(fn!(["range(1,3) \\", "| wc -l"])).toBe("range(1,3) | wc -l");
+    expect(required(fn)(["range(1,3) \\", "| wc -l"])).toBe("range(1,3) | wc -l");
     // Quote-continued heredoc: the sh stage NEEDS the real newline, so a
     // space-join here would turn a terminated heredoc into an unterminated one.
-    expect(fn!(['sh -c "cat <<EOF', "hi", 'EOF" | (x => x)'])).toBe(
+    expect(required(fn)(['sh -c "cat <<EOF', "hi", 'EOF" | (x => x)'])).toBe(
       'sh -c "cat <<EOF\nhi\nEOF" | (x => x)',
     );
   });

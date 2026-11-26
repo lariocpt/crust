@@ -71,11 +71,11 @@ const DEFAULT_WIDTH = 80; // what the editor falls back to when stdout has none
 // from coming back.
 const replaceAt = (prevVisual: number, width = DEFAULT_WIDTH): string =>
   `${CSI}${((prevVisual - 1) % width) + 1}P\r${CSI}J`;
-const REPLACE = "\r" + CSI + "J";
+const REPLACE = `\r${CSI}J`;
 // Leaving search mode also CLIMBS back to the row the draft line ends on, so
 // the draft is re-painted where it belongs instead of being left on screen
 // twice (measured in a real pty — the bug this pin exists for).
-const climb = (rows: number): string => CSI + rows + "A";
+const climb = (rows: number): string => `${CSI}${rows}A`;
 
 // JS-level capture of the editor's prompt repaints (writeStdout). `columns`
 // drives the width the editor consults for its soft-wrap arithmetic — the
@@ -192,10 +192,10 @@ describe("Ctrl-R search mode — basic walk", () => {
     // previous paint's own width (29 = 16 prompt + 13 match; 31 after the two
     // chars typed since), so the arithmetic is pinned, not just the shape.
     expect(r.out, "entry opens the search line with the newest entry").toContain(
-      "\n" + SEARCH_PROMPT + "curl GET /api",
+      `\n${SEARCH_PROMPT}curl GET /api`,
     );
     expect(
-      r.out.includes(replaceAt(SP_VISUAL + "curl GET /api".length) + SEARCH_PROMPT + "G"),
+      r.out.includes(`${replaceAt(SP_VISUAL + "curl GET /api".length)}${SEARCH_PROMPT}G`),
       "the first keystroke replaces the entry paint, counting back its width",
     ).toBe(true);
     expect(painted(r.out, "GET", "curl GET /api"), "search line: query + newest match").toBe(true);
@@ -210,7 +210,7 @@ describe("Ctrl-R search mode — basic walk", () => {
     ).toBe(true);
     expect(r.line, "the accepted match submits on the second Enter").toBe("curl GET /api");
     expect(
-      r.out.includes(climb(1) + REPLACE + PROMPT + "curl GET /api"),
+      r.out.includes(`${climb(1)}${REPLACE}${PROMPT}curl GET /api`),
       "accepting puts the match on the PROMPT's row, not the search line's",
     ).toBe(true);
     // Search never mutates the history array.
@@ -226,7 +226,7 @@ describe("Ctrl-R search mode — basic walk", () => {
     expect(
       paintedBefore(
         r.out,
-        SEARCH_PROMPT + "GET" + "curl GET /api",
+        `${SEARCH_PROMPT}GETcurl GET /api`,
         replaceAt(SP_VISUAL + "GET".length + "curl GET /api".length) +
           SEARCH_PROMPT +
           "GET" +
@@ -277,9 +277,9 @@ describe("Ctrl-R search mode — basic walk", () => {
     // Backspace — so the pin is on the LAST paints: the shorter query must be
     // the final thing on screen, not the older keystroke.
     expect(
-      r.out.lastIndexOf(SEARCH_PROMPT + "GE" + "curl GET /api"),
+      r.out.lastIndexOf(`${SEARCH_PROMPT}GEcurl GET /api`),
       "Backspace repainted the SHORTER query with its own newest match",
-    ).toBeGreaterThan(r.out.lastIndexOf(SEARCH_PROMPT + "GET" + "curl GET /api"));
+    ).toBeGreaterThan(r.out.lastIndexOf(`${SEARCH_PROMPT}GETcurl GET /api`));
     expect(r.line).toBe("curl GET /api");
   });
 
@@ -302,7 +302,7 @@ describe("Ctrl-R search mode — cancel restores the draft", () => {
       history,
       feeds: [draft, CTRLR, "G", "E", "T", CTRG, "!", CR],
     });
-    expect(r.line, "the cancelled search left the draft byte-exact").toBe(draft + "!");
+    expect(r.line, "the cancelled search left the draft byte-exact").toBe(`${draft}!`);
     expect(
       r.out.includes(climb(1) + REPLACE + PROMPT + draft),
       "the draft is re-painted on ITS OWN row and the search line's row is erased",
@@ -316,7 +316,7 @@ describe("Ctrl-R search mode — cancel restores the draft", () => {
       history,
       feeds: [draft, CTRLR, "h", "i", ESC, "there", CR],
     });
-    expect(r.line).toBe(draft + "there");
+    expect(r.line).toBe(`${draft}there`);
   });
 
   test("Ctrl-C during a search cancels the search FIRST (does not clear the draft)", async () => {
@@ -326,7 +326,7 @@ describe("Ctrl-R search mode — cancel restores the draft", () => {
       history,
       feeds: [draft, CTRLR, "h", "i", CTRC, "!", CR],
     });
-    expect(r.line, "Ctrl-C in search mode must not clear the line").toBe(draft + "!");
+    expect(r.line, "Ctrl-C in search mode must not clear the line").toBe(`${draft}!`);
     expect(
       r.out.includes(climb(1) + REPLACE + PROMPT + draft),
       "and it restores the draft the same way Ctrl-G does — no ^C, no lost typing",
@@ -380,7 +380,7 @@ describe("Ctrl-R search mode — G08 continuation interplay", () => {
     });
     expect(r.line, "the entry joins the pending line with the matched line").toBe("echo GET");
     expect(
-      r.out.includes(climb(1) + REPLACE + CONT_PROMPT + "GET"),
+      r.out.includes(`${climb(1)}${REPLACE}${CONT_PROMPT}GET`),
       "accept lands on the … row — the pending line above it is never re-painted",
     ).toBe(true);
     expect(r.out, "the pending physical line is still on screen").toContain("crust>echo \\");
@@ -422,16 +422,16 @@ describe("Ctrl-R search mode — editing after a search", () => {
     // stream, and the search line is painted after the draft line.
     expect(r.out, "the prompt line survives the search").toContain(PROMPT + long);
     expect(r.out, "the search line is painted after the draft line").toContain(
-      "\n" + SEARCH_PROMPT,
+      `\n${SEARCH_PROMPT}`,
     );
     // The match is longer than any terminal width: it is painted WHOLE (the
     // line wraps, nothing is truncated), and the repaint that replaces it
     // counts back to the row the wrapped paint ENDED on — 16 + 205 columns at
     // width 80 leaves the cursor on the third row at column 61, so the replace
     // counts 61, not the full length and not the width.
-    expect(r.out, "the full 200-char match is painted").toContain(SEARCH_PROMPT + "echo" + long);
+    expect(r.out, "the full 200-char match is painted").toContain(`${SEARCH_PROMPT}echo${long}`);
     expect(
-      r.out.includes(replaceAt(SP_VISUAL + long.length) + SEARCH_PROMPT + "e"),
+      r.out.includes(`${replaceAt(SP_VISUAL + long.length)}${SEARCH_PROMPT}e`),
       "the repaint after a wrapped paint counts back to its own end column",
     ).toBe(true);
     // And leaving a search line that covered three rows climbs all three back
@@ -458,10 +458,10 @@ describe("Ctrl-R search mode — editing after a search", () => {
       columns: 15,
     });
     expect(r.out, "the search paint follows the draft's own repaint, no newline").toContain(
-      PROMPT + draft + CSI + "K" + SEARCH_PROMPT,
+      `${PROMPT}${draft}${CSI}K${SEARCH_PROMPT}`,
     );
     expect(r.out, "no newline opens the search line (the terminal's wrap did)").not.toContain(
-      PROMPT + draft + "\n",
+      `${PROMPT}${draft}\n`,
     );
     // The entry paint is "(crust-search): needle" = 22 columns at width 15 = two
     // rows, so leaving climbs both.
@@ -470,7 +470,7 @@ describe("Ctrl-R search mode — editing after a search", () => {
       "cancel climbs back off the wrap and re-paints the draft on its own row",
     ).toBe(true);
     expect(r.line, "the cancelled search left the draft, then the typed key landed in it").toBe(
-      draft + "!",
+      `${draft}!`,
     );
   });
 
@@ -482,9 +482,9 @@ describe("Ctrl-R search mode — editing after a search", () => {
       feeds: [draft, CTRLR, "m", "a", "t", CR, CR],
     });
     expect(r.out, "the search line opens on a NEW line below the draft").toContain(
-      "\n" + SEARCH_PROMPT,
+      `\n${SEARCH_PROMPT}`,
     );
-    const paint = SEARCH_PROMPT + "mat" + "abc match";
+    const paint = `${SEARCH_PROMPT}matabc match`;
     const at = r.out.lastIndexOf(paint);
     expect(at, "search line: prompt + query + match").toBeGreaterThan(-1);
     expect(

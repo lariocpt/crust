@@ -1,7 +1,6 @@
 import { resolve } from "node:path";
 import { Glob } from "bun";
 import { registerBuiltinFns } from "../builtinFns";
-import { expandTarget as expandGlob } from "../fixtures";
 import { parse } from "../parser";
 import type { Context } from "../types";
 
@@ -132,8 +131,7 @@ export async function runPipes(opts: PipesOpts): Promise<PipesReport> {
       const lines = text.split("\n");
       const ctx = freshContext();
 
-      for (let i = 0; i < lines.length; i++) {
-        const raw = lines[i]!;
+      for (const [i, raw] of lines.entries()) {
         const line = raw.trim();
         if (!line || line.startsWith("#")) continue;
         const start = performance.now();

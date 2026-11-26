@@ -52,7 +52,7 @@ export function unterminatedHeredoc(text: string): string | null {
   const re = /(?<!<)<<(?!<)-?\s*('([^']*)'|"([^"]*)"|([A-Za-z_][A-Za-z0-9_]*))/;
   for (const line of lines) {
     if (open.length > 0) {
-      const t = open[0]!;
+      const t = open[0];
       const s = t.dash ? line.replace(/^\t+/, "") : line;
       if (s === t.marker || (s.startsWith(t.marker) && /^["'`]*$/.test(s.slice(t.marker.length)))) {
         open.shift();
@@ -61,10 +61,10 @@ export function unterminatedHeredoc(text: string): string | null {
     }
     const m = line.match(re);
     if (!m) continue;
-    const marker = m[2] ?? m[3] ?? m[4]!;
-    open.push({ marker, dash: m[0]!.startsWith("<<-") });
+    const marker = m[2] ?? m[3] ?? m[4];
+    open.push({ marker, dash: m[0].startsWith("<<-") });
   }
-  return open.length > 0 ? open[0]!.marker : null;
+  return open.length > 0 ? open[0].marker : null;
 }
 
 export function unterminatedHeredocError(marker: string): string {
@@ -88,7 +88,7 @@ export function parse(line: string, repl = false): (ctx?: Context) => Pipeline<u
   // reach here with nothing is `crust -c ''`.
   if (tokens.length > 1) {
     for (let i = 0; i < tokens.length; i++) {
-      if (tokens[i]!.text !== "") continue;
+      if (tokens[i].text !== "") continue;
       if (i === 0) {
         // The `\` advice must name the mechanism that exists IN THIS MODE
         // (G08): at the REPL the editor continues a line ending with `\`
@@ -122,9 +122,9 @@ export function parse(line: string, repl = false): (ctx?: Context) => Pipeline<u
   // registered fn) is still refused if its text is genuinely unterminated:
   // such an argument is shift-syntax garbage to the fn's new Function too.
   if (tokens.length > 0) {
-    const headIsTime = classify(tokens[0]!.text).kind === "time";
+    const headIsTime = classify(tokens[0].text).kind === "time";
     for (let i = 0; i < tokens.length; i++) {
-      const t = tokens[i]!;
+      const t = tokens[i];
       if (t.text === "") continue;
       const kind = classify(t.text);
       const isHead = i === (headIsTime ? 1 : 0);
@@ -139,7 +139,7 @@ export function parse(line: string, repl = false): (ctx?: Context) => Pipeline<u
     // transform that fires when the iterator drains (success or error).
     let startIdx = 0;
     let timeLabel: string | null = null;
-    const headText = tokens[0]!.text;
+    const headText = tokens[0].text;
     const head = resolveKind(headText, ctx);
     // `$(…)` is sh's; a non-shell stage would read it as literal text and build
     // data from it. A head shell stage whose masked text classifies as a crust
@@ -174,10 +174,10 @@ export function parse(line: string, repl = false): (ctx?: Context) => Pipeline<u
     // error (it used to be a silent drop, which read as "worked").
     let pendingParallel: number | null = null;
     for (let i = startIdx; i < tokens.length; i++) {
-      const kind = resolveKind(tokens[i]!.text, ctx);
+      const kind = resolveKind(tokens[i].text, ctx);
       // Mid-pipeline, a `$(…)` inside a shell stage belongs to sh (it is
       // substituted once, at spawn) — only a NON-shell kind reads it as data.
-      if (kind.kind !== "shell") rejectSubstitution(tokens[i]!.text);
+      if (kind.kind !== "shell") rejectSubstitution(tokens[i].text);
       if (kind.kind === "time") {
         throw new Error("time: only allowed as the first stage of a pipeline");
       }
@@ -281,7 +281,7 @@ function resolveKind(text: string, ctx?: Context): StageKind {
     // Quote-aware and quote-stripping: `sql "SELECT count(*) FROM x" 42`
     // must reach the fn as ONE query string + one param.
     const parts = splitArgs(text.trim());
-    const head = parts[0]!;
+    const head = parts[0];
     if (ctx.functions.has(head)) {
       // `sql "…" > out.json` would otherwise hand `>` and the path to the fn
       // as query parameters. Same refusal the lexer raises, at the point where
@@ -457,8 +457,14 @@ function applyStage(
           ) as never,
         ) as Pipeline<unknown>;
       }
+      const httpTransforms = {
+        POST: transforms.POST,
+        PUT: transforms.PUT,
+        PATCH: transforms.PATCH,
+        DELETE: transforms.DELETE,
+      };
       return input.pipe(
-        transforms[kind.verb](url, opts, kind.timeoutMs) as never,
+        httpTransforms[kind.verb](url, opts, kind.timeoutMs) as never,
       ) as Pipeline<unknown>;
     }
     case "expect":
@@ -727,7 +733,7 @@ function builtinHelp(name: string, args: unknown[], ctx?: Context): void {
       // The scan stops at `--`: everything after it is an operand, so
       // `base64 -- --help` encodes the flag. The piped item is never in args,
       // so `echo "--help" | base64` still encodes.
-      throw new HelpExit(BUILTIN_FN_USAGE[name]!);
+      throw new HelpExit(BUILTIN_FN_USAGE[name]);
     }
   }
 }
@@ -831,7 +837,7 @@ function shellTransform(input: Pipeline<unknown>, cmd: string): Pipeline<unknown
                 // paces the writer AND surfaces EPIPE here (catchable) when
                 // the child exits early, instead of as unhandled-rejection
                 // spam from the sink's internal flush.
-                const r = writer.write(formatItem(item) + "\n") as number | Promise<number>;
+                const r = writer.write(`${formatItem(item)}\n`) as number | Promise<number>;
                 if (typeof r !== "number") await r;
               } catch {
                 break; // child closed stdin — stop feeding, not an error

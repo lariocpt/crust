@@ -29,11 +29,11 @@ interface OpenState {
 export function scanLine(line: string, open: OpenState): string {
   let out = "";
   for (let i = 0; i < line.length; i++) {
-    const c = line[i]!;
+    const c = line[i];
     if (open.q) {
       out += c;
       if (open.q === '"' && c === "\\" && i + 1 < line.length) {
-        out += line[++i]!;
+        out += line[++i];
         continue;
       }
       if (c === open.q) open.q = null;
@@ -89,7 +89,7 @@ export async function shStageProblem(stageText: string): Promise<string | null> 
 function crustLines(markdown: string): string[] {
   const lines: string[] = [];
   for (const m of markdown.matchAll(/```(?:bash|crust)\n([\s\S]*?)```/g)) {
-    const body = m[1]!;
+    const body = m[1];
     // Heredocs are shell payloads, not crust lines.
     if (body.includes("<<")) continue;
     const open: OpenState = { q: null, depth: 0 };
@@ -188,6 +188,7 @@ describe("documented examples parse", () => {
     ["skills/crust-builtins/SKILL.md", 12],
     ["skills/crust-cli/SKILL.md", 8],
     ["skills/crust-mcp/SKILL.md", 3],
+    ["skills/crust-site/SKILL.md", 3],
   ])("%s", async (rel, minLines) => {
     const text = await Bun.file(`${import.meta.dir}/../${rel}`).text();
     const lines = crustLines(text);
@@ -271,6 +272,7 @@ describe("the lint can actually fail", () => {
     expect(await checkBuiltinLine("test-fixture", [])).toMatch(/missing its target/);
     expect(await checkBuiltinLine("verify-web-links", [])).toMatch(/missing its target/);
     expect(await checkBuiltinLine("gen-fixtures", ["--swagger"])).toMatch(/needs a value/);
+    expect(await checkBuiltinLine("site", ["--bogus"])).toMatch(/^site: unknown argument/);
   });
 
   test("a correct builtin invocation passes, in both the new and legacy spellings", async () => {
@@ -278,6 +280,8 @@ describe("the lint can actually fail", () => {
     expect(await checkBuiltinLine("test-pipes", ["--target", "smoke.pipes", "--bail"])).toBeNull();
     expect(await checkBuiltinLine("gen-fixtures", ["./openapi.json"])).toBeNull();
     expect(await checkBuiltinLine("dotenv", ["status"])).toBeNull();
+    expect(await checkBuiltinLine("site", ["build"])).toBeNull();
+    expect(await checkBuiltinLine("site", ["build", "./site.config.ts"])).toBeNull();
     // Builtins with no declarative spec are skipped rather than guessed at.
     expect(await checkBuiltinLine("cd", ["/tmp"])).toBeNull();
   });
