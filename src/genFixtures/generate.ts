@@ -957,9 +957,12 @@ function baseBody(schema: Schema): Record<string, unknown> {
  * already refuses to emit a case for a value the API should accept; this is the same rule one level
  * up, on the body the cases share.
  *
- * Pointers come back as `/field` for both a constraint violation and a missing required property,
- * so an empty string here means a violation of the object itself (minProperties, dependentRequired)
- * — which blocks every case, since no case is about it.
+ * Pointers come back as `/field` for both a constraint violation and a missing required property.
+ * An empty string therefore means a violation of the object itself. The mock validator never
+ * produces one — it does not implement `minProperties`, `maxProperties` or `dependentRequired` —
+ * so through `unsoundFields` this branch is dead. `unsoundFieldsProven` does produce it, since the
+ * proof layer walks those keywords, and a body-level violation blocks every case: no case is about
+ * it, so nothing can be attributed to it.
  */
 function unsoundFields(body: Record<string, unknown>, schema: unknown): Map<string, string> {
   const bad = new Map<string, string>();
@@ -2444,8 +2447,10 @@ function deriveFlows(
     {
       const merged = { ...baseBody(bodySchema), ...(override?.body ?? {}) };
       // The strict proof, not the mock validator: `multipleOf`, `const` and `uniqueItems` bind the
-      // create step exactly as `pattern` does, and the permissive validator passes all three.
-      const bad = [...unsoundFieldsProven(merged, bodySchema)].filter(([field]) => field !== "");
+      // create step exactly as `pattern` does, and the permissive validator passes all three. A
+      // body-level violation (pointer "") counts too — the create step posts the whole body, so
+      // `minProperties` the merged body cannot reach 400s it just like a bad field would.
+      const bad = [...unsoundFieldsProven(merged, bodySchema)];
       if (bad.length > 0) {
         const blame = blameFields(bodySchema, bad);
         skipped.push({

@@ -1162,18 +1162,21 @@ describe("gen-fixtures — validationEnvelope (configured validation-response en
       expect(await Bun.file(b.manifestPath).text()).toBe(await Bun.file(a.manifestPath).text());
     });
 
-    test("the generated fastapi file is biome-format-idempotent under the mirrored repo config", async () => {
-      const file = join(dir, "det-a", "fastapi.gen.crust.ts");
-      const before = await Bun.file(file).text();
-      // The mirror written in the outer beforeAll carries the repo's own
-      // formatter settings, and this subprocess resolves it from its cwd —
-      // so it formats with exactly the settings the emitter used. `format`
-      // exits non-zero when the bytes need reformatting (runBiome surfaces
-      // its output in the error), and --write must then be a byte no-op: a
-      // consumer's biome pre-commit hook would change nothing.
-      await runBiome(["format", "det-a/fastapi.gen.crust.ts"], dir);
-      await runBiome(["format", "--write", "det-a/fastapi.gen.crust.ts"], dir);
-      expect(await Bun.file(file).text()).toBe(before);
-    });
+    test.skipIf(!existsSync(BIOME_BIN))(
+      "the generated fastapi file is biome-format-idempotent under the mirrored repo config",
+      async () => {
+        const file = join(dir, "det-a", "fastapi.gen.crust.ts");
+        const before = await Bun.file(file).text();
+        // The mirror written in the outer beforeAll carries the repo's own
+        // formatter settings, and this subprocess resolves it from its cwd —
+        // so it formats with exactly the settings the emitter used. `format`
+        // exits non-zero when the bytes need reformatting (runBiome surfaces
+        // its output in the error), and --write must then be a byte no-op: a
+        // consumer's biome pre-commit hook would change nothing.
+        await runBiome(["format", "det-a/fastapi.gen.crust.ts"], dir);
+        await runBiome(["format", "--write", "det-a/fastapi.gen.crust.ts"], dir);
+        expect(await Bun.file(file).text()).toBe(before);
+      },
+    );
   });
 });
