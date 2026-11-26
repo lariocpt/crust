@@ -75,9 +75,9 @@ describe("discoverContent", () => {
       "content/sub/.dot/x.md": "deep hidden",
     });
     expect(await discoverContent(f.config)).toEqual([
-      { absolutePath: join(f.dir, "content/a.md"), relativePath: "a" },
-      { absolutePath: join(f.dir, "content/b.md"), relativePath: "b" },
-      { absolutePath: join(f.dir, "content/sub/c.md"), relativePath: "sub/c" },
+      { absolutePath: join(f.dir, "content/a.md").replace(/\\/g, "/"), relativePath: "a" },
+      { absolutePath: join(f.dir, "content/b.md").replace(/\\/g, "/"), relativePath: "b" },
+      { absolutePath: join(f.dir, "content/sub/c.md").replace(/\\/g, "/"), relativePath: "sub/c" },
     ]);
     await rm(f.dir, { recursive: true, force: true });
   });
@@ -109,22 +109,32 @@ describe("discoverContent", () => {
   });
 
   test("filenames with spaces and unicode sort in code-unit order (locale-free, pinned)", async () => {
-    const f = await fixture({
-      "content/B file.md": "b",
-      "content/a.md": "a",
-      "content/b file.md": "b2",
-      "content/Ä.md": "a-sharp",
-      "content/ä.md": "a-ring",
-    });
+    // Deliberately unsorted, and distinct even after case-folding so Windows
+    // creates all five files instead of overwriting a case-only sibling.
+    const names = ["b second", "ä second", "B file", "Ä first", "a"];
+    expect(new Set(names.map((name) => name.toLowerCase())).size).toBe(names.length);
+    const f = await fixture(Object.fromEntries(names.map((name) => [`content/${name}.md`, name])));
     // Code-unit compare: 'B'(0x42) < 'a'(0x61) < 'b'(0x62) < 'Ä'(0xC4) < 'ä'(0xE4).
     // A locale collation (ICU) would order these differently — this pins
     // compareStrings, the plan §4.6 byte-identical-rebuild guarantee.
     expect(await discoverContent(f.config)).toEqual([
-      { absolutePath: join(f.dir, "content/B file.md"), relativePath: "B file" },
-      { absolutePath: join(f.dir, "content/a.md"), relativePath: "a" },
-      { absolutePath: join(f.dir, "content/b file.md"), relativePath: "b file" },
-      { absolutePath: join(f.dir, "content/Ä.md"), relativePath: "Ä" },
-      { absolutePath: join(f.dir, "content/ä.md"), relativePath: "ä" },
+      {
+        absolutePath: join(f.dir, "content/B file.md").replace(/\\/g, "/"),
+        relativePath: "B file",
+      },
+      { absolutePath: join(f.dir, "content/a.md").replace(/\\/g, "/"), relativePath: "a" },
+      {
+        absolutePath: join(f.dir, "content/b second.md").replace(/\\/g, "/"),
+        relativePath: "b second",
+      },
+      {
+        absolutePath: join(f.dir, "content/Ä first.md").replace(/\\/g, "/"),
+        relativePath: "Ä first",
+      },
+      {
+        absolutePath: join(f.dir, "content/ä second.md").replace(/\\/g, "/"),
+        relativePath: "ä second",
+      },
     ]);
     await rm(f.dir, { recursive: true, force: true });
   });

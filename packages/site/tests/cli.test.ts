@@ -243,7 +243,7 @@ describe("crust-site build (e2e)", () => {
   test("a good build exits 0, prints ONE summary line on stdout, nothing on stderr", async () => {
     const root = await tmp("crust-site-cli-build-");
     const cfg = await makeSite(root);
-    const dist = join(root, "dist");
+    const dist = join(root, "dist").replace(/\\/g, "/");
     const r = await cli("build", cfg);
     expect(r.code).toBe(0);
     // stdout is EXACTLY the summary line (the machine-consumed channel)

@@ -1182,14 +1182,15 @@ describe("publish", () => {
   });
 
   test("staging is a SIBLING of the output (same filesystem), never inside it", () => {
-    const out = "/some/parent/dist";
+    const parent = posixOf(join(tmpdir(), "crust-site-staging-parent"));
+    const out = posix.join(parent, "dist");
     const staging = stagingDirFor(out);
     // same parent as the output: same filesystem by construction, and
     // cleanupStale globs exactly this directory
-    expect(posix.dirname(staging)).toBe("/some/parent");
+    expect(posix.dirname(staging)).toBe(parent);
     expect(staging.startsWith(`${out}/`)).toBe(false);
     expect(staging).not.toBe(out);
-    expect(staging).toMatch(/^\/some\/parent\/\.crust-staging-\d+-[0-9a-f]{12}$/);
+    expect(posix.basename(staging)).toMatch(/^\.crust-staging-\d+-[0-9a-f]{12}$/);
     // pid + nonce: distinct per process and per attempt
     expect(stagingDirFor(out)).not.toBe(staging);
   });
