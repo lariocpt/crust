@@ -2,6 +2,10 @@
 
 ## v0.4.0 coordinated release
 
+**Production release status: partial; blocked at npm publication.** The GitHub
+binary release is live, but the npm launchers are not published. The coordinated
+website deployment and backend dependency pin remain on hold.
+
 The repository owner authorized production releases and requested the website
 release followed by the backend's installation of live Crust `0.4.0`.
 This candidate is a version/documentation milestone, not a new runtime-feature
@@ -15,19 +19,52 @@ release. The [0.3.9 audit](RELEASE-0.3.9-AUDIT.md) records what already shipped.
 - [x] Pass fresh full source tests, TypeScript, Biome, and diff checks.
 - [x] Pass both website build modes, generated internal links, and command
   grammar checks.
-- [ ] Commit and push the reviewed candidate, then create a new `v0.4.0` tag.
-- [ ] Pass the existing public release workflow, including binary stamps,
-  compiled variant probes, checksums, and binary-before-launcher publication.
-- [ ] Verify both public npm packages and released asset provenance.
+- [x] Commit and push the reviewed candidate, then create a new `v0.4.0` tag.
+- [x] Pass release-workflow tests and binary publication, including binary
+  stamps, compiled variant probes, and checksums.
+- [x] Independently verify the checksum manifest and all eight released asset
+  digests against GitHub's SHA-256 metadata.
+- [ ] Complete npm and GitHub Packages publication in the existing workflow,
+  preserving binary-before-launcher ordering.
+- [ ] Verify both public npm packages and their released source provenance.
 - [ ] Deploy the coordinated website after the package release; verify its
   production workflow and live content.
 - [ ] Only then pin the backend's Mongo launcher and lockfile to live `0.4.0`,
   validate the intended tooling, and commit/push that branch.
 
-Publication results and immutable revisions will be recorded after those
-actions succeed. No application API, application database, fixture, load, or
-LAN/Jenkins validation is implied. Do not reuse published versions or move
-released tags as an improvised rollback.
+### Publication evidence and blocker
+
+| Item | Observed state |
+| --- | --- |
+| Released source commit | `f24c456f8d7124c5d2fb43b212e8aee9f5ab1117` |
+| Source publication | Candidate pushed to public `main`; annotated `v0.4.0` tag pushed |
+| GitHub release | [Crust v0.4.0](https://github.com/lariocpt/crust/releases/tag/v0.4.0), published `2026-11-26T00:33:33Z`, non-draft and non-prerelease |
+| Published artifacts | Eight Linux/macOS, x64/arm64, clean/Mongo binaries plus `SHA256SUMS` |
+| Release workflow | [Run 45729364678](https://github.com/lariocpt/crust/actions/runs/45729364678), attempt 2 completed with failure in npm publication |
+| npm packages | Both packages remain at `latest=0.3.9`; neither public package metadata document contains `0.4.0` |
+| GitHub Packages | Publication steps were skipped after npm failed |
+| Website candidate | Local commit `8e0dfdb167e65d8b8babe7e9816a6ad7f79d1afd`; not pushed or deployed |
+| Backend branch | `feature/crust-main` unchanged: manifest still requests `latest`, lockfile still resolves `0.3.9` |
+
+The original npm job and one npm-only retry both failed with `E404` on
+`PUT https://registry.npmjs.org/@lariocpt%2fcrust`. Public reads of both existing
+packages succeeded. The configured CI secret passed the workflow's nonempty
+check, but that does not establish valid publishing access. The exact credential
+or registry-access cause is unverified. Local `npm whoami` returned `ENEEDAUTH`,
+and no local publishing token was available.
+
+An owner must repair npm publishing access, including checking the CI
+`NPM_TOKEN` validity, package write permissions, and applicable authentication
+requirements, then update the repository secret securely if necessary. Do not
+paste credentials into chat or commit them. Resume with only the failed npm job;
+do not move the tag, rebuild, or overwrite the published binaries. After both
+package versions and their provenance are verified, push/deploy the website
+candidate and verify it live. Only then update, validate, commit, and push the
+backend's exact `0.4.0` dependency pin.
+
+No application API, application database, fixture, load, or LAN/Jenkins
+validation is implied. Do not reuse published versions or move released tags
+as an improvised rollback.
 
 ### Fresh candidate validation
 
