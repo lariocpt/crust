@@ -465,6 +465,16 @@ describe("build — failure contract", () => {
 // ---------------------------------------------------------------------------
 
 describe("build — link validation (chunk 8)", () => {
+  test("rewritten Markdown links retain the site prefix through final validation", async () => {
+    const root = await tmp("crust-site-link-prefix-");
+    const cfg = await makeSite(root, configSource({ site: "https://example.dev/docs" }));
+    const result = await build({ configFile: cfg });
+    expect(result.warnings).toEqual([]);
+    const index = await readFile(join(root, "dist", "index.html"), "utf8");
+    expect(index).toContain('href="/docs/a/b#b"');
+    expect(index).toContain('href="#hello"');
+  });
+
   test("a .md link to a nonexistent page is link.broken (source + line + destination); previous output untouched", async () => {
     const root = await tmp("crust-site-link-broken-");
     const cfg = await makeSite(root);
@@ -722,6 +732,21 @@ describe("build — config loading", () => {
 // ---------------------------------------------------------------------------
 
 describe("publicAsset existence check", () => {
+  test("URL encoding preserves the literal path for existence checks and copying", async () => {
+    const root = await tmp("crust-site-pa-encoded-");
+    const path = "logo# 100%.svg";
+    const cfg = await makeSite(
+      root,
+      configSource({ publicAsset: path, site: "https://example.dev/docs" }),
+    );
+    await writeFile(join(root, "public", path), "literal asset");
+    const result = await build({ configFile: cfg });
+    expect(result.warnings).toEqual([]);
+    const index = await readFile(join(root, "dist", "index.html"), "utf8");
+    expect(index).toContain(`https://example.dev/docs/${encodeURIComponent(path)}`);
+    expect(await readFile(join(root, "dist", path), "utf8")).toBe("literal asset");
+  });
+
   test("a path that exists under publicDirectory builds and renders", async () => {
     const root = await tmp("crust-site-pa-ok-");
     const cfg = await makeSite(root, configSource({ publicAsset: "favicon.txt" }));
@@ -1359,6 +1384,53 @@ describe("writePages / notFoundPage", () => {
 // ---------------------------------------------------------------------------
 // output collisions: public files vs generated files (e2e)
 // ---------------------------------------------------------------------------
+
+describe("output collisions — generated vs generated (e2e)", () => {
+  for (const route of ["/index", "/INDEX", "/404"]) {
+    test(`${route} cannot overwrite another generated page; previous output untouched`, async () => {
+      const root = await tmp("crust-site-generated-collide-");
+      const cfg = await makeSite(root);
+      await build({ configFile: cfg });
+      const before = treeHash(await tree(join(root, "dist")));
+      await writeFile(
+        join(root, "content", "conflict.md"),
+        `---\ntitle: Conflict\ndescription: Conflict\nroute: ${route}\n---\n\n# Conflict\n`,
+      );
+      let error: unknown;
+      try {
+        await build({ configFile: cfg });
+      } catch (e) {
+        error = e;
+      }
+      expect(error).toBeInstanceOf(BuildError);
+      const collisions = (error as BuildError).diagnostics.filter(
+        (d) => d.code === "output.collision",
+      );
+      expect(collisions).toHaveLength(1);
+      expect(collisions[0]?.sourcePath).toBe(route === "/404" ? "404.html" : "index.html");
+      expect(collisions[0]?.message).toContain("content/conflict.md");
+      expect(collisions[0]?.message).toContain(
+        route === "/404" ? "the generated 404 page" : "content/index.md",
+      );
+      expect(treeHash(await tree(join(root, "dist")))).toBe(before);
+      expect((await readdir(root)).filter((n) => n.startsWith(".crust-"))).toEqual([]);
+    });
+  }
+
+  test("similar routes with distinct output files still build", async () => {
+    const root = await tmp("crust-site-generated-distinct-");
+    const cfg = await makeSite(root);
+    await writeFile(
+      join(root, "content", "other.md"),
+      "---\ntitle: Other\ndescription: Other\nroute: /index-other\n---\n\n# Other\n",
+    );
+    const result = await build({ configFile: cfg });
+    expect(result.pages.some((p) => p.file === "index-other.html")).toBe(true);
+    expect((await tree(join(root, "dist")))["index.html"]?.toString()).toContain(
+      "<title>Home</title>",
+    );
+  });
+});
 
 describe("output collisions — public vs generated (e2e)", () => {
   test("a public file colliding with a generated file is an output.collision error, never a silent overwrite", async () => {

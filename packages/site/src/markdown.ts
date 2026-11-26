@@ -41,7 +41,7 @@ import type { Options as MdOptions, Renderer, StateCore, Token } from "markdown-
 import MarkdownIt from "markdown-it";
 import { type Diagnostic, isDiagnostic } from "./diagnostics";
 import { type Html, trustedHtml } from "./html";
-import { normalizeRoute } from "./routes";
+import { canonicalUrl, normalizeRoute } from "./routes";
 import type { Heading, InternalLink, RouteResolver } from "./types";
 import { validateUrl } from "./url";
 
@@ -283,7 +283,24 @@ function buildRenderer(opts: MarkdownOptions, state: RenderState): MarkdownIt {
         return;
       }
       if (resolved !== null) {
-        token.attrSet(attr, fragment === null ? resolved.route : `${resolved.route}#${fragment}`);
+        // Routes stay site-relative for validation; browser destinations
+        // must include the configured deployment prefix (e.g. /docs).
+        const prefix = new URL(opts.siteUrl).pathname.replace(/\/$/, "");
+        // A pathname beginning // would become a protocol-relative URL.
+        // Keep the full origin for that accepted site-prefix shape.
+        const destination = canonicalUrl(
+          prefix.startsWith("//") ? opts.siteUrl : prefix,
+          resolved.route,
+        );
+        const value = fragment === null ? destination : `${destination}#${fragment}`;
+        try {
+          validateUrl(value, { siteUrl: opts.siteUrl, pageRoute: opts.pageRoute });
+        } catch (d) {
+          if (!isDiagnostic(d)) throw d;
+          reject(d.message);
+          return;
+        }
+        token.attrSet(attr, value);
         state.links.push({
           route: resolved.route,
           fragment,

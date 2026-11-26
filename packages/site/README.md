@@ -78,6 +78,12 @@ try {
 
 ## Docs
 
+Markdown links rewritten from relative `.md` destinations preserve the site's
+deployment prefix. `ctx.publicAsset(path)` takes a literal filesystem path and
+percent-encodes its URL segments. Generated output collisions (including `/`
+versus `/index`, or authored `/404`) fail the build rather than overwriting a
+page; the previous published output is preserved.
+
 - Reference (config, frontmatter, safety model, diagnostics table, dev
   server, Windows support): [docs/USAGE.md](./docs/USAGE.md)
 - The crust test-stack tooling: <https://lariocpt.github.io/crust-website/>

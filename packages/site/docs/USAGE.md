@@ -100,7 +100,8 @@ Start with the [getting-started guide](./guide/getting-started.md).
 ```
 
 Relative `.md` links resolve against the page's **route** (not the source
-path) and are rewritten to the destination route; a `.md` link to a page
+path) and are rewritten to the destination route with the site's path
+prefix preserved; a `.md` link to a page
 that does not exist fails the build with `link.broken`.
 
 Then build:
@@ -491,8 +492,11 @@ The argument is a **file path, not a URL** — never percent-decoded, so the
 only traversal vectors are literal ones. Empty, NUL, backslash, a drive
 letter, a leading `/`, or any `..` segment is rejected
 (`public-asset.traversal`) before any filesystem access. It returns
-`site + "/" + normalizedPath` and records the path for the emitter's
-existence check: a recorded path that is not a readable file under
+`site + "/" + encodedPath`, where each segment of the normalized path is
+percent-encoded (slashes remain separators). For example, `logo#dark.svg`
+becomes `logo%23dark.svg`, and a literal `%` becomes `%25`. The literal
+normalized path is recorded for the emitter's existence check and copied
+unchanged: a recorded path that is not a readable file under
 `assets.publicDirectory` is `public-asset.missing` (and no configured
 public directory makes every recorded path missing).
 
@@ -575,6 +579,12 @@ case-insensitive pass (`route.case-collision`) that always runs — the same
 config must not build on Linux and half-emit on a case-insensitive
 filesystem. A draft and a page on the same route collide in every mode.
 
+The build also checks generated **output paths**, case-insensitively,
+including engine-owned files. Distinct routes such as `/` and `/index`
+both map to `index.html` and fail with `output.collision`; an authored
+`/404` likewise conflicts with the generated 404 page. A failed build
+leaves the previous published output untouched.
+
 ```ts
 const diags = findRouteCollisions([
   { route: "/a", sourcePath: "a.md" },
@@ -614,7 +624,15 @@ in document order, incremented past ids already taken (`Foo`, `foo-1`,
 
 Relative `.md` links resolve against the page's **route**, are stripped of
 `.md`, and are rewritten to the destination route when the destination is a
-page. A destination that is not in the route table is `link.broken`; a
+page, preserving the configured site's path prefix: with
+`site: "https://example.dev/docs"`, a link to route `/guide` emits
+`href="/docs/guide"`. Fragment suffixes are preserved; validation still
+uses the site-relative route `/guide`. Fragment-only links, external URLs,
+and root-relative `.md` links are not rewritten.
+If the configured pathname starts with `//`, rewritten links and images
+use the full absolute site URL instead, preserving the configured origin
+rather than emitting a protocol-relative destination.
+A destination that is not in the route table is `link.broken`; a
 destination that is a draft is `link.draft`. Both are **errors in a
 production build and warnings in dev** (the dev server renders drafts, so
 the link really resolves there). A link carrying `#fragment` requires the
@@ -874,7 +892,7 @@ The full code vocabulary (codes are never repurposed or removed):
 | `asset.public-symlink` | error | A symlink inside the public directory (never copied, never silently skipped). |
 | `asset.unknown-entrypoint` | error | `script()`/`stylesheet()` named a manifest key that was never declared. |
 | `asset.unused` | warning | A declared asset that no rendered page ever referenced. |
-| `output.collision` | error | A public file would overwrite a generated file (exact, case-only, inside the reserved `assets/` prefix, or case-only against another public file). |
+| `output.collision` | error | Generated output paths collide (including engine-owned files, exact or case-only), or a public file would overwrite a generated file (exact, case-only, inside the reserved `assets/` prefix, or case-only against another public file). |
 | `content.read-failed` | error | A discovered `.md` file could not be read at parse time. |
 | `content.parse-failed` | error | A non-read failure while parsing a page (an engine bug, labeled honestly). |
 | `output.escape` | error | A resolved write path left the staging directory (defense in depth — an internal-bug tripwire). |
@@ -957,6 +975,11 @@ a production build's publish swap.
   silently different port serves the site where you are not looking.
 - URL resolution is the shared table above, including `/a/` → 404 and the
   lenient `/a.html` form.
+- A configured site prefix such as `/docs` is also served locally:
+  `/docs` and `/docs/` serve the home page, and `/docs/guide` serves route
+  `/guide`. The prefix is stripped once at a complete path boundary;
+  `/docs-extra/guide` does not match it. Root-relative preview URLs remain
+  available, and prefixed asset/public-file requests use the same resolver.
 
 ---
 

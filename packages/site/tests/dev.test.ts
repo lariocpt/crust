@@ -97,6 +97,7 @@ interface ConfigOptions {
   /** The xhtml variant routes `y` → /x and `x2` → /x.html (the literal-
    *  route-beats-lenient disambiguation); default is the plain map. */
   xhtml?: boolean;
+  site?: string;
 }
 
 function configSource(opts: ConfigOptions = {}): string {
@@ -114,7 +115,7 @@ function configSource(opts: ConfigOptions = {}): string {
   return [
     `import { defineSite, html } from ${JSON.stringify(SRC_INDEX)};`,
     "export default defineSite({",
-    `  site: ${JSON.stringify(SITE)},`,
+    `  site: ${JSON.stringify(opts.site ?? SITE)},`,
     "  content: {",
     '    directory: "content",',
     '    defaultLayout: "base",',
@@ -284,6 +285,68 @@ describe("dev — the E1 route table", () => {
 // ---------------------------------------------------------------------------
 // draft pages
 // ---------------------------------------------------------------------------
+
+describe("dev — deployment prefixes", () => {
+  for (const prefix of ["/docs", "/путь", "/x&y"]) {
+    test(`rendered links and assets resolve under ${prefix}`, async () => {
+      const site = new URL(`${SITE}${prefix}`).href;
+      const mount = new URL(site).pathname;
+      const h = await start(await tmp("crust-site-dev-prefix-"), { site });
+      const get = (path: string): Promise<Response> => fetch(`${h.base}${path}`);
+      try {
+        const response = await get(`${mount}/`);
+        expect(response.status).toBe(200);
+        const home = await response.text();
+        const href = required(home.match(/<a href="([^"]+)">b<\/a>/))[1].replaceAll("&amp;", "&");
+        expect(href).toBe(`${mount}/a/b`);
+        const linked = await get(href);
+        expect(linked.status).toBe(200);
+        expect(await linked.text()).toContain("<title>B</title>");
+        for (const path of [mount, "/", `${mount}/a/b.html?preview=1`, "/a/b"]) {
+          const res = await get(path);
+          expect(res.status).toBe(200);
+          await res.arrayBuffer();
+        }
+        for (const path of [
+          `${mount}-extra/a/b`,
+          `${mount}/a/`,
+          `${mount}${mount}/a/b`,
+          `${mount}/%2Fetc`,
+          `${mount}/%5Csecret`,
+          `${mount}/%00`,
+          `${mount}/%ZZ`,
+        ]) {
+          const res = await get(path);
+          expect(res.status).toBe(404);
+          await res.arrayBuffer();
+        }
+        const asset = required(home.match(/assets\/app-[0-9a-f]{16}\.js/))[0];
+        const script = await get(`${mount}/${asset}`);
+        expect(script.status).toBe(200);
+        expect(script.headers.get("cache-control")).toBe("public, max-age=31536000, immutable");
+        await script.arrayBuffer();
+        const publicFile = await get(`${mount}/favicon.txt`);
+        expect(publicFile.status).toBe(200);
+        expect(await publicFile.text()).toBe("icon\n");
+
+        if (prefix === "/docs") {
+          await writeFile(
+            join(h.root, "content", "a", "b.md"),
+            "---\ntitle: B rebuilt\ndescription: Updated\n---\n\n# B\n\nPrefixed rebuild.\n",
+          );
+          await waitFor(
+            async () => (await (await get(href)).text()).includes("Prefixed rebuild."),
+            5000,
+            "the prefixed link after rebuild",
+          );
+        }
+      } finally {
+        await h.server.stop();
+      }
+      expect(await devStagingSiblings(h.root)).toEqual([]);
+    });
+  }
+});
 
 describe("dev — draft pages", () => {
   test("a draft is served in dev with the pinned banner bytes; non-draft pages never carry it", async () => {
@@ -582,6 +645,34 @@ describe("dev — dev staging sweep", () => {
 // ---------------------------------------------------------------------------
 
 describe("dev — edge-case URLs", () => {
+  test("encoded public filenames resolve to literal files with one decode", async () => {
+    const root = await tmp("crust-site-dev-public-encoded-");
+    const configFile = await makeSite(root);
+    const names = ["logo#dark.svg", "100%.txt", "%2e%2e.txt", "a b.txt", "café.txt"];
+    if (process.platform !== "win32") names.push("logo?.svg");
+    await mkdir(join(root, "public", "img"), { recursive: true });
+    for (const name of names) {
+      await writeFile(join(root, "public", "img", name), `literal ${name}`);
+    }
+    const server = await startDev({ configFile, port: 0 });
+    try {
+      for (const name of names) {
+        const response = await fetch(
+          `http://localhost:${server.port}/img/${encodeURIComponent(name)}`,
+        );
+        expect(response.status).toBe(200);
+        expect(await response.text()).toBe(`literal ${name}`);
+        expect(response.headers.get("cache-control")).toBe("no-store");
+      }
+      for (const path of ["/img/%2Fetc", "/img/%5Csecret", "/img/%00", "/img/%ZZ"]) {
+        expect((await fetch(`http://localhost:${server.port}${path}`)).status).toBe(404);
+      }
+    } finally {
+      await server.stop();
+    }
+    expect(await devStagingSiblings(root)).toEqual([]);
+  });
+
   test("double slashes, query strings, trailing spaces, and Windows-reserved names", async () => {
     const h = await start(await tmp("crust-site-dev-edge-"));
     const get = (p: string): Promise<Response> => fetch(`${h.base}${p}`);

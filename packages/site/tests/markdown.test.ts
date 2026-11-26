@@ -14,6 +14,7 @@
 //  - markdown-it's silent javascript:-rejection is replaced by our policy:
 //    validateLink admits everything, validateUrl judges it (no silent pass).
 import { describe, expect, test } from "bun:test";
+import { defineSite } from "../src/config";
 import { BuildError } from "../src/diagnostics";
 import { finalizeDocument, html, renderToString } from "../src/html";
 import { renderMarkdown, slugify } from "../src/markdown";
@@ -196,6 +197,72 @@ describe("link and image destinations", () => {
         kind: "page",
       },
     ]);
+  });
+
+  for (const prefix of ["/docs", "/x&y", "/путь"]) {
+    test(`rewritten links and images preserve site prefix ${prefix}`, () => {
+      const siteUrl = `https://site.dev${prefix}`;
+      const r = render("[x](./other.md#frag) ![image](./other.md)", {
+        siteUrl,
+        resolveInternal: fakeResolver({ "/guides/other": {} }),
+      });
+      const path = `${new URL(siteUrl).pathname}/guides/other`;
+      const escaped = path.replaceAll("&", "&amp;");
+      const document = finalizeDocument(html`<body>${r.html}</body>`, {
+        siteUrl,
+        pageRoute: BASE.pageRoute,
+      });
+      expect(r.diagnostics).toEqual([]);
+      expect(document).toContain(`href="${escaped}#frag"`);
+      expect(document).toContain(`src="${escaped}"`);
+      expect(r.links.map((link) => link.route)).toEqual(["/guides/other", "/guides/other"]);
+      expect(r.links.map((link) => link.fragment)).toEqual(["frag", null]);
+    });
+  }
+
+  for (const prefix of ["//cdn.example", "///cdn.example"]) {
+    test(`rewritten destinations retain the configured origin for prefix ${prefix}`, () => {
+      const siteUrl = `https://site.dev${prefix}`;
+      expect(() =>
+        defineSite({
+          site: siteUrl,
+          content: { directory: "content", defaultLayout: "base" },
+          layouts: { base: () => html`` },
+          output: { directory: "dist" },
+        }),
+      ).not.toThrow();
+      for (const route of ["/guides/other", "/"]) {
+        const r = render("[x](./other.md#frag) ![image](./other.md)", {
+          siteUrl,
+          resolveInternal: () => ({ route, exists: true, isDraft: false }),
+        });
+        const document = finalizeDocument(html`<body>${r.html}</body>`, {
+          siteUrl,
+          pageRoute: BASE.pageRoute,
+        });
+        const destination = `${siteUrl}${route}`;
+        expect(r.diagnostics).toEqual([]);
+        expect(document).toContain(`href="${destination}#frag"`);
+        expect(document).toContain(`src="${destination}"`);
+        expect(document).not.toContain('href="//');
+        expect(document).not.toContain('src="//');
+        expect(new URL(destination, siteUrl).origin).toBe("https://site.dev");
+        expect(r.links.map((link) => link.route)).toEqual([route, route]);
+        expect(r.links.map((link) => link.fragment)).toEqual(["frag", null]);
+      }
+    });
+  }
+
+  test("a rewritten root target keeps the prefix and trailing slash", () => {
+    const r = render("[home](home.md#top) [here](#local) [raw](/raw.md)", {
+      siteUrl: "https://site.dev/docs",
+      resolveInternal: () => ({ route: "/", exists: true, isDraft: false }),
+    });
+    expect(r.diagnostics).toEqual([]);
+    expect(renderToString(r.html)).toContain('href="/docs/#top"');
+    expect(renderToString(r.html)).toContain('href="#local"');
+    expect(renderToString(r.html)).toContain('href="/raw.md"');
+    expect(r.links[0]?.route).toBe("/");
   });
 
   test("../x.md resolves against the ROUTE directory, not the source path", () => {

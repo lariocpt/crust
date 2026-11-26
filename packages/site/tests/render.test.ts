@@ -502,6 +502,33 @@ describe("the URL base invariant (url.ts contract, pinned here)", () => {
 });
 
 describe("publicAsset()", () => {
+  for (const name of [
+    "logo#dark.svg",
+    "logo?.svg",
+    "100%.svg",
+    "%2e%2e.svg",
+    "a b.svg",
+    "café.svg",
+  ]) {
+    test(`URL-encodes literal filename ${name} without changing its recorded path`, async () => {
+      let seen = "";
+      const path = `img/${name}`;
+      const layout: Layout = (ctx) => {
+        seen = ctx.publicAsset(path);
+        return html`<img src="${seen}" alt="">`;
+      };
+      const result = await render(makePage(), { docs: layout }, "https://crust.dev/docs");
+      expect(result.diagnostics).toEqual([]);
+      expect(result.publicAssets).toEqual([path]);
+      expect(seen).toBe(`https://crust.dev/docs/img/${encodeURIComponent(name)}`);
+      const url = new URL(seen);
+      expect(url.hash).toBe("");
+      expect(url.search).toBe("");
+      expect(decodeURIComponent(url.pathname)).toBe(`/docs/${path}`);
+      expect(result.html).toContain(`src="${seen}"`);
+    });
+  }
+
   test("returns site + '/' + posix-normalized path, and records the path", async () => {
     let seen: string | undefined;
     const layout: Layout = (ctx) => {

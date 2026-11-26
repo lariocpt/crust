@@ -190,10 +190,10 @@ export interface LayoutContext {
    */
   url(value: string): string;
   /**
-   * The public file's URL: site + "/" + posix-normalized path. Literal
+   * The public file's URL: site + "/" + segment-encoded normalized path. Literal
    * traversal (`..`, leading "/", backslash, drive letter, NUL, empty) is
    * rejected (public-asset.traversal) and aborts the page's render. The
-   * normalized path is recorded for the emitter's existence check.
+   * literal normalized path is recorded for the emitter's existence check.
    */
   publicAsset(path: string): string;
   /**
@@ -481,7 +481,7 @@ function publicAsset(sink: Sink, path: string): string {
     publicAssetReject(sink, path, "normalizes to a path outside the public directory");
   }
   sink.publicAssets.add(normalized);
-  return `${sink.siteUrl}/${normalized}`;
+  return `${sink.siteUrl}/${normalized.split("/").map(encodeURIComponent).join("/")}`;
 }
 
 /** 10 MiB — the readText size cap (plan §1). A file of EXACTLY the cap is legal. */

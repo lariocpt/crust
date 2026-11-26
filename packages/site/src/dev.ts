@@ -121,11 +121,14 @@ function candidateFiles(normalized: string): string[] {
   if (base.endsWith(".html")) {
     push(normalized);
     push(stripHtmlSuffix(normalized));
-    out.push(base);
+    out.push(decodeURIComponent(base));
     return out;
   }
   push(normalized);
-  out.push(base);
+  // normalizeRequestPath already rejected decoded separators/traversal.
+  // Route filenames retain canonical escapes; public files use literal
+  // filesystem names, so decode ONCE for this fallback (not recursively).
+  out.push(decodeURIComponent(base));
   return out;
 }
 
@@ -575,6 +578,7 @@ export async function startDev(options: StartDevOptions): Promise<DevServer> {
   const hostname = displayHost(bindHost);
   const port = options.port ?? resolved.dev?.port ?? 0;
   const onCodeChange = options.onCodeChange ?? defaultOnCodeChange;
+  const prefix = new URL(resolved.site).pathname.replace(/\/$/, "");
 
   const state: DevState = {
     resolved,
@@ -606,7 +610,7 @@ export async function startDev(options: StartDevOptions): Promise<DevServer> {
     server = Bun.serve({
       hostname: bindHost,
       port,
-      fetch: (req) => serveRequest(req, rootRef),
+      fetch: (req) => serveRequest(req, rootRef, prefix),
     });
     // bun-types types `port` as `number | undefined` (a unix-socket server
     // has none); a port-bound server always has one, so an undefined here is
@@ -774,11 +778,22 @@ async function serveNotFound(serveRoot: string): Promise<Response> {
   }
 }
 
-async function serveRequest(req: Request, rootRef: { current: string }): Promise<Response> {
+async function serveRequest(
+  req: Request,
+  rootRef: { current: string },
+  prefix: string,
+): Promise<Response> {
   const serveRoot = rootRef.current;
   let normalized: string | null;
   try {
-    normalized = normalizeRequestPath(new URL(req.url).pathname);
+    let pathname = new URL(req.url).pathname;
+    // Match the serialized site prefix at a segment boundary, once only.
+    // Keep root-relative preview URLs working too. Validate the remaining
+    // path normally: stripping a mount must not admit traversal/separators.
+    if (prefix !== "" && (pathname === prefix || pathname.startsWith(`${prefix}/`))) {
+      pathname = pathname.slice(prefix.length) || "/";
+    }
+    normalized = normalizeRequestPath(pathname);
   } catch {
     normalized = null;
   }

@@ -409,13 +409,46 @@ async function runBuild(
   // landed in staging; a collision is an error, so staging is discarded whole).
   const pub = await copyPublicDir(resolved, staging);
   all.push(...pub.diagnostics);
-  const generatedPaths = [
-    ...toRender.map((p) => routeToFile(p.route)),
-    "404.html",
-    ...(resolved.sitemap ? ["sitemap.xml"] : []),
-    ...(resolved.robots !== undefined ? ["robots.txt"] : []),
-    ...[...assets.manifest.values()].map((e) => e.file),
+  const generated = [
+    ...toRender.map((p) => ({
+      file: routeToFile(p.route),
+      producer: `route ${JSON.stringify(p.route)} (${p.sourcePath})`,
+    })),
+    { file: "404.html", producer: "the generated 404 page" },
+    ...(resolved.sitemap ? [{ file: "sitemap.xml", producer: "the generated sitemap" }] : []),
+    ...(resolved.robots !== undefined
+      ? [{ file: "robots.txt", producer: "the generated robots file" }]
+      : []),
+    ...[...assets.manifest.entries()].map(([name, e]) => ({
+      file: e.file,
+      producer: `asset ${JSON.stringify(name)}`,
+    })),
   ];
+  // Different routes can map to the same file (/ and /index), and engine
+  // files have no authored route-table entry. Check the output namespace
+  // itself, on every platform, before writePages can silently overwrite.
+  const byOutput = new Map<string, typeof generated>();
+  for (const entry of generated) {
+    const key = entry.file.toLowerCase();
+    const group = byOutput.get(key);
+    if (group) group.push(entry);
+    else byOutput.set(key, [entry]);
+  }
+  for (const [file, group] of [...byOutput].sort((a, b) => compareStrings(a[0], b[0]))) {
+    if (group.length < 2) continue;
+    const producers = group
+      .map((entry) => `${entry.producer} → ${JSON.stringify(entry.file)}`)
+      .sort(compareStrings);
+    all.push({
+      code: "output.collision",
+      severity: "error",
+      sourcePath: file,
+      message:
+        `generated output ${JSON.stringify(file)} has multiple producers ` +
+        `(paths are compared case-insensitively): ${producers.join("; ")}`,
+    });
+  }
+  const generatedPaths = generated.map((entry) => entry.file);
   all.push(...publicCollisions(pub.copied, generatedPaths));
 
   // publicAsset existence check (render.ts recorded the normalized paths;
