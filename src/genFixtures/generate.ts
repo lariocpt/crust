@@ -132,6 +132,7 @@ import {
   quoteStringLiteral,
   sortSpecifiers,
 } from "./layout";
+import { type ProofViolation, prove } from "./proof";
 import {
   emitRequestHelpers,
   mergeParameters,
@@ -163,6 +164,10 @@ type Schema = {
   allOf?: Schema[];
   oneOf?: Schema[];
   default?: unknown;
+  /** JSON Schema `const`: the one legal value. Read by the sampler and the proof layer. */
+  const?: unknown;
+  multipleOf?: number;
+  uniqueItems?: boolean;
 };
 
 interface ResponseMedia {
@@ -544,8 +549,51 @@ function composedObject(
   return out;
 }
 
+/**
+ * `v` is an integer multiple of `m`, tolerant of the float error a `0.1`-style step carries:
+ * `0.3 / 0.1` is `2.9999999999999996`, and a strict `Number.isInteger` would reject a value the
+ * schema plainly allows.
+ */
+function isMultipleOf(v: number, m: number): boolean {
+  const q = v / m;
+  return Math.abs(q - Math.round(q)) <= 1e-9 * Math.max(1, Math.abs(q));
+}
+
+/** Integer division that does not lose a bound to that same float error. */
+function divExact(v: number, m: number, dir: "ceil" | "floor"): number {
+  const q = v / m;
+  const r = Math.round(q);
+  if (Math.abs(q - r) <= 1e-9 * Math.max(1, Math.abs(q))) return r;
+  return dir === "ceil" ? Math.ceil(q) : Math.floor(q);
+}
+
+/**
+ * A variant of a sampled value that differs from it by index `i` and still satisfies `schema`, or
+ * undefined when the schema admits none — an enum, a `const`, a fixed pattern, an object that
+ * refuses extra keys. Used only to fill a `uniqueItems` array with distinct members, so refusing
+ * is the honest answer: the caller keeps the duplicate and the soundness check discloses it.
+ */
+function distinctVariant(base: unknown, i: number, schema: Schema | undefined): unknown {
+  let candidate: unknown;
+  if (typeof base === "string") candidate = `${base}${i}`;
+  else if (typeof base === "number") candidate = base + i;
+  else if (typeof base === "boolean") candidate = i % 2 === 0;
+  else if (Array.isArray(base)) candidate = [...base, i];
+  else if (base && typeof base === "object") candidate = { ...(base as object), crustSeq: i };
+  else candidate = `${base}${i}`;
+  // The validator never invents a violation, so an empty verdict here is a real pass for every
+  // keyword it judges — and the ones it does not judge cannot make this worse than the duplicate.
+  return validateSchema(candidate, schema, {} as OpenApiSpec, "").length === 0
+    ? candidate
+    : undefined;
+}
+
 export function validValue(s: Schema | undefined, key = ""): unknown {
   if (!s) return "x";
+  // `const` is a one-member enum: it states the ONLY legal value, and crust had no reading of it
+  // at all — the sampler answered its placeholder and the base body violated a keyword the mock
+  // validator ignores by design, so nothing in crust noticed a body no real API would accept.
+  if ("const" in s) return s.const;
   // The member must satisfy the schema's OWN declared type. Real specs write
   // `{type: "string", enum: [true, false]}`, and returning enum[0] blindly emitted a boolean into a
   // string field — the same fault the mock had until it learned to read the rest of the enum. Where
@@ -657,14 +705,63 @@ export function validValue(s: Schema | undefined, key = ""): unknown {
       // Both spellings: 3.0 writes `exclusiveMinimum: true` as a MODIFIER on `minimum`, 3.1 writes a
       // number of its own. Clamping to `maximum` when it is exclusive yields exactly the value the
       // schema excludes — `{maximum: 1, exclusiveMaximum: true}` was answered with 1.
-      const step = primaryType(s) === "integer" ? 1 : Number.EPSILON * 8;
+      const isInt = primaryType(s) === "integer";
+      const step = isInt ? 1 : Number.EPSILON * 8;
       let min = typeof s.minimum === "number" ? s.minimum : null;
       let max = typeof s.maximum === "number" ? s.maximum : null;
-      if (s.exclusiveMinimum === true && min !== null) min += step;
-      else if (typeof s.exclusiveMinimum === "number") min = s.exclusiveMinimum + step;
-      if (s.exclusiveMaximum === true && max !== null) max -= step;
-      else if (typeof s.exclusiveMaximum === "number") max = s.exclusiveMaximum - step;
-      // 1 stays the friendly default, but a `{maximum: 0}` field was violated by it.
+      let minOpen = false;
+      let maxOpen = false;
+      if (typeof s.exclusiveMinimum === "number") {
+        min = s.exclusiveMinimum;
+        minOpen = true;
+      } else if (s.exclusiveMinimum === true && min !== null) minOpen = true;
+      if (typeof s.exclusiveMaximum === "number") {
+        max = s.exclusiveMaximum;
+        maxOpen = true;
+      } else if (s.exclusiveMaximum === true && max !== null) maxOpen = true;
+      // An INTEGER answer has to be an integer, so the bounds are closed to integers rather than a
+      // step added to the bound: `{integer, minimum: 1.5}` admits 2, and answering 1.5 — which is
+      // what stepping a round bound did — is the value the schema forbids. `{integer, minimum: 1.5,
+      // maximum: 3}` was answered 1.5 for a window whose only legal low end is 2.
+      if (isInt) {
+        if (min !== null) {
+          min = minOpen ? Math.floor(min) + 1 : Math.ceil(min);
+          minOpen = false;
+        }
+        if (max !== null) {
+          max = maxOpen ? Math.ceil(max) - 1 : Math.floor(max);
+          maxOpen = false;
+        }
+      }
+      const mult = typeof s.multipleOf === "number" && s.multipleOf > 0 ? s.multipleOf : null;
+      const fits = (v: number): boolean =>
+        (min === null || (minOpen ? v > min : v >= min)) &&
+        (max === null || (maxOpen ? v < max : v <= max)) &&
+        (!isInt || Number.isInteger(v)) &&
+        (mult === null || isMultipleOf(v, mult));
+      // Fixed candidates, first fit wins: emitted files must stay byte-stable. `multipleOf` was
+      // ignored outright — `{integer, multipleOf: 3}` got 1 — and nothing downstream complained,
+      // because the mock validator does not judge that keyword either.
+      const cands: number[] = [];
+      if (mult !== null) cands.push(divExact(1, mult, "ceil") * mult);
+      cands.push(1);
+      if (min !== null) {
+        cands.push(minOpen ? min + step : min);
+        if (mult !== null) cands.push(divExact(min, mult, "ceil") * mult);
+      }
+      if (max !== null) {
+        cands.push(maxOpen ? max - step : max);
+        if (mult !== null) cands.push(divExact(max, mult, "floor") * mult);
+      }
+      if (min !== null && max !== null) cands.push((min + max) / 2);
+      if (mult !== null) cands.push(0);
+      for (const c of cands) {
+        const v = isInt ? Math.round(c) : c;
+        if (fits(v)) return v;
+      }
+      // Nothing fits: the window is empty (`{integer, minimum: 1.5, maximum: 1.9}` admits no
+      // integer) or asks for something crust cannot build. Return the clamped bound so the body is
+      // visibly unsound and the manifest names it, rather than a plausible-looking wrong value.
       let n = min !== null ? Math.max(min, 1) : 1;
       if (max !== null && n > max) n = max;
       if (min !== null && n < min) n = min;
@@ -681,7 +778,26 @@ export function validValue(s: Schema | undefined, key = ""): unknown {
       if (min !== null && min > count) count = min;
       if (max !== null && max < count) count = max;
       if (count > 100) count = 100;
-      return Array.from({ length: Math.max(0, count) }, () => validValue(s.items, key));
+      const total = Math.max(0, count);
+      if (s.uniqueItems !== true)
+        return Array.from({ length: total }, () => validValue(s.items, key));
+      // `uniqueItems` binds the way a length bound does, and the sampler put the SAME value in every
+      // slot — a body violating a keyword the mock validator never judges, so the base body was
+      // silently unsound in a field no case mentioned. Perturb by index, keeping only perturbations
+      // the item schema itself accepts; where it admits only one value, the duplicates stay and the
+      // manifest says so rather than pretending the list is fine.
+      const seen = new Set<string>();
+      const out: unknown[] = [];
+      for (let i = 0; out.length < total && i < total + 16; i++) {
+        const sampled = validValue(s.items, key);
+        const variant = i === 0 ? undefined : distinctVariant(sampled, i, s.items);
+        const value = variant === undefined ? sampled : variant;
+        const mark = JSON.stringify(value) ?? String(value);
+        if (seen.has(mark)) continue;
+        seen.add(mark);
+        out.push(value);
+      }
+      return out;
     }
     case "object": {
       // THROUGH allOf. Real specs compose an object from branches and put `required` on the node,
@@ -1014,6 +1130,30 @@ interface NoMatrixOp {
 }
 
 /**
+ * What the mutation proof decided for one operation's validation matrix.
+ *
+ * A negative case is only honest when its mutated body is PROVEN to violate the schema at the field
+ * the case names. `dropped` are the cases whose mutation was proven still-valid — emitting them would
+ * assert a 400 against a server that correctly answers 200, which is a false test. `unproven` are
+ * the cases kept although crust could not judge part of the schema (an unknown `format`, an
+ * unimplemented keyword): keeping them is the conservative choice for coverage, and saying so is the
+ * conservative choice for the reader. Both are disclosed; neither is a silently smaller matrix.
+ */
+interface UnprovenOp {
+  template: string;
+  dropped: { case: string; reason: string }[];
+  unproven: string[];
+  /** Cases kept with a status-only assertion: the rejection is proven, the location is not. */
+  statusOnly: string[];
+}
+
+/** Three answers, because "not proven invalid" is not the same as "proven valid". */
+type MutationProof =
+  | { keep: true; proven: true; statusOnly: boolean }
+  | { keep: true; proven: false; statusOnly: boolean; reason: string }
+  | { keep: false; reason: string };
+
+/**
  * The operation's request body, when the method can actually carry one.
  *
  * A body on GET or HEAD is a body nobody can send: fetch refuses to build the request at all
@@ -1048,6 +1188,7 @@ function deriveCases(
   unsound: UnsoundOp[],
   bodyless: BodylessOp[],
   noMatrix: NoMatrixOp[],
+  unproven: UnprovenOp[],
   requestPlan?: RequestPlan,
 ): GenCase[] {
   const cases: GenCase[] = [];
@@ -1182,57 +1323,116 @@ function deriveCases(
     const { required, properties: props } = composedObject(bodySchema);
     const base = baseBody(bodySchema);
 
-    for (const field of required) {
-      const { [field]: _omitted, ...withoutField } = base;
-      cases.push({
-        name: `${method.toUpperCase()} ${path} missing required '${field}' -> ${matrixStatus}`,
+    // ---- mutation proof -----------------------------------------------------------
+    // Every case below asserts "this exact request is rejected, and the error names THIS field".
+    // That is only an honest assertion when the mutated body really does violate the schema AND the
+    // violation belongs to the field the case names. crust's own validator cannot grant the first
+    // half: it passes every keyword it does not judge, so a mutation landing on one of them reads as
+    // a violation while the request is perfectly acceptable. The counterexamples are not hypothetical
+    // — each was emitted as `-> 400` against a server that correctly answers 200: an enum containing
+    // the sentinel crust injects, a `pattern: "^.*$"` that matches the pattern-violation sentinel,
+    // `minimum: 1e20` where `minimum - 1` rounds straight back to the minimum, an enum branch beside
+    // an unrestricted string alternative, and an "unexpected property" whose name the schema
+    // declares. So each mutation is proven against the WHOLE body schema before its case is emitted,
+    // and a case that cannot be proven is dropped with a disclosed reason rather than silently
+    // weakening the matrix. `proof.ts` answers three ways; the third — crust cannot tell — keeps the
+    // case rather than silently shrinking coverage, and says so in the manifest.
+    const proofOf = (field: string, mutated: Record<string, unknown>): MutationProof => {
+      const p = prove(mutated, bodySchema);
+      if (p.violations.length === 0) {
+        if (p.incomplete)
+          return {
+            keep: true,
+            proven: false,
+            statusOnly: false,
+            reason: `crust cannot judge part of this schema (${p.note})`,
+          };
+        return {
+          keep: false,
+          reason: "the mutated request still satisfies the schema",
+        };
+      }
+      const about = (v: ProofViolation) =>
+        v.pointer === `/${field}` || v.pointer.startsWith(`/${field}/`);
+      // Every defect in the body must belong to the field this case names. A body that also breaks
+      // somewhere else passes on a defect the case never mentions — which is the failure the
+      // base-body filter above already guards, seen from the other side.
+      const elsewhere = p.violations.filter((v) => v.pointer !== "" && !about(v));
+      if (elsewhere.length > 0)
+        return {
+          keep: false,
+          reason: "the request fails on a field other than the one the case names",
+        };
+      // A union whose branch demands the field rejects the body AT THE OBJECT, not at the field:
+      // `{oneOf: [{required: ["url"]}, …]}` answers a body without `url` with an object-level
+      // `oneOf`, and no server is obliged to name `url` in its field errors. The rejection is
+      // proven; only the location is not. So the case keeps its status assertion and gives up the
+      // location assertion it cannot earn — the fastapi envelope, whose whole contract IS the
+      // location, then drops it for that reason through `dropUnattributable`.
+      if (!p.violations.some(about)) return { keep: true, proven: true, statusOnly: true };
+      if (p.violations.some((v) => v.pointer === ""))
+        return { keep: true, proven: true, statusOnly: true };
+      return { keep: true, proven: true, statusOnly: false };
+    };
+    const proofDropped: { case: string; reason: string }[] = [];
+    const proofUnproven: string[] = [];
+    const proofStatusOnly: string[] = [];
+    /**
+     * Build one validation-matrix case and remember what it claims, so the proof pass can judge it
+     * AFTER the base-body filter has had its say. Order matters: the base-body filter owns the
+     * spec-vs-crust blame wording for an unfillable body, and a case it already dropped must not be
+     * re-dropped here under a reason that sends the reader to the wrong cause.
+     */
+    const matrixEntries: { c: GenCase; field: string; askedStatusOnly: boolean }[] = [];
+    const pushMatrixCase = (
+      suffix: string,
+      field: string,
+      body: Record<string, unknown>,
+      kind: NonNullable<GenCase["validationTarget"]>["kind"],
+      statusOnly = false,
+    ): void => {
+      const name = `${method.toUpperCase()} ${path} ${suffix} -> ${matrixStatus}`;
+      const c: GenCase = {
+        name,
         auth: validAuth,
         method,
         path,
-        body: withoutField,
+        body,
         expectStatus: matrixStatus,
         expectationSource: matrixSource,
-        expectValidationField: field,
-        ...validationCaseFields(field, "missing-required"),
-      });
+        ...(statusOnly ? { expectValidationCode: true } : { expectValidationField: field }),
+        ...validationCaseFields(field, kind),
+      };
+      matrixEntries.push({ c, field, askedStatusOnly: statusOnly });
+      cases.push(c);
+    };
+
+    for (const field of required) {
+      const { [field]: _omitted, ...withoutField } = base;
+      pushMatrixCase(`missing required '${field}'`, field, withoutField, "missing-required");
       // Only when the value is ACTUALLY rejected. A field whose schema constrains nothing —
       // `{properties: {...}}` with no `type`, a description-only node — has no wrong value, and the
       // case would assert `-> 400` for a request a correct API answers 200. That is a false test: it
-      // fails against a correct implementation, and 6,101 were derivable from the corpus. crust owns
-      // the validator, so it is asked rather than guessed at.
-      const wrongValue = wrongTypeFor(props[field]);
-      // The spec is already fully inlined by derefSchemas at entry, so there is nothing left for the
-      // validator to resolve and an empty document is the honest argument.
-      if (validateSchema(wrongValue, props[field], {} as OpenApiSpec, "").length > 0) {
-        cases.push({
-          name: `${method.toUpperCase()} ${path} wrong type for '${field}' -> ${matrixStatus}`,
-          auth: validAuth,
-          method,
-          path,
-          body: { ...base, [field]: wrongValue },
-          expectStatus: matrixStatus,
-          expectationSource: matrixSource,
-          expectValidationField: field,
-          ...validationCaseFields(field, "wrong-type"),
-        });
-      }
+      // fails against a correct implementation, and 6,101 were derivable from the corpus. The proof
+      // above now answers this outright, on the whole body rather than the field's own node alone.
+      pushMatrixCase(
+        `wrong type for '${field}'`,
+        field,
+        { ...base, [field]: wrongTypeFor(props[field]) },
+        "wrong-type",
+      );
     }
     for (const [field, rawFs] of Object.entries(props)) {
       // effectiveSchema here is purely additive: it only unwraps nullable
       // combinator wrappers (which previously derived NO enum case at all).
       const fs = effectiveSchema(rawFs);
       if (fs?.enum?.length) {
-        cases.push({
-          name: `${method.toUpperCase()} ${path} invalid enum for '${field}' -> ${matrixStatus}`,
-          auth: validAuth,
-          method,
-          path,
-          body: { ...base, [field]: "__not_a_real_enum_value__" },
-          expectStatus: matrixStatus,
-          expectationSource: matrixSource,
-          expectValidationField: field,
-          ...validationCaseFields(field, "enum"),
-        });
+        pushMatrixCase(
+          `invalid enum for '${field}'`,
+          field,
+          { ...base, [field]: "__not_a_real_enum_value__" },
+          "enum",
+        );
       }
     }
 
@@ -1243,17 +1443,7 @@ function deriveCases(
       const fs = effectiveSchema(rawFs);
       if (!fs) continue;
       const push = (suffix: string, wrongValue: unknown, kind: "bound" | "pattern") =>
-        cases.push({
-          name: `${method.toUpperCase()} ${path} ${suffix} '${field}' -> ${matrixStatus}`,
-          auth: validAuth,
-          method,
-          path,
-          body: { ...base, [field]: wrongValue },
-          expectStatus: matrixStatus,
-          expectationSource: matrixSource,
-          expectValidationField: field,
-          ...validationCaseFields(field, kind),
-        });
+        pushMatrixCase(`${suffix} '${field}'`, field, { ...base, [field]: wrongValue }, kind);
       const ft = primaryType(fs);
       const isString = ft === "string";
       const isNumeric = ft === "integer" || ft === "number";
@@ -1269,7 +1459,9 @@ function deriveCases(
         push("below minimum", fs.minimum - 1, "bound");
       }
       // Real specs use MAX_SAFE_INTEGER as an "unbounded" sentinel — +1 would
-      // not even round-trip through JSON faithfully, so skip those.
+      // not even round-trip through JSON faithfully, so skip those. The minimum
+      // side needed the same care for a different reason: `1e20 - 1` is `1e20`,
+      // so that case was a copy of a valid request. The proof rejects it now.
       if (
         isNumeric &&
         typeof fs.maximum === "number" &&
@@ -1289,19 +1481,16 @@ function deriveCases(
     // Op-level: one unexpected-extra-property case. Unknown-key naming in
     // fieldErrors varies by server, so this asserts status + code only.
     if (bodySchema.additionalProperties === false) {
-      cases.push({
-        name: `${method.toUpperCase()} ${path} unexpected extra property -> ${matrixStatus}`,
-        auth: validAuth,
-        method,
-        path,
-        body: { ...base, crustUnexpectedProp: "gen-extra" },
-        expectStatus: matrixStatus,
-        expectationSource: matrixSource,
-        expectValidationCode: true,
-        // The extra property is crust's own injection, so the fastapi envelope
-        // can attribute the error to it with certainty.
-        ...validationCaseFields("crustUnexpectedProp", "unexpected-property"),
-      });
+      // The extra property is crust's own injection, so the fastapi envelope
+      // can attribute the error to it with certainty — unless the schema
+      // DECLARES that name, which the proof now catches instead of emitting.
+      pushMatrixCase(
+        "unexpected extra property",
+        "crustUnexpectedProp",
+        { ...base, crustUnexpectedProp: "gen-extra" },
+        "unexpected-property",
+        true,
+      );
     }
 
     // Attribution. Each case above names ONE field and expects the 400 to name that field back,
@@ -1332,6 +1521,40 @@ function deriveCases(
           dropped,
         });
       }
+    }
+    // ---- the proof pass, after attribution ---------------------------------------
+    // Now that the base-body filter has dropped what it owns, judge what survives: is each case's
+    // mutated body actually rejected, and at the field the case names? Cases the filter above already
+    // removed are skipped — they are disclosed there, under the blame that belongs to them.
+    const stillHere = new Set(cases);
+    for (const entry of matrixEntries) {
+      if (!stillHere.has(entry.c)) continue;
+      const verdict = proofOf(entry.field, entry.c.body ?? {});
+      if (!verdict.keep) {
+        proofDropped.push({ case: entry.c.name, reason: verdict.reason });
+        const at = cases.indexOf(entry.c);
+        if (at >= 0) cases.splice(at, 1);
+        continue;
+      }
+      if (!verdict.proven) proofUnproven.push(entry.c.name);
+      // A downgrade — the case asked for a location assertion and the proof will not earn one —
+      // records no location at all, which is also what makes `dropUnattributable` drop it under the
+      // fastapi envelope. A case that was status-only from the start (the extra-property family)
+      // keeps its target: that choice was made where its matcher was written, not by this proof.
+      if (verdict.statusOnly && !entry.askedStatusOnly) {
+        proofStatusOnly.push(entry.c.name);
+        delete entry.c.expectValidationField;
+        delete entry.c.validationTarget;
+        entry.c.expectValidationCode = true;
+      }
+    }
+    if (proofDropped.length > 0 || proofUnproven.length > 0 || proofStatusOnly.length > 0) {
+      unproven.push({
+        template: `${method.toUpperCase()} ${path}`,
+        dropped: proofDropped,
+        unproven: proofUnproven,
+        statusOnly: proofStatusOnly,
+      });
     }
   } else if (bodySchema) {
     // A JSON body whose op documents no 400 AND carries no configured
@@ -2223,6 +2446,7 @@ export async function generateFixtures(opts: GenerateOpts): Promise<GenerateResu
 
   const log = opts.log ?? ((line: string) => process.stdout.write(`${line}\n`));
   const unsound: UnsoundOp[] = [];
+  const unproven: UnprovenOp[] = [];
   const bodyless: BodylessOp[] = [];
   const noMatrix: NoMatrixOp[] = [];
   const requestUnsupported: { operation: string; assumption: string }[] = [];
@@ -2269,7 +2493,17 @@ export async function generateFixtures(opts: GenerateOpts): Promise<GenerateResu
       }
       const tag = op.tags?.[0] ?? "untagged";
       const arr = byTag.get(tag) ?? [];
-      const derived = deriveCases(path, method, op, scope, unsound, bodyless, noMatrix, plan);
+      const derived = deriveCases(
+        path,
+        method,
+        op,
+        scope,
+        unsound,
+        bodyless,
+        noMatrix,
+        unproven,
+        plan,
+      );
       for (const c of derived) {
         if (plan.query.length > 0 || plan.explicitSecurity) c.requestPlan = plan;
       }
@@ -2307,6 +2541,30 @@ export async function generateFixtures(opts: GenerateOpts): Promise<GenerateResu
       `gen-fixtures: ${u.dropped} case(s) skipped for ${u.template} — ${blameClause(u.specFaults, u.crustFaults, "so a 400 from that body would name the wrong field")}`,
     );
     if (u.kept === 0) withNoCases++;
+  }
+
+  // The other way a matrix loses cases, and the one that used to be invisible: a mutation that does
+  // not actually break the constraint its case name claims. These are dropped on purpose — emitting
+  // them would assert a 400 against a server that correctly answers 200 — and the count is printed
+  // because a silently smaller matrix is the failure mode this project ranks worst.
+  for (const u of unproven) {
+    if (u.dropped.length > 0) {
+      log(
+        `gen-fixtures: ${u.dropped.length} case(s) skipped for ${u.template} — the mutation does not violate the schema, so the request would be accepted: ${u.dropped
+          .map((d) => `'${d.case}' (${d.reason})`)
+          .join("; ")}`,
+      );
+    }
+    if (u.statusOnly.length > 0) {
+      log(
+        `gen-fixtures: ${u.statusOnly.length} case(s) for ${u.template} assert the status only — the request is proven rejected but not at the field the case names (a union branch demands it at the object), so no location is claimed: ${u.statusOnly.join("; ")}`,
+      );
+    }
+    if (u.unproven.length > 0) {
+      log(
+        `gen-fixtures: ${u.unproven.length} case(s) for ${u.template} are kept although crust cannot prove the mutation invalid — ${u.unproven.join("; ")}`,
+      );
+    }
   }
 
   // The other way an operation can be left with no negative cases: it documents a body on a
@@ -2500,6 +2758,26 @@ ${fixtures}
           "derived — crust does not assume 400 where the contract is silent",
       })),
       ...unattributable,
+      ...unproven.flatMap((u) => [
+        ...u.dropped.map((d) => ({
+          operation: u.template,
+          assumption:
+            `the '${d.case}' mutation does not violate the schema (${d.reason}), so the ` +
+            "request would be accepted — crust does not emit a negative case it cannot prove",
+        })),
+        ...u.unproven.map((c) => ({
+          operation: u.template,
+          assumption:
+            `the '${c}' case is emitted although crust cannot prove its mutation violates ` +
+            "the schema — part of the schema is not judged by the proof layer",
+        })),
+        ...u.statusOnly.map((c) => ({
+          operation: u.template,
+          assumption:
+            `the '${c}' case asserts the status only: the mutated request is proven rejected, ` +
+            "but not at the field the case names, so no error location is claimed",
+        })),
+      ]),
     ],
   };
   const manifestPath = resolve(outDir, "gen-manifest.json");
