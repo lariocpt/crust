@@ -1010,6 +1010,50 @@ function enumDeadEnd(node: Schema): string | null {
   return `enum [${shown}] fails ${rules}`;
 }
 
+/**
+ * A node whose own bounds admit no value: an empty numeric window, an integer window with no
+ * integer in it, or `minLength` above `maxLength`.
+ *
+ * `enumDeadEnd` covers the enum spelling of the same fault. This matters for the same reason: a
+ * field that can never be valid makes every case built on that body pass on the base body's defect
+ * rather than the mutation the case names, and without a dead-end reading crust blames its own
+ * sampled value for a contradiction the spec wrote.
+ */
+function windowDeadEnd(node: Schema): string | null {
+  const t = primaryType(node);
+  if (t === "integer" || t === "number") {
+    let min = typeof node.minimum === "number" ? node.minimum : null;
+    let max = typeof node.maximum === "number" ? node.maximum : null;
+    let minOpen = false;
+    let maxOpen = false;
+    if (typeof node.exclusiveMinimum === "number") {
+      min = node.exclusiveMinimum;
+      minOpen = true;
+    } else if (node.exclusiveMinimum === true && min !== null) minOpen = true;
+    if (typeof node.exclusiveMaximum === "number") {
+      max = node.exclusiveMaximum;
+      maxOpen = true;
+    } else if (node.exclusiveMaximum === true && max !== null) maxOpen = true;
+    if (min === null || max === null) return null;
+    const gap = max - min;
+    const empty = minOpen || maxOpen ? gap <= 0 : gap < 0;
+    if (empty) return `no value lies in ${minOpen ? "(" : "["}${min}, ${max}${maxOpen ? ")" : "]"}`;
+    if (t === "integer" && Math.ceil(min) > Math.floor(max)) {
+      return `its integer bounds admit no integer (${min} … ${max})`;
+    }
+    return null;
+  }
+  if (t === "string") {
+    const min = typeof node.minLength === "number" ? node.minLength : null;
+    const max = typeof node.maxLength === "number" ? node.maxLength : null;
+    if (min !== null && max !== null && min > max) {
+      return `minLength ${min} exceeds maxLength ${max}`;
+    }
+    return null;
+  }
+  return null;
+}
+
 /** Does this node admit `null` by its own declaration (either spec version)? */
 function admitsNull(node: Schema): boolean {
   if ((node as { nullable?: unknown }).nullable === true) return true;
@@ -1027,7 +1071,7 @@ function admitsNull(node: Schema): boolean {
 function specDeadEnd(node: unknown, path = "", depth = 0): string | null {
   if (!node || typeof node !== "object" || Array.isArray(node) || depth > 8) return null;
   const n = node as Schema;
-  const dead = enumDeadEnd(n);
+  const dead = enumDeadEnd(n) ?? windowDeadEnd(n);
   if (dead) return path ? `${path}: ${dead}` : dead;
   if (admitsNull(n)) return null;
   const union =
@@ -1722,12 +1766,24 @@ function deriveCases(
     // the very field that is invalid (whose body's only defect IS what they assert), and report it.
     const baseBad = unsoundFields(base, bodySchema);
     if (baseBad.size > 0) {
+      // A field the SPEC cannot satisfy is different from a field crust filled badly. When crust's
+      // value is the fault, a case about that field is still the best test available — the body's
+      // only defect is the one it names. When no value would satisfy the field, a body that CARRIES
+      // it is rejected whatever the mutation did, so such a case passes on the base body's defect
+      // and proves nothing. A case that REMOVES the field is exempt: with the field absent the
+      // contradiction is absent, and the only defect left is the missing requirement it asserts.
+      const props = composedObject(bodySchema).properties as Record<string, unknown> | undefined;
+      const specDead = new Set(
+        [...baseBad.keys()].filter((f) => specDeadEnd(f === "" ? bodySchema : props?.[f]) !== null),
+      );
       const kept = cases.filter((c) => {
         // Authz and unknown-param cases carry a body but assert the GATE, which answers before the
         // body is read — an unsound body cannot make those wrong.
         if (c.expectValidationField === undefined && c.expectValidationCode !== true) return true;
         const f = c.expectValidationField;
-        return f !== undefined && baseBad.size === 1 && baseBad.has(f);
+        if (f === undefined) return false;
+        if (specDead.has(f) && c.body !== undefined && f in c.body) return false;
+        return baseBad.size === 1 && baseBad.has(f);
       });
       const dropped = cases.length - kept.length;
       if (dropped > 0) {

@@ -2529,17 +2529,22 @@ describe("a union body whose branch carries the required (F43)", () => {
     expect(r.text).not.toContain("missing required 'image'");
   });
 
-  test("control: an unsatisfiable field inside a union body still drops on its own blame", async () => {
+  test("control: an unsatisfiable field inside a union body drops on its own blame", async () => {
     // F33's honesty has to survive the new read. `a` is `{type: string, enum: [true, false]}` — no
-    // value satisfies it — but every case that SURVIVES is sound on its own terms (missing 'a',
-    // wrong type for 'a', a bad enum member), so nothing is dropped and nothing is blamed. The
-    // point of this test is what it refuses to assert: no notice, because no case went.
+    // value satisfies it. The union read is not what drops anything: the notice blames the enum.
+    // And the drop is correct — a case that CARRIES `a` (wrong type, bad enum member) is rejected
+    // for "no value satisfies a" whatever the mutation did, so it passes on the base body's defect
+    // rather than the one it names. The case that REMOVES `a` survives: with the field absent the
+    // contradiction is absent, and the only defect left is the missing requirement it asserts.
     const r = await emit("dead-enum-in-union", {
       oneOf: [{ required: ["a"] }, { required: ["b"] }],
       properties: { a: { type: "string", enum: [true, false] }, b: { type: "string" } },
     });
-    expect(r.notes.join("\n")).not.toContain("case(s) skipped");
-    expect(r.text).toContain("invalid enum for 'a'");
+    const joined = r.notes.join("\n");
+    expect(joined).toContain("the SPEC contradicts itself: 'a' — enum");
+    expect(joined).not.toContain("anyOf");
+    expect(r.text).toContain("missing required 'a'");
+    expect(r.text).not.toContain("invalid enum for 'a'");
     expect(r.result.totalCases).toBeGreaterThan(0);
   });
 });

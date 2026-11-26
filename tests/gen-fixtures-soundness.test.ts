@@ -177,6 +177,44 @@ describe("a mutation that does not violate the schema is never emitted", () => {
   });
 });
 
+describe("a spec that admits no value is named as the spec's own contradiction", () => {
+  test("an unsatisfiable numeric or length window is blamed on the spec, not on crust", async () => {
+    // `specDeadEnd` used to know only the enum spelling of "no value satisfies this field". An
+    // empty numeric window is the same fault, and without the reading crust's own clamped value
+    // took the blame — while the cases themselves passed on the base body's defect.
+    const num = await emit(
+      "dead-num",
+      body({ n: { type: "integer", minimum: 1.5, maximum: 1.9 } }),
+    );
+    expect(num.notes.join("\n")).toContain("the SPEC contradicts itself");
+    expect(num.notes.join("\n")).toContain("admit no integer");
+    expect(num.text).not.toContain("below minimum");
+
+    const len = await emit("dead-len", body({ s: { type: "string", minLength: 5, maxLength: 2 } }));
+    expect(len.notes.join("\n")).toContain("minLength 5 exceeds maxLength 2");
+
+    // Control: a wide window is nobody's contradiction, and its cases are the point of the matrix.
+    const fine = await emit("live-num", body({ n: { type: "integer", minimum: 1, maximum: 9 } }));
+    expect(fine.notes.join("\n")).not.toContain("contradicts itself");
+    expect(fine.text).toContain("below minimum 'n'");
+    expect(fine.text).toContain("above maximum 'n'");
+  });
+
+  test("a case that removes the unsatisfiable field survives", async () => {
+    // With the field absent the contradiction is absent, so this case's only defect is the one
+    // it asserts. Dropping it would lose real coverage for a fault the case cannot inherit.
+    const r = await emit(
+      "dead-missing",
+      body({ n: { type: "integer", minimum: 1.5, maximum: 1.9 }, m: { type: "string" } }, [
+        "n",
+        "m",
+      ]),
+    );
+    expect(r.names.some((n) => n.includes("missing required 'n'"))).toBe(true);
+    expect(r.names.some((n) => n.includes("wrong type for 'n'"))).toBe(false);
+  });
+});
+
 describe("the proof layer answers three questions, not two", () => {
   // `validateSchema` collapses "cannot tell" into "valid". That collapse is what let the
   // counterexamples above ship, so the distinction is the contract being protected here.
