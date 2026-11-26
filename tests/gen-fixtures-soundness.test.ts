@@ -297,6 +297,53 @@ describe("the proof layer answers three questions, not two", () => {
     }
   });
 
+  test("a subschema the mock validator never visits is still judged", () => {
+    // The proof's `walk` owns the keywords the mock skips, but descending into such a subschema
+    // with `walk` alone skipped every keyword the mock DOES own: a value violating `type` inside
+    // `patternProperties`, `prefixItems` or `additionalProperties: {schema}` produced no violation
+    // and no incompleteness, so `provenValid` claimed a proof for a body any server rejects.
+    const cases: [string, unknown, unknown][] = [
+      [
+        "patternProperties",
+        { x: { ab: "s" } },
+        { type: "object", properties: { x: { patternProperties: { "^a": { type: "integer" } } } } },
+      ],
+      [
+        "prefixItems",
+        { v: ["a"] },
+        {
+          type: "object",
+          properties: { v: { type: "array", prefixItems: [{ type: "integer" }] } },
+        },
+      ],
+      [
+        "additionalProperties as a schema",
+        { x: { ab: 5 } },
+        { type: "object", properties: { x: { additionalProperties: { type: "string" } } } },
+      ],
+    ];
+    for (const [label, value, s] of cases) {
+      expect(validateSchema(value, s, {} as never, ""), label).toEqual([]);
+      expect(provenInvalid(value, s), label).toBe(true);
+      expect(provenValid(value, s), label).toBe(false);
+    }
+  });
+
+  test("tuple `items` is not judged, and says so instead of inventing a violation", () => {
+    // `items` as an ARRAY is a list of per-position schemas (draft-07 / 3.0's tuple form), not a
+    // schema for every element. Judging an element against the array itself reports a violation no
+    // server agrees with, and crust's own sampler fills a list from `items` as a single schema, so
+    // the honest answer is "cannot tell" — which keeps the case rather than dropping it on a
+    // contradiction crust invented.
+    const tuple = { type: "array", items: [{ type: "string" }, { type: "integer" }] };
+    const p = prove(["a", 1], tuple);
+    expect(p.violations).toEqual([]);
+    expect(p.incomplete).toBe(true);
+    expect(provenValid(["a", 1], tuple)).toBe(false);
+    // Incompleteness never vetoes a real violation: a string is not an array under any reading.
+    expect(provenInvalid("a", tuple)).toBe(true);
+  });
+
   test("deepEqual distinguishes structure, not identity", () => {
     expect(deepEqual({ a: [1, { b: 2 }] }, { a: [1, { b: 2 }] })).toBe(true);
     expect(deepEqual({ a: [1] }, { a: [2] })).toBe(false);

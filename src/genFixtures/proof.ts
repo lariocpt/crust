@@ -141,6 +141,20 @@ function push(out: Proof, pointer: string, rule: string): void {
 }
 
 /**
+ * Descend into a subschema the mock validator does not visit on its own (`patternProperties`,
+ * `prefixItems`, tuple `items`): run the mock's checks AT that position, then the strict walk.
+ * Calling `walk` alone would skip `type`, `enum`, the bounds and every other keyword the mock owns,
+ * so a value violating one of those inside such a subschema read as proven valid — the direction
+ * that ships a false pass, which is the one failure this project ranks worst.
+ */
+function sub(out: Proof, value: unknown, schema: unknown, pointer: string, depth: number): void {
+  for (const v of validateSchema(value, schema, {} as OpenApiSpec, pointer)) {
+    push(out, v.pointer, v.rule);
+  }
+  walk(out, value, schema, pointer, depth);
+}
+
+/**
  * Does `value` satisfy `schema`, judged on its own so a combinator branch can be counted?
  * `unknown` means the branch carries something crust cannot judge — which must never be read as
  * either a match or a mismatch.
@@ -211,14 +225,21 @@ function walk(out: Proof, value: unknown, schema: unknown, pointer: string, dept
         seen.add(mark0);
       }
     }
-    if (isObj(schema.items)) {
+    if (Array.isArray(schema.items)) {
+      // Tuple validation: `items` as an ARRAY is a list of per-position schemas (draft-07 /
+      // OpenAPI 3.0's tuple form), not a schema for every element. Validating an element against
+      // the array itself would invent a violation — an array is not a schema — and crust's own
+      // sampler fills a list from `items` as a single schema, so crust has not judged this node
+      // and must not claim it did.
+      mark(out, "tuple `items` (a schema array) is not judged by the proof layer");
+    } else if (isObj(schema.items)) {
       value.forEach((item, i) => {
-        walk(out, item, schema.items, `${pointer}/${i}`, depth + 1);
+        sub(out, item, schema.items, `${pointer}/${i}`, depth + 1);
       });
     }
     if (Array.isArray(schema.prefixItems)) {
-      schema.prefixItems.forEach((sub, i) => {
-        if (i < value.length) walk(out, value[i], sub, `${pointer}/${i}`, depth + 1);
+      schema.prefixItems.forEach((position, i) => {
+        if (i < value.length) sub(out, value[i], position, `${pointer}/${i}`, depth + 1);
       });
     }
     if (isObj(schema.contains)) {
@@ -247,7 +268,7 @@ function walk(out: Proof, value: unknown, schema: unknown, pointer: string, dept
       ? (schema.patternProperties as Record<string, unknown>)
       : {};
     const claimed = new Set<string>();
-    for (const [pattern, sub] of Object.entries(patProps)) {
+    for (const [pattern, position] of Object.entries(patProps)) {
       const re = compile(pattern);
       if (!re) {
         mark(out, `the patternProperties pattern '${pattern}' does not compile`);
@@ -256,7 +277,7 @@ function walk(out: Proof, value: unknown, schema: unknown, pointer: string, dept
       for (const k of keys) {
         if (!re.test(k)) continue;
         claimed.add(k);
-        walk(out, value[k], sub, `${pointer}/${k}`, depth + 1);
+        sub(out, value[k], position, `${pointer}/${k}`, depth + 1);
       }
     }
 
@@ -288,7 +309,7 @@ function walk(out: Proof, value: unknown, schema: unknown, pointer: string, dept
       } else if (ap === true || ap === undefined) {
         // anything goes
       } else if (isObj(ap)) {
-        for (const k of extra) walk(out, value[k], ap, `${pointer}/${k}`, depth + 1);
+        for (const k of extra) sub(out, value[k], ap, `${pointer}/${k}`, depth + 1);
       } else {
         mark(out, "additionalProperties is neither a boolean nor a schema");
       }
