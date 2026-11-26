@@ -4,6 +4,21 @@ Notable changes to crust. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project is
 pre-1.0, so minor versions may carry breaking changes.
 
+## [0.4.0]
+
+### Release milestone
+
+- Advance the release version to `0.4.0` with a coordinated website update.
+  This release does not introduce runtime, fixture-format, or MCP protocol
+  changes relative to `v0.3.9`.
+- Request planning, supported security/query prerequisites, conservative
+  baselines, and whole-flow omissions already shipped in `0.3.9`; they are
+  retained, not newly introduced here.
+- Record the [published 0.3.9 provenance audit](docs/RELEASE-0.3.9-AUDIT.md)
+  and use the [release checklist](docs/DOCUMENTATION-RELEASE-CHECKLIST.md)
+  to track fresh validation and coordinated publication separately from
+  historical evidence.
+
 ## [0.3.9] — 2026-11-15
 
 ### Added

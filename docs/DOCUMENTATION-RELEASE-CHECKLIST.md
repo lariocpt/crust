@@ -1,5 +1,52 @@
 # Documentation release checklist
 
+## v0.4.0 coordinated release
+
+The repository owner authorized production releases and requested the website
+release followed by the backend's installation of live Crust `0.4.0`.
+This candidate is a version/documentation milestone, not a new runtime-feature
+release. The [0.3.9 audit](RELEASE-0.3.9-AUDIT.md) records what already shipped.
+
+- [x] Isolate the candidate from public `main` without including unrelated
+  website-builder or backend working-tree changes.
+- [x] Bump the root manifest to `0.4.0`; retain the workflow-stamped npm template.
+- [x] Prepare coordinated website release guidance and exact-version install
+  instructions.
+- [x] Pass fresh full source tests, TypeScript, Biome, and diff checks.
+- [x] Pass both website build modes, generated internal links, and command
+  grammar checks.
+- [ ] Commit and push the reviewed candidate, then create a new `v0.4.0` tag.
+- [ ] Pass the existing public release workflow, including binary stamps,
+  compiled variant probes, checksums, and binary-before-launcher publication.
+- [ ] Verify both public npm packages and released asset provenance.
+- [ ] Deploy the coordinated website after the package release; verify its
+  production workflow and live content.
+- [ ] Only then pin the backend's Mongo launcher and lockfile to live `0.4.0`,
+  validate the intended tooling, and commit/push that branch.
+
+Publication results and immutable revisions will be recorded after those
+actions succeed. No application API, application database, fixture, load, or
+LAN/Jenkins validation is implied. Do not reuse published versions or move
+released tags as an improvised rollback.
+
+### Fresh candidate validation
+
+- Full source suite: 1,621 passed, 7 environment-dependent skips, zero failures;
+  17,510 assertions across 62 files, using Bun 1.4.4 and Node 22.
+- The initial local run had three launcher failures because `node` was absent
+  from `PATH`. Adding the existing Node 22 installation fixed all 22 targeted
+  launcher tests and the subsequent full run without source changes.
+- TypeScript passed. Read-only Biome checked 154 files without errors or fixes;
+  566 warnings and 71 informational findings remain in unchanged source.
+- Both website build modes and generated link checks passed. The public build
+  produced 34 pages, 1,659 internal links and 55 anchor links, with no dead
+  internal links. Its known Shiki language warning used plaintext fallback.
+- Website grammar checks passed all 382 examples against the candidate's source
+  entrypoint. The deployment workflow will repeat that gate against the
+  published compiled binary.
+- Diff checks passed. Runtime, test, skill and npm-template sources are unchanged
+  from `v0.3.9`; unrelated website-builder and backend work remains excluded.
+
 ## v0.3.9 release close-out
 
 **Production release status: complete.** Crust v0.3.9 is published and the
