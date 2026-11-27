@@ -344,6 +344,131 @@ describe("the proof layer answers three questions, not two", () => {
     expect(provenInvalid("a", tuple)).toBe(true);
   });
 
+  test("boolean subschemas reject invalid values at root and nested positions", () => {
+    const cases: [string, unknown, unknown, string, string][] = [
+      ["items: false", [1], { items: false }, "/0", "false"],
+      ["not: true", "x", { not: true }, "", "not"],
+      ["propertyNames: false", { x: 1 }, { propertyNames: false }, "", "propertyNames"],
+      ["contains: false, empty", [], { contains: false }, "", "contains"],
+      ["contains: false, nonempty", [1], { contains: false }, "", "contains"],
+      ["contains: true, empty", [], { contains: true }, "", "contains"],
+      [
+        "items: false after prefixItems",
+        ["ok", 1],
+        { prefixItems: [{ type: "string" }], items: false },
+        "/1",
+        "false",
+      ],
+      [
+        "items schema after prefixItems",
+        ["ok", "wrong"],
+        { prefixItems: [{ type: "string" }], items: { type: "integer" } },
+        "/1",
+        "type",
+      ],
+    ];
+    for (const [label, value, schema, pointer, rule] of cases) {
+      for (const nested of [false, true]) {
+        const actual = nested ? { field: value } : value;
+        const s = nested ? { properties: { field: schema } } : schema;
+        const p = prove(actual, s);
+        expect(p.violations, label).toContainEqual({
+          pointer: `${nested ? "/field" : ""}${pointer}`,
+          rule,
+        });
+        expect(p.incomplete, label).toBe(false);
+        expect(provenInvalid(actual, s), label).toBe(true);
+        expect(provenValid(actual, s), label).toBe(false);
+      }
+    }
+  });
+
+  test("control: boolean subschemas and prefixItems keep valid values provable", () => {
+    const cases: [unknown, unknown][] = [
+      [[], { items: false }],
+      [[1, "x"], { items: true }],
+      ["x", { not: false }],
+      [{}, { propertyNames: false }],
+      [{ x: 1 }, { propertyNames: true }],
+      [[1], { contains: true }],
+      [["ok"], { prefixItems: [{ type: "string" }], items: false }],
+      [["ok", 1], { prefixItems: [{ type: "string" }], items: { type: "integer" } }],
+    ];
+    for (const [value, schema] of cases) {
+      expect(prove(value, schema)).toEqual({ violations: [], incomplete: false });
+      expect(provenValid(value, schema)).toBe(true);
+      expect(provenInvalid(value, schema)).toBe(false);
+    }
+  });
+
+  test("unknown subschemas do not become valid or invalid proofs", () => {
+    for (const [value, schema] of [
+      ["x", { not: { unevaluatedProperties: false } }],
+      [[1], { contains: { unevaluatedProperties: false } }],
+      [{ x: 1 }, { propertyNames: { unevaluatedProperties: false } }],
+    ] as [unknown, unknown][]) {
+      const p = prove(value, schema);
+      expect(p.violations).toEqual([]);
+      expect(p.incomplete).toBe(true);
+      expect(provenValid(value, schema)).toBe(false);
+      expect(provenInvalid(value, schema)).toBe(false);
+    }
+  });
+
+  test("prefix/suffix checks stay consistent inside combinators and nested schemas", () => {
+    const tuple = { prefixItems: [{ type: "string" }], items: { type: "integer" } };
+    const valid = ["ok", 1];
+    const invalid = ["ok", "wrong"];
+    const cases: [unknown, unknown, unknown][] = [
+      [valid, invalid, { allOf: [tuple] }],
+      [valid, invalid, { anyOf: [tuple, { type: "null" }] }],
+      [valid, invalid, { oneOf: [tuple, { type: "null" }] }],
+      [valid, invalid, { not: { not: tuple } }],
+      [[valid], [invalid], { items: tuple }],
+      [[valid], [invalid], { contains: tuple }],
+      [{ x: valid }, { x: invalid }, { properties: { x: tuple } }],
+      [{ x: valid }, { x: invalid }, { patternProperties: { "^x": tuple } }],
+      [{ x: valid }, { x: invalid }, { additionalProperties: tuple }],
+    ];
+    for (const [good, bad, schema] of cases) {
+      expect(prove(good, schema)).toEqual({ violations: [], incomplete: false });
+      expect(provenValid(good, schema)).toBe(true);
+      expect(provenInvalid(bad, schema)).toBe(true);
+      expect(provenValid(bad, schema)).toBe(false);
+    }
+  });
+
+  test("uniqueItems compares nested objects structurally, regardless of key order", () => {
+    const duplicates = [
+      [
+        { a: 1, b: 2 },
+        { b: 2, a: 1 },
+      ],
+      [{ a: { x: 1, y: 2 } }, { a: { y: 2, x: 1 } }],
+      [[{ a: 1, b: 2 }], [{ b: 2, a: 1 }]],
+    ];
+    for (const value of duplicates) {
+      const p = prove(value, { uniqueItems: true });
+      expect(p.violations).toContainEqual({ pointer: "", rule: "uniqueItems" });
+      expect(p.incomplete).toBe(false);
+      expect(provenValid(value, { uniqueItems: true })).toBe(false);
+      expect(provenValid(value, { uniqueItems: false })).toBe(true);
+    }
+    for (const value of [
+      [
+        { a: 1, b: 2 },
+        { b: 1, a: 2 },
+      ],
+      [
+        [1, 2],
+        [2, 1],
+      ],
+      [1, "1", null, false],
+    ]) {
+      expect(provenValid(value, { uniqueItems: true })).toBe(true);
+    }
+  });
+
   test("deepEqual distinguishes structure, not identity", () => {
     expect(deepEqual({ a: [1, { b: 2 }] }, { a: [1, { b: 2 }] })).toBe(true);
     expect(deepEqual({ a: [1] }, { a: [2] })).toBe(false);
@@ -395,7 +520,7 @@ describe("validValue builds a body the schema actually admits", () => {
 });
 
 describe("configured statuses are 4xx unless 5xx is policy", () => {
-  const specPath = join(dir, "status.spec.json");
+  let specPath: string;
   const setupFor = (name: string, expectations: string) => {
     const p = join(dir, `${name}.setup.ts`);
     return writeFile(p, setupSource(`export const expectations = ${expectations};\n`)).then(
@@ -415,6 +540,7 @@ describe("configured statuses are 4xx unless 5xx is policy", () => {
   }
 
   beforeAll(async () => {
+    specPath = join(dir, "status.spec.json");
     // No documented 400, so a configured status is the only thing that builds a matrix.
     await writeFile(
       specPath,

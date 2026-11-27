@@ -24,7 +24,8 @@
 // "unexpected property" case for a property the schema declares.
 //
 // It reuses `validateSchema` for the keywords that validator judges strictly — a violation it
-// reports is always real, it never invents one — and walks the keywords it skips.
+// reports is always real, it never invents one — but owns traversal so boolean subschemas and
+// the prefixItems/items boundary are judged consistently at every position.
 
 import type { OpenApiSpec } from "../mockServer/loadSpec";
 import { validateSchema } from "../mockServer/validateRequest";
@@ -141,20 +142,6 @@ function push(out: Proof, pointer: string, rule: string): void {
 }
 
 /**
- * Descend into a subschema the mock validator does not visit on its own (`patternProperties`,
- * `prefixItems`, tuple `items`): run the mock's checks AT that position, then the strict walk.
- * Calling `walk` alone would skip `type`, `enum`, the bounds and every other keyword the mock owns,
- * so a value violating one of those inside such a subschema read as proven valid — the direction
- * that ships a false pass, which is the one failure this project ranks worst.
- */
-function sub(out: Proof, value: unknown, schema: unknown, pointer: string, depth: number): void {
-  for (const v of validateSchema(value, schema, {} as OpenApiSpec, pointer)) {
-    push(out, v.pointer, v.rule);
-  }
-  walk(out, value, schema, pointer, depth);
-}
-
-/**
  * Does `value` satisfy `schema`, judged on its own so a combinator branch can be counted?
  * `unknown` means the branch carries something crust cannot judge — which must never be read as
  * either a match or a mismatch.
@@ -164,15 +151,12 @@ function verdict(value: unknown, schema: unknown, depth: number): "yes" | "no" |
   if (schema === false) return "no";
   if (schema === true || schema === undefined) return "yes";
   if (!isObj(schema)) return "unknown";
-  for (const v of validateSchema(value, schema, {} as OpenApiSpec, "")) {
-    push(inner, v.pointer, v.rule);
-  }
   walk(inner, value, schema, "", depth + 1);
   if (inner.violations.length > 0) return "no";
   return inner.incomplete ? "unknown" : "yes";
 }
 
-/** The keywords `validateSchema` does NOT judge, walked with pointers into the original value. */
+/** Judge each node and descend with pointers into the original value. */
 function walk(out: Proof, value: unknown, schema: unknown, pointer: string, depth: number): void {
   if (schema === true || schema === undefined) return;
   if (schema === false) {
@@ -197,6 +181,21 @@ function walk(out: Proof, value: unknown, schema: unknown, pointer: string, dept
     }
   }
 
+  // The mock does not know prefixItems and would apply items to the prefix too. Keep its
+  // node-local checks, but let this walk own ALL descent (including properties/combinators),
+  // otherwise nested arrays and branch verdicts would still inherit that false rejection.
+  const local = {
+    ...schema,
+    items: undefined,
+    properties: undefined,
+    allOf: undefined,
+    anyOf: undefined,
+    oneOf: undefined,
+  };
+  for (const v of validateSchema(value, local, {} as OpenApiSpec, pointer)) {
+    push(out, v.pointer, v.rule);
+  }
+
   if ("const" in schema && !deepEqual(value, schema.const)) push(out, pointer, "const");
 
   if (typeof schema.format === "string" && !KNOWN_FORMATS.has(schema.format)) {
@@ -215,14 +214,14 @@ function walk(out: Proof, value: unknown, schema: unknown, pointer: string, dept
 
   if (Array.isArray(value)) {
     if (schema.uniqueItems === true) {
-      const seen = new Set<string>();
+      const seen: unknown[] = [];
       for (const item of value) {
-        const mark0 = JSON.stringify(item) ?? String(item);
-        if (seen.has(mark0)) {
+        // JSON object member order is irrelevant; array element order is not.
+        if (seen.some((previous) => deepEqual(previous, item))) {
           push(out, pointer, "uniqueItems");
           break;
         }
-        seen.add(mark0);
+        seen.push(item);
       }
     }
     if (Array.isArray(schema.items)) {
@@ -232,17 +231,18 @@ function walk(out: Proof, value: unknown, schema: unknown, pointer: string, dept
       // sampler fills a list from `items` as a single schema, so crust has not judged this node
       // and must not claim it did.
       mark(out, "tuple `items` (a schema array) is not judged by the proof layer");
-    } else if (isObj(schema.items)) {
-      value.forEach((item, i) => {
-        sub(out, item, schema.items, `${pointer}/${i}`, depth + 1);
-      });
+    } else if ("items" in schema) {
+      const start = Array.isArray(schema.prefixItems) ? schema.prefixItems.length : 0;
+      for (let i = start; i < value.length; i++) {
+        walk(out, value[i], schema.items, `${pointer}/${i}`, depth + 1);
+      }
     }
     if (Array.isArray(schema.prefixItems)) {
       schema.prefixItems.forEach((position, i) => {
-        if (i < value.length) sub(out, value[i], position, `${pointer}/${i}`, depth + 1);
+        if (i < value.length) walk(out, value[i], position, `${pointer}/${i}`, depth + 1);
       });
     }
-    if (isObj(schema.contains)) {
+    if ("contains" in schema) {
       const verdicts = value.map((item) => verdict(item, schema.contains, depth));
       if (!verdicts.includes("yes")) {
         if (verdicts.includes("unknown")) mark(out, "a `contains` candidate could not be judged");
@@ -277,11 +277,11 @@ function walk(out: Proof, value: unknown, schema: unknown, pointer: string, dept
       for (const k of keys) {
         if (!re.test(k)) continue;
         claimed.add(k);
-        sub(out, value[k], position, `${pointer}/${k}`, depth + 1);
+        walk(out, value[k], position, `${pointer}/${k}`, depth + 1);
       }
     }
 
-    if (isObj(schema.propertyNames)) {
+    if ("propertyNames" in schema) {
       for (const k of keys) {
         const v = verdict(k, schema.propertyNames, depth);
         if (v === "no") push(out, pointer, "propertyNames");
@@ -309,7 +309,7 @@ function walk(out: Proof, value: unknown, schema: unknown, pointer: string, dept
       } else if (ap === true || ap === undefined) {
         // anything goes
       } else if (isObj(ap)) {
-        for (const k of extra) sub(out, value[k], ap, `${pointer}/${k}`, depth + 1);
+        for (const k of extra) walk(out, value[k], ap, `${pointer}/${k}`, depth + 1);
       } else {
         mark(out, "additionalProperties is neither a boolean nor a schema");
       }
@@ -344,7 +344,7 @@ function walk(out: Proof, value: unknown, schema: unknown, pointer: string, dept
     else if (matches === 0 && !verdicts.includes("unknown")) push(out, pointer, "oneOf");
     if (verdicts.includes("unknown")) mark(out, "a oneOf branch could not be judged");
   }
-  if (isObj(schema.not)) {
+  if ("not" in schema) {
     const v = verdict(value, schema.not, depth);
     if (v === "yes") push(out, pointer, "not");
     else if (v === "unknown") mark(out, "the `not` subschema could not be judged");
@@ -357,20 +357,6 @@ function walk(out: Proof, value: unknown, schema: unknown, pointer: string, dept
  */
 export function prove(value: unknown, schema: unknown): Proof {
   const out: Proof = { violations: [], incomplete: false };
-  if (schema === false) {
-    push(out, "", "false");
-    return out;
-  }
-  if (schema === true || schema === undefined) return out;
-  if (!isObj(schema)) {
-    mark(out, "a schema that is neither an object nor a boolean");
-    return out;
-  }
-  // The mock validator's own recursion already carries absolute pointers, so it runs once at the
-  // root rather than per node; this module's walk supplies the keywords it skips.
-  for (const v of validateSchema(value, schema, {} as OpenApiSpec, "")) {
-    push(out, v.pointer, v.rule);
-  }
   walk(out, value, schema, "", 0);
   const seen = new Set<string>();
   out.violations = out.violations.filter((v) => {
