@@ -243,7 +243,7 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
 
   const proxy = opts.proxy;
   const proxyMode = typeof proxy === "string" && proxy.length > 0;
-  const validateMode = opts.validate === true;
+  const validateMode = opts.validate === true || opts.strict === true;
   const statefulMode =
     opts.stateful === true || opts.state !== undefined || opts.seed !== undefined;
   const needsBody = validateMode || statefulMode || proxyMode;

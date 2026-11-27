@@ -1055,12 +1055,12 @@ describe("--strict mock mode e2e", () => {
     },
   } as unknown as OpenApiSpec;
 
-  test("extra property -> 422 under strict; same request passes without", async () => {
+  test.each([undefined, false, true])("strict implies validate=%s", async (validate) => {
     const strictServer = await startServer({
       port: 0,
       hostname: "127.0.0.1",
       spec: STRICT_SPEC,
-      validate: true,
+      validate,
       strict: true,
       log: () => {},
     });
@@ -1087,6 +1087,17 @@ describe("--strict mock mode e2e", () => {
 
       const accepted = await fetch(`http://127.0.0.1:${looseServer.port}/tight`, payload);
       expect(accepted.status).toBe(201);
+      const missing = await fetch(`http://127.0.0.1:${strictServer.port}/tight`, {
+        ...payload,
+        body: "{}",
+      });
+      expect(missing.status).toBe(422);
+      expect(JSON.stringify(await missing.json())).toContain("required");
+      const valid = await fetch(`http://127.0.0.1:${strictServer.port}/tight`, {
+        ...payload,
+        body: JSON.stringify({ name: "valid" }),
+      });
+      expect(valid.status).toBe(201);
     } finally {
       await strictServer.stop();
       await looseServer.stop();

@@ -29,7 +29,8 @@ export function renderText(report: RunReport, useColor: boolean): string {
         for (const f of r.failures) {
           out.push(`    ${c.red(f.path)}: expected ${fmt(f.expected)}, got ${fmt(f.actual)}`);
         }
-      } else if (r.status === "error") {
+      }
+      if (r.error || r.status === "error") {
         out.push(`    ${c.red("error")}: ${r.error?.message ?? "(unknown)"}`);
       }
     }
@@ -85,9 +86,10 @@ export function renderMarkdown(report: RunReport): string {
     for (const r of failures) {
       out.push("");
       out.push(`### ${relative(cwd, r.file)} — ${r.name}`);
-      if (r.status === "error") {
+      if (r.error || r.status === "error") {
         out.push(`- error: \`${r.error?.message ?? ""}\``);
-      } else {
+      }
+      if (r.status === "fail") {
         for (const f of r.failures) {
           out.push(`- \`${f.path}\`: expected \`${fmt(f.expected)}\`, got \`${fmt(f.actual)}\``);
         }
@@ -118,6 +120,7 @@ export function renderJUnitXml(report: RunReport): string {
         const lines = r.failures.map(
           (f) => `${f.path}: expected ${fmt(f.expected)}, got ${fmt(f.actual)}`,
         );
+        if (r.error) lines.push(r.error.message, r.error.stack ?? "");
         // One <failure> element per case — many CI parsers read only the
         // first; every failure still lands in the body.
         c.failure = { message: lines[0] ?? "failed", body: lines.join("\n") };

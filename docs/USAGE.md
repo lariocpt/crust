@@ -1437,8 +1437,12 @@ conform. Violations fail the fixture with per-field pointer paths
 (`output.data/items/0/name — minLength: …`). The schema must be inline —
 the runner has no spec to resolve references against, so a `$ref` anywhere
 in it is a loud error (the fixture reports `output.schema contains a
-$ref … — inline it`) rather than a silently-passing no-op. The validator is
-the mock-server's subset walker, so its never-invent-a-violation rule
+$ref … — inline it`) rather than a silently-passing no-op.
+Reference checks descend into schema maps even when a property or definition
+is named `default`, `enum`, `const`, `example`, or `examples`. Those names
+are not data at a map-entry position. Actual values of those keywords in a
+schema remain data: a literal object containing a `$ref` key there is allowed.
+The validator is the mock-server's subset walker, so its never-invent-a-violation rule
 applies (unknown keywords pass). It runs in **strict** mode (new in 0.4.2), unlike the mock
 server: a literal `additionalProperties: false` in the schema is enforced,
 because this is an assertion you wrote, not live traffic being judged — a
@@ -1499,6 +1503,12 @@ test-fixture --target 'fixtures/**/*.crust.ts' --out report.xml   # JUnit for CI
 > created — a "global cleanup" sweep (`DELETE FROM users`, truncate-all)
 > shreds every other fixture still running. If you need a full reset, do it
 > once outside the runner, not per-fixture.
+
+**Teardown failures fail the run.** Cleanup is awaited and included in the
+fixture duration. If it throws, an otherwise passing fixture becomes an
+error; existing assertion failures or setup/request errors are preserved
+alongside `teardown threw: …`. Text, JSON, Markdown, and JUnit reports carry
+the cleanup error, the CLI exits 1, and `--bail` stops scheduling new work.
 
 **Module resolution:** files the runner loads — `.crust.ts` fixtures, `.setup.ts` modules, npm packages auto-dispatched as stages — resolve bare specifiers the ordinary Bun way, walking `node_modules` from the file's own location, **including under the AOT-compiled binary** — for packages that carry **no dependencies of their own**. Measured 2026-10-30 with the release binary: a `x.setup.ts` doing `import shout from "npkg"` set `$GREETING` and the `test-pipes` line passed. Re-measured 2026-11-12 with a package that has its own dependencies (`mongodb`, importing `bson`): under the compiled binary that import fails with `Cannot find package '…'` even when the package sits in `node_modules` beside the file — the binary's resolver cannot follow the dependency graph of an external package. So under the binary: dep-free npm imports work, packages with dependencies do not (they work when running crust from source). What the binary does not carry is a dependency set of its own — crust ships zero runtime dependencies — so anything a fixture imports has to be installed where the fixture lives. Bun builtins (`Bun.SQL`, `Bun.file`) are still the lighter choice for a helper (no install, no version drift between fixture and runner), and under the binary they are often the only choice.
 
@@ -2331,6 +2341,11 @@ applies again to deeper standalone objects inside any branch. The
 object-form `additionalProperties: {schema}` stays unenforced. Violations
 use `rule: "additionalProperties"` with the offending key in the pointer.
 
+The implication is enforced by the shared server API, not just CLI parsing:
+`startServer({ …, strict: true })` validates requests even when `validate`
+is omitted or false. MCP's `crust_mock_server_start` has the same contract;
+its listing reports the effective `validate, strict` modes.
+
 It stays opt-in because most specs never ask for it: of the 4,138 APIs-guru specs,
 **157 (3.8%) declare `additionalProperties: false` somewhere**. Swept under `--strict`,
 those 157 produce 141 `additionalProperties` violations across 16,321 responses — and
@@ -2439,6 +2454,15 @@ verify-web-links --site-map-url ./public/sitemap.xml --no-recurse
 ```
 
 Flags: `--site-map-url <url-or-path>` or `--base-url <url>` (one required, mutually exclusive); `--fixtures <glob>` (optional `.crust.ts` meta fixtures); `--concurrency N` (default `4`); `--timeout ms` (default `10000`); `--user-agent <s>`; `--max-depth N` (default `5`); `--no-recurse` / `--no-anchors` / `--no-redirect-warnings` to opt out of those checks; `--include-external` to status-check off-origin links (never recursed); `--exclude <substring>` (repeatable) to skip URLs containing the substring — for subtrees that redirect by design, like a WooCommerce `/checkout/` or `/wp-admin/`; `--max-pages N` to stop after N URLs (the report counts what was left unchecked — a safety valve for crawls that explode into e.g. WooCommerce filter URLs; default `0` = unlimited); `--no-progress` to silence the 5-second progress heartbeat on stderr; `--json` for a machine-readable report on stdout (a failing run also writes the fix-list to stderr, so a redirected artifact still leaves the log readable); `--strict` to fail (exit 1) unless **every discovered link was checked** — see below.
+
+**Discovery must finish before crawling.** Every child of a sitemap index
+and every `Sitemap:` declaration in robots.txt must load and contain URLs.
+An unreadable or empty declared sitemap fails with exit 2; a healthy sibling
+cannot hide it, even without `--strict`. Cycles and branches exceeding 32
+sitemap documents fail explicitly. Missing conventional roots (HTTP 404/410)
+can fall back from `/sitemap.xml` to `/sitemap-index.xml`; an existing root's
+failure or a broken child is not a probe miss. Discovery failures name the
+source on stderr and do not emit a partial JSON success report.
 
 By default, all four verification behaviors are on: 2xx status, recurse into internal pages, validate `#fragment` targets against element ids on the destination page, and flag any 3xx redirect chain (often a sign of stale internal links). Each `og:image` URL is fetched and its content-type asserted to start with `image/`.
 
@@ -2957,6 +2981,11 @@ still report the code of a job that ended minutes ago.
 **`jobs [-l] [%N]`** lists the table, `-l` adding the pid (and the code once
 there is one). An unknown option is refused — `crust: jobs: -x is not an option`
 — rather than quietly ignored, because here the flags *are* the listing.
+
+Liveness uses signal 0, with Linux `/proc` metadata used only to recognize
+zombies while awaiting their exit codes. Missing or unreadable `/proc`
+(including on macOS) and permission-denied probes do not falsely mark a
+live or stopped job `Failed` or disable further job-control signals.
 
 **`fg [spec]`** resumes a stopped job and waits for it; the job's own exit code
 becomes the line's, so `fg` on a job that exited 3 exits 3. **`bg [spec]`**

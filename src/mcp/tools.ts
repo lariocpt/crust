@@ -50,7 +50,10 @@ const MOCK_TOOLS: ToolDef[] = [
         },
         seed: { type: "string", description: "JSON seed file inserted at boot" },
         validate: { type: "boolean", description: "validate requests, 422 on violations" },
-        strict: { type: "boolean", description: "also enforce additionalProperties:false" },
+        strict: {
+          type: "boolean",
+          description: "enforce additionalProperties:false; implies request validation",
+        },
         proxy: { type: "string", description: "upstream URL — validation-proxy mode" },
         proxy_timeout_ms: { type: "number" },
         report: { type: "string", description: "append violations as NDJSON (needs proxy)" },

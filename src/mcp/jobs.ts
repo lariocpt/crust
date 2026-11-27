@@ -142,7 +142,7 @@ export class JobManager {
     });
     const modes = [
       opts.stateful || opts.state || opts.seed ? "stateful" : "",
-      opts.validate && !opts.proxy ? "validate" : "",
+      (opts.validate || opts.strict) && !opts.proxy ? "validate" : "",
       opts.strict ? "strict" : "",
       opts.proxy ? `proxy -> ${opts.proxy}` : "",
       opts.state ? `state: ${opts.state}` : "",

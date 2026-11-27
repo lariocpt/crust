@@ -459,6 +459,39 @@ describe("mcp mock server lifecycle", () => {
     expect(empty.text).toContain("no mock servers running");
   });
 
+  test("strict alone validates requests and reports the effective mode", async () => {
+    const strictSpec = join(dir, "strict-spec.json");
+    const spec = JSON.parse(await Bun.file(specPath()).text());
+    spec.paths["/things"].post.requestBody.content["application/json"].schema.additionalProperties =
+      false;
+    await writeFile(strictSpec, JSON.stringify(spec));
+    const start = await c.call("crust_mock_server_start", { spec: strictSpec, strict: true });
+    expect(start.isError).toBeUndefined();
+    expect(start.text).toContain("validate, strict");
+    const id = required(start.text.match(/mock-\d+/))[0];
+    const url = required(start.text.match(/http:\/\/127\.0\.0\.1:\d+/))[0];
+    try {
+      const invalid = await fetch(`${url}/things`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: "x", extra: true }),
+      });
+      expect(invalid.status).toBe(422);
+      expect(JSON.stringify(await invalid.json())).toContain("additionalProperties");
+      const valid = await fetch(`${url}/things`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: "x" }),
+      });
+      expect(valid.status).toBe(201);
+      const violations = await c.call("crust_mock_server_violations", { id });
+      expect(violations.text).toContain("1 violation(s)");
+      expect((await c.call("crust_mock_server_list")).text).toContain("validate, strict");
+    } finally {
+      expect((await c.call("crust_mock_server_stop", { id })).isError).toBeUndefined();
+    }
+  });
+
   test("unknown ids refuse honestly", async () => {
     const r = await c.call("crust_mock_server_stop", { id: "mock-99" });
     expect(r.isError).toBe(true);
