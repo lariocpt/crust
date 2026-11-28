@@ -117,7 +117,13 @@ const SPEC = {
     "/api/things/{thingId}": {
       get: {
         tags: ["things"],
-        responses: { "200": { description: "ok" }, "404": { description: "gone" } },
+        responses: {
+          "200": {
+            description: "ok",
+            content: { "application/json": { example: { id: "seed-thing", name: "Seed" } } },
+          },
+          "404": { description: "gone" },
+        },
       },
       patch: {
         tags: ["things"],
@@ -311,13 +317,11 @@ describe("gen-fixtures", () => {
       }
     }
 
-    // pattern sampling: the base body for widgets satisfies ^\d{6}$ when the
-    // optional code field is perturbed... at minimum wrong-type cases for
-    // pattern fields must use an unparseable STRING, not a number
+    // Pattern fields need a coercion-resistant non-string for a type defect.
     const wrongCode = mod.default.find((f) => f.name.includes("wrong type for 'code'"));
     if (wrongCode) {
       const body = JSON.parse(required(wrongCode.input(ctx).body)) as { code: unknown };
-      expect(typeof body.code).toBe("string");
+      expect(body.code).toEqual({});
     }
   });
 
@@ -354,10 +358,9 @@ describe("gen-fixtures", () => {
     expect(widgets).not.toContain("too long 'bigText'");
     // MAX_SAFE_INTEGER is an "unbounded" sentinel — no above-maximum case
     expect(widgets).not.toContain("above maximum 'weight'");
-    // optional pattern field gets a case; required pattern field is already
-    // covered by wrong-type's string sentinel -> deduped
+    // Pattern and type defects are distinct, including for required fields.
     expect(widgets).toContain("pattern violation 'code' -> 400");
-    expect(widgets).not.toContain("pattern violation 'pin'");
+    expect(widgets).toContain("pattern violation 'pin' -> 400");
     expect(widgets).toContain("wrong type for 'pin' -> 400");
     // op-level extra property asserts status + code ONLY
     expect(widgets).toContain("unexpected extra property -> 400");
@@ -434,14 +437,19 @@ describe("gen-fixtures", () => {
       '{"name":"gen-value-x"} | POST $GEN_URL_API_THINGS -H "$GEN_AUTH_HEADER" | assert (r => r.status === 201) | (r => r.json()) | capture GEN_ID_API_THINGS (b => b.id)',
     );
     expect(pipes).toContain("capture GEN_ID_API_ANIMALS (b => b.animal.id)");
-    // read: id must round-trip
+    // read: the id must round-trip AT ITS OWN PATH. A substring test over the whole body passed for
+    // the wrong resource — `{"id":"wrong","note":"<id>"}` satisfied it — so the assertion names the
+    // path `idPathFor` derived for the capture.
     expect(pipes).toContain(
-      'GET $GEN_URL_API_THINGS/$GEN_ID_API_THINGS -H "$GEN_AUTH_HEADER" | assert (r => r.status === 200) | (r => r.json()) | assert (j => JSON.stringify(j).includes(process.env.GEN_ID_API_THINGS ?? " "))',
+      'GET $GEN_URL_API_THINGS/$GEN_ID_API_THINGS -H "$GEN_AUTH_HEADER" | assert (r => r.status === 200) | (r => r.json()) | assert (j => process.env.GEN_ID_API_THINGS !== undefined && String(j.id ?? "") === process.env.GEN_ID_API_THINGS)',
     );
-    // update prefers PATCH with a single-field body; {} is the DELETE trigger
+    // update prefers PATCH, and it must CHANGE something: the same deterministic value the create
+    // step posted would prove only that the endpoint accepts a body. The read-back then checks the
+    // new value actually persisted. {} is the DELETE trigger.
     expect(pipes).toContain(
-      '{"name":"gen-value-x"} | PATCH $GEN_URL_API_THINGS/$GEN_ID_API_THINGS -H "$GEN_AUTH_HEADER" | expect 200',
+      '{"name":"gen-value-x1"} | PATCH $GEN_URL_API_THINGS/$GEN_ID_API_THINGS -H "$GEN_AUTH_HEADER" | expect 200',
     );
+    expect(pipes).toContain('return equal(j.name, "gen-value-x1");');
     expect(pipes).toContain(
       '{} | DELETE $GEN_URL_API_THINGS/$GEN_ID_API_THINGS -H "$GEN_AUTH_HEADER" | expect 204',
     );
@@ -579,7 +587,8 @@ export function resolvePath(ctx, template) {
       expect(result.flowCount).toBe(1);
       const report = await runPipes({ target: required(result.flowFile) });
       expect(report.results.filter((r) => r.status === "fail")).toEqual([]);
-      expect(report.totals).toEqual({ pass: 5, fail: 0, files: 1 });
+      // 6, not 5: the read-after-update step is new, and it passes — the mock persisted the PATCH.
+      expect(report.totals).toEqual({ pass: 6, fail: 0, files: 1 });
     } finally {
       await srv.stop();
       delete process.env.CRUST_GENFX_BASE;
@@ -676,7 +685,8 @@ export function resolvePath(ctx, template) {
       expect(pipes).toContain("capture GEN_ID_API_GADGETS (b => b.gadget.id)");
       const report = await runPipes({ target: required(result.flowFile) });
       expect(report.results.filter((r) => r.status === "fail")).toEqual([]);
-      expect(report.totals).toEqual({ pass: 5, fail: 0, files: 1 });
+      // 6, not 5: the read-after-update step is new, and it passes through the envelope.
+      expect(report.totals).toEqual({ pass: 6, fail: 0, files: 1 });
     } finally {
       await srv.stop();
       delete process.env.CRUST_GENFX_WRAP_BASE;
@@ -786,9 +796,10 @@ export function resolvePath(ctx, template) {
     expect(result.flowCount).toBe(1);
     const pipes = await Bun.file(required(result.flowFile)).text();
     // PUT carries the FULL schema-valid body from the PUT op's own schema
-    // (both required fields), not the POST's one-field base body.
+    // (both required fields), not the POST's one-field base body — and one of
+    // them is perturbed, so the step actually changes the resource.
     expect(pipes).toContain(
-      '{"name":"gen-value-x","color":"gen-value-x"} | PUT $GEN_URL_API_GADGETS/$GEN_ID_API_GADGETS -H "$GEN_AUTH_HEADER" | expect 200',
+      '{"name":"gen-value-x1","color":"gen-value-x"} | PUT $GEN_URL_API_GADGETS/$GEN_ID_API_GADGETS -H "$GEN_AUTH_HEADER" | expect 200',
     );
     // The create step still uses the POST schema (name only).
     expect(pipes).toContain('{"name":"gen-value-x"} | POST $GEN_URL_API_GADGETS');
@@ -1288,8 +1299,8 @@ describe("the generator infers a missing type", () => {
 
   test("string-only keywords without `type` imply a string", () => {
     expect(wrongTypeFor({ minLength: 3 } as never)).toBe(12345);
-    // A pattern makes it a coercion-resistant string, per the existing rule.
-    expect(wrongTypeFor({ pattern: "^a+$" } as never)).toBe("!!not-a-valid-value!!");
+    // A pattern gets a coercion-resistant non-string, not a disguised pattern violation.
+    expect(wrongTypeFor({ pattern: "^a+$" } as never)).toEqual({});
   });
 
   // Control: a declared type still wins, and a schema stating nothing keeps the old default.
@@ -2519,17 +2530,22 @@ describe("a union body whose branch carries the required (F43)", () => {
     expect(r.text).not.toContain("missing required 'image'");
   });
 
-  test("control: an unsatisfiable field inside a union body still drops on its own blame", async () => {
+  test("control: an unsatisfiable field inside a union body drops on its own blame", async () => {
     // F33's honesty has to survive the new read. `a` is `{type: string, enum: [true, false]}` — no
-    // value satisfies it — but every case that SURVIVES is sound on its own terms (missing 'a',
-    // wrong type for 'a', a bad enum member), so nothing is dropped and nothing is blamed. The
-    // point of this test is what it refuses to assert: no notice, because no case went.
+    // value satisfies it. The union read is not what drops anything: the notice blames the enum.
+    // And the drop is correct — a case that CARRIES `a` (wrong type, bad enum member) is rejected
+    // for "no value satisfies a" whatever the mutation did, so it passes on the base body's defect
+    // rather than the one it names. The case that REMOVES `a` survives: with the field absent the
+    // contradiction is absent, and the only defect left is the missing requirement it asserts.
     const r = await emit("dead-enum-in-union", {
       oneOf: [{ required: ["a"] }, { required: ["b"] }],
       properties: { a: { type: "string", enum: [true, false] }, b: { type: "string" } },
     });
-    expect(r.notes.join("\n")).not.toContain("case(s) skipped");
-    expect(r.text).toContain("invalid enum for 'a'");
+    const joined = r.notes.join("\n");
+    expect(joined).toContain("the SPEC contradicts itself: 'a' — enum");
+    expect(joined).not.toContain("anyOf");
+    expect(r.text).toContain("missing required 'a'");
+    expect(r.text).not.toContain("invalid enum for 'a'");
     expect(r.result.totalCases).toBeGreaterThan(0);
   });
 });

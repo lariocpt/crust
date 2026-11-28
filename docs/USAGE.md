@@ -1437,9 +1437,20 @@ conform. Violations fail the fixture with per-field pointer paths
 (`output.data/items/0/name — minLength: …`). The schema must be inline —
 the runner has no spec to resolve references against, so a `$ref` anywhere
 in it is a loud error (the fixture reports `output.schema contains a
-$ref … — inline it`) rather than a silently-passing no-op. The validator is
-the mock-server's subset walker, so its never-invent-a-violation rule
-applies (unknown keywords pass). Functions inside a schema object are never
+$ref … — inline it`) rather than a silently-passing no-op.
+Reference checks descend into schema maps even when a property or definition
+is named `default`, `enum`, `const`, `example`, or `examples`. Those names
+are not data at a map-entry position. Actual values of those keywords in a
+schema remain data: a literal object containing a `$ref` key there is allowed.
+The validator is the mock-server's subset walker, so its never-invent-a-violation rule
+applies (unknown keywords pass). It runs in **strict** mode (new in 0.4.2), unlike the mock
+server: a literal `additionalProperties: false` in the schema is enforced,
+because this is an assertion you wrote, not live traffic being judged — a
+server that returns a field your schema forbids fails the fixture with
+`output.data/<key> — additionalProperties: unexpected property '<key>'`. A
+schema that does not declare the keyword is unaffected, and composed nodes
+(`allOf`/`oneOf`/`anyOf`) stay exempt, exactly as under the mock's `--strict`.
+Functions inside a schema object are never
 invoked. `gen-fixtures` emits this key automatically (pre-dereferenced) for
 any case whose expected status documents a response schema.
 
@@ -1492,6 +1503,12 @@ test-fixture --target 'fixtures/**/*.crust.ts' --out report.xml   # JUnit for CI
 > created — a "global cleanup" sweep (`DELETE FROM users`, truncate-all)
 > shreds every other fixture still running. If you need a full reset, do it
 > once outside the runner, not per-fixture.
+
+**Teardown failures fail the run.** Cleanup is awaited and included in the
+fixture duration. If it throws, an otherwise passing fixture becomes an
+error; existing assertion failures or setup/request errors are preserved
+alongside `teardown threw: …`. Text, JSON, Markdown, and JUnit reports carry
+the cleanup error, the CLI exits 1, and `--bail` stops scheduling new work.
 
 **Module resolution:** files the runner loads — `.crust.ts` fixtures, `.setup.ts` modules, npm packages auto-dispatched as stages — resolve bare specifiers the ordinary Bun way, walking `node_modules` from the file's own location, **including under the AOT-compiled binary** — for packages that carry **no dependencies of their own**. Measured 2026-10-30 with the release binary: a `x.setup.ts` doing `import shout from "npkg"` set `$GREETING` and the `test-pipes` line passed. Re-measured 2026-11-12 with a package that has its own dependencies (`mongodb`, importing `bson`): under the compiled binary that import fails with `Cannot find package '…'` even when the package sits in `node_modules` beside the file — the binary's resolver cannot follow the dependency graph of an external package. So under the binary: dep-free npm imports work, packages with dependencies do not (they work when running crust from source). What the binary does not carry is a dependency set of its own — crust ships zero runtime dependencies — so anything a fixture imports has to be installed where the fixture lives. Bun builtins (`Bun.SQL`, `Bun.file`) are still the lighter choice for a helper (no install, no version drift between fixture and runner), and under the binary they are often the only choice.
 
@@ -1705,7 +1722,17 @@ Derived cases:
   applied to a **schema-valid base body** (with format-aware synthesis:
   emails, uuids, dates, and values built from the field's own `pattern` — classes, quantifiers and
   groups, each verified against the regex before it is used), so exactly one thing
-  is wrong per case.
+  is wrong per case — and each mutated body is **proven** (new in 0.4.2) to violate the schema at
+  the field the case names before the case is emitted. A mutation proven still-valid
+  is dropped with a notice, because emitting it would assert `400` against a server
+  that correctly answers `200`: an enum containing the sentinel crust injects, a
+  `pattern: "^.*$"` that matches the pattern sentinel, and `minimum: 1e20` where
+  `minimum - 1` rounds straight back to the minimum all used to ship as false tests.
+  A rejection that is proven only at the object — a union branch that demands the
+  field — keeps its status assertion and gives up the location it cannot earn.
+  On an **item path** (`PUT /items/{id}`) the matrix needs a resource that exists;
+  without `resolveKnownPath` in the setup module these cases are skipped with a
+  notice rather than pointed at a random uuid a correct server answers `404`.
 - **400 boundary violations**, for ALL body properties — required *and*
   optional — in fixed per-field order: too short (`minLength`), too long
   (`maxLength`; skipped above 4096 to keep checked-in files reviewable),
@@ -1713,20 +1740,22 @@ Derived cases:
 - The `enum` member picked satisfies the schema's own declared `type` — real specs write `{type: "string", enum: [true, false]}` — and `required`/`properties` are read **through `allOf`**, so an object composed from branches gets every field the composition demands rather than an empty body.
 - An object whose properties live in a **union branch** is built from that branch. A node declaring `type: "object"` alongside a `oneOf`/`anyOf` used to produce `{}`: the explicit type sent it straight to the object case, which composes through `allOf` only. The same node WITHOUT a type worked, which is what kept it hidden. The first branch is taken, since a union offers alternatives rather than an intersection.
 - **The mirror shape too**: the node declares the `properties` once and each branch says only *which of them* this form needs — urlbox.io's `RenderRequest` is `{oneOf: [{required: ["url"]}, {required: ["html"]}], properties: {url, html, format, …}}`, which is how a two-form POST gets written. A branch was read only when the node owned nothing at all, so this one composed to `{}`: the base body satisfied no branch, crust's own validator answered `anyOf`, and every negative case of the operation went behind `crust's own value for the body (anyOf) does not satisfy the schema` — urlbox generated **no cases from its whole spec**. Now a branch is read when the composed view **cannot satisfy one**: a branch requiring nothing is satisfied by anything, and a branch the node's own `required` already satisfies is *not* read, because on a `oneOf` adding the other alternative makes the body match two branches and breaks the very thing being composed for. 93 operations across 23 of the corpus's specs write this shape: the mentions blaming crust's body went **23 → 0**, the operations reporting *no negative cases at all* went **21 → 0**, cases rose **5,888 → 5,996** and **no spec lost one**. The control is the 31 union-body specs that do not write it — 29 byte-identical in both cases and notices (whatsapp's `audio`/`image` body composes exactly as before), the other two gained cases and lost a notice, their union being this shape one level deeper than the scan reaches.
-- `exclusiveMinimum`/`exclusiveMaximum` are honoured in **both spellings** — 3.0's boolean modifier on `minimum`/`maximum`, and 3.1's number — so a `{maximum: 1, exclusiveMaximum: true}` field is never answered with `1`, the one value it excludes. Where a `format` and a `pattern` are both declared, the format constant is used only if it satisfies the pattern: `format: email` beside a pattern whose TLD is 2-5 letters rejects `gen@crust.fixture`, which has seven. And the field-name heuristics yield to an explicit `format` as well as to a `pattern` and a length bound — a field called `first_email_date` declaring `format: date-time` was getting the email constant.
+- `exclusiveMinimum`/`exclusiveMaximum` are honoured in **both spellings** — 3.0's boolean modifier on `minimum`/`maximum`, and 3.1's number — so a `{maximum: 1, exclusiveMaximum: true}` field is never answered with `1`, the one value it excludes. Numeric exclusive bounds intersect with inclusive bounds rather than replacing them: `{minimum: 10, exclusiveMinimum: 0}` still requires at least 10. Open integer endpoints are rounded inward before checking whether the window admits an integer. `multipleOf` tolerates decimal division noise (`0.3 / 0.1`) with a bounded tolerance; a large fractional quotient such as `1000000000.25 / 1` is never treated as integral. Where a `format` and a `pattern` are both declared, the format constant is used only if it satisfies the pattern: `format: email` beside a pattern whose TLD is 2-5 letters rejects `gen@crust.fixture`, which has seven. And the field-name heuristics yield to an explicit `format` as well as to a `pattern` and a length bound — a field called `first_email_date` declaring `format: date-time` was getting the email constant.
 - Formats the generator has no constant of its own for — `uri`/`url` above all — fall through to the same defaults the mock uses. Its four fixed constants (email, uuid, date, date-time) keep their values so existing matrices do not churn. And the field-name heuristics yield to anything the schema actually states — an explicit `pattern`, and equally a length bound: `client_id: {type: "string", maxLength: 20}` never mentions uuid, and the 36-character one does not fit. An explicit `format` is different: there the schema asked for the value itself, and a `maxLength` too small for it is the spec contradicting itself, which crust leaves visible. An explicit `pattern` also **outranks the field-name heuristics**: a field called `job_id` carrying `^job-[0-9]{3}$` gets a value matching the pattern, not the stable uuid, because a guess from a name must not beat what the schema says.
 - The **valid base body honours the schema's own bounds** — `maxLength`, `minLength`, `minItems`/`maxItems`, `minimum`/`maximum`. Every 400-case perturbs that body, so where it was already invalid the expected 400 could arrive for the wrong reason: a false pass, which is the one thing crust must never produce. The fixed format values (`gen@crust.fixture`, the stable uuid) are deliberately unchanged, since checked-in matrices are CI-diffed against a regeneration.
 - A **wrong-type case is only generated when the value is actually rejected**. A field whose schema constrains nothing — `{properties: {…}}` with no `type`, a description-only node — has no wrong value, and such a case would assert `-> 400` for a request a correct API answers 200: a test that fails against a correct implementation. 6,101 were derivable from the APIs-guru corpus. crust owns the validator, so it asks it rather than guessing.
 - A missing `type` is **inferred from the keywords present**, shared with the mock — so `{minLength: 3}` with no type now yields the boundary case it silently skipped before.
 - A **body crust cannot fill carries no cases it cannot attribute**. The pattern sampler returns its placeholder for a pattern it cannot read, which is *knowingly* wrong for the mock and was quietly wrong here: the placeholder landed in the base body, so a case about `name` shipped a body invalid in `subnetId`. The 400 then names `subnetId`, and the case fails a correct implementation or passes for a reason unrelated to its own name. 1,799 of the 164,473 request-body fields in the APIs-guru corpus were in that state, and the bulk of them were readable all along — crust was refusing groups (see the mock's `string` rule below). Reading groups took the 39 specs that were still losing cases from 186 declined fields down to 11, with nothing that used to build falling back; what remains is a lookahead, `\A`/`\Z` anchors, and a JavaScript regex literal written into `pattern`. So the base body is checked with crust's own validator and every case whose 400 could name a field other than the one it asserts is dropped — keeping the cases about the invalid field itself, and the 401/403/404 cases, whose gate answers before the body is read. The drop is printed (`gen-fixtures: 2 case(s) skipped for POST /things — crust's own value for 'subnetId' (pattern) does not satisfy the schema, so a 400 from that body would name the wrong field`): a smaller suite is a fact to report, not a silence to ship.
-- **A drop notice says whose fault it is.** Some specs allow no value at all: `VMDiskType: {type: integer, format: int32, enum: ["0 (StandardHDD)", "1 (StandardSSD)", "2 (PremiumSSD)"]}` (visualstudio.com/v1 — the enum members are YAML strings beside an int32), or `{type: string, enum: [true, false]}` (apptigent). No generator fills those fields, so blaming crust's value for one sends the reader to the wrong repo. The notice asks the validator the only question that settles it — does *any* member of that enum satisfy the node holding it — and when none does it names the contradiction and where it sits: `gen-fixtures: 3 case(s) skipped for PATCH /api/v1/tenant/{tenantId}/Pool/{poolName} — the SPEC contradicts itself: 'vmSpecs' — /diskType: enum ["0 (StandardHDD)", "1 (StandardSSD)", "2 (PremiumSSD)"] fails type, so a 400 from that body would name the wrong field` (that one is real, from visualstudio.com/v1; dracoon.team puts an `enum` of strings on a `type: array` node, and apptigent writes `{type: string, enum: [true, false]}`). Fields where crust's own value is what breaks keep the old wording, since that is the half you can file against crust, and a body with both says both. Only keywords that MUST hold are followed, so a contradiction in an optional field is not reported (the base body omits optional fields) and a union is the spec's only when *every* branch is unsatisfiable. Across the 39 APIs-guru specs that emit these notices the mentions naming crust's value went 68, then 24 once a body declared across `allOf` branches was read as one body (above), then 7. What those 7 name: a lookahead, `\A`/`\Z` anchors, an enum, and two `pattern`s written as JavaScript regex literals (`/^[a-z0-9._]+$/`), which cannot match as written — the leading `/` is a literal, so the `^` behind it asserts a start the string has already left. The summary ends with `note: N operation(s) left with no negative cases` (32 of them across those specs) — "40 cases dropped" and "this operation is uncovered" are different facts, and per-operation notices are the first thing a harness greps away.
+- **A drop notice says whose fault it is.** Some specs allow no value at all: `VMDiskType: {type: integer, format: int32, enum: ["0 (StandardHDD)", "1 (StandardSSD)", "2 (PremiumSSD)"]}` (visualstudio.com/v1 — the enum members are YAML strings beside an int32), or `{type: string, enum: [true, false]}` (apptigent). No generator fills those fields, so blaming crust's value for one sends the reader to the wrong repo. The notice asks the validator the only question that settles it — does *any* member of that enum satisfy the node holding it — and when none does it names the contradiction and where it sits. The same reading (new in 0.4.2) covers the non-enum spellings of "no value fits": an empty numeric window (`{integer, minimum: 1.5, maximum: 1.9}` admits no integer), `minLength` above `maxLength`, `minItems` above `maxItems`, and `uniqueItems` demanding more distinct members than `items` can supply (`minItems: 2` over `items: {enum: ["only"]}` asks for two distinct values from a one-value set). Each is named as the spec's contradiction rather than crust's, and the distinct-value count is an **upper bound** — a member the proof layer cannot judge stays counted — so an unsatisfiable verdict is never a guess. A case that *removes* the unsatisfiable field survives: with the field absent the contradiction is absent, so its only defect is the missing requirement it asserts. `gen-fixtures: 3 case(s) skipped for PATCH /api/v1/tenant/{tenantId}/Pool/{poolName} — the SPEC contradicts itself: 'vmSpecs' — /diskType: enum ["0 (StandardHDD)", "1 (StandardSSD)", "2 (PremiumSSD)"] fails type, so a 400 from that body would name the wrong field` (that one is real, from visualstudio.com/v1; dracoon.team puts an `enum` of strings on a `type: array` node, and apptigent writes `{type: string, enum: [true, false]}`). Fields where crust's own value is what breaks keep the old wording, since that is the half you can file against crust, and a body with both says both. Only keywords that MUST hold are followed, so a contradiction in an optional field is not reported (the base body omits optional fields) and a union is the spec's only when *every* branch is unsatisfiable. Across the 39 APIs-guru specs that emit these notices the mentions naming crust's value went 68, then 24 once a body declared across `allOf` branches was read as one body (above), then 7. What those 7 name: a lookahead, `\A`/`\Z` anchors, an enum, and two `pattern`s written as JavaScript regex literals (`/^[a-z0-9._]+$/`), which cannot match as written — the leading `/` is a literal, so the `^` behind it asserts a start the string has already left. The summary ends with `note: N operation(s) left with no negative cases` (32 of them across those specs) — "40 cases dropped" and "this operation is uncovered" are different facts, and per-operation notices are the first thing a harness greps away.
 - Every `$ref` is inlined once and **shared**, and inlining stops after 200,000 nodes. azure's `network-applicationGateway` is a DAG of a few schemas referenced from many places: copying at each occurrence turned a few-MB spec into a 2.03 GB structure — 17s where it survived and OUT OF MEMORY on five of nine versions, so `gen-fixtures` there did not run slowly, it did not run. Past the budget a `$ref` inlines as `{}`, exactly as a cyclic one does, and gen-fixtures says so on stderr: fewer generated cases, none of them wrong.
 - A keyword written **beside a `$ref`** is read by the rule the mock reads it with, not by "everything wins". Narrowing ones apply — `enum`, `const`, `format`, `pattern`, the bounds, `example`, `examples`, `default`: that is how a spec restricts one use of a shared type (ideal-postcodes narrows a referenced string with a `pattern`). Structural ones do not — `type`, `properties`, `items`, `required`, `additionalProperties`, `allOf`/`oneOf`/`anyOf`, `nullable`, `discriminator` — for the same reason the mock ignores them (see its `oneOf`/`$ref` rule: sibling keywords were illegal beside `$ref` before 3.1, so Swagger-2 conversions are full of leftovers), and because a generated case asserts against **crust's own validator**, which resolves a `$ref` and validates the resolved node alone. Both directions follow from that. britbox writes `{$ref: ItvDeleteAccountRequest, type: string}` in an openapi 3.0.0 document, and that used to inline as a string carrying the target's `required` and `properties` — a node no value satisfies — so crust's own base body failed crust's own validator and **all four of that spec's JSON-body operations were dropped** behind `crust's own value for the body (type)`; they now generate 16 cases, `missing required 'profileToken'` among them. digitalocean writes `{$ref: …, required: [droplet_ids]}`, and crust no longer fills that field in a body — because the validator would not 400 without it either, so a case built from the sibling would assert a 400 that crust's mock answers 200. Measured across 4,138 specs: 2,274 put a keyword beside a `$ref`, 180 of them a structural one (2,003 sites — azure 104 specs, twilio 32; `type` 157, `nullable` 43), of which 118 are Swagger 2.0, 56 openapi 3.0.x and only 6 are 3.1. Dialect is deliberately not part of the rule: 3.1 legalises siblings without making a conflicting `type` any less ambiguous, and honouring them there would put the two halves of crust back in disagreement over exactly those 6 specs. Annotations (`description`, `title`) go the same way as the structural siblings, so a generated `output.schema` can carry one less description than it used to; nothing ever validated on it.
 - A **Swagger 2.0 `in: body` parameter is the operation's request body.** 2.0 has no `requestBody` — the body is a parameter — and the conversion dropped it, so a Swagger 2.0 spec could get no 400 matrix at all, however carefully it documented its 400s: `aiception.com` emitted 5 cases and `adafruit.com` 68, none of them about a body. Measured over the corpus with references resolved, **1,528 specs and 10,870 operations** declare their bodies this way — 10,083 on the operation, 775 through `$ref: #/parameters/…`, 12 on the path item. (My first two scans said 1,443 and 10,083: they matched `in == "body"` and so never saw a body arriving by `$ref`. The control caught it — a "body-less" control spec whose output tree changed.) The conversion now moves the parameter where both halves read it, so cases went **1,818 → 3,711** across that population, qualifying collections went **0 → 68** (a 2.0 spec could never produce a CRUD flow before), 38 specs moved off absolute zero, and **no spec lost a case**. The control is 120 Swagger-2 specs with no body parameter: **0 of 120** differ in their generated tree, hashed rather than counted. `consumes` picks the media type, operation-level first, JSON preferred, and a non-JSON one is carried as declared — crust does not validate form bodies, so a case built from one would assert a 400 its own mock never returns. One consequence to expect: the 401/403/404 cases of a 2.0 operation now send the body the spec declares instead of nothing, since a route may validate the body before it checks who is calling — on a method that can carry one, `GET` and `HEAD` excepted (see the rule below).
   below minimum / above maximum (`maximum: Number.MAX_SAFE_INTEGER` is
   treated as an "unbounded" sentinel and skipped), and pattern violation
-  (deduped when the required-field wrong-type case already sends an
-  unparseable string). Nullable zod-style `anyOf: [X, {type: "null"}]`
+  (separate from wrong type, even for required fields). Pattern-constrained
+  strings and date/date-time strings use an object as the wrong-type value,
+  never a string that merely violates the pattern or format. A permissive
+  pattern drops only its still-valid pattern mutation. Nullable zod-style `anyOf: [X, {type: "null"}]`
   wrappers are unwrapped, and OpenAPI 3.1's `type: ["string","null"]` union
   form is read the same way, so nullable fields get their boundary cases too
   under either spelling — and the wrong-type case for such a field is a value
@@ -1785,6 +1814,17 @@ generated setup module adapts the standard setup contract: it calls
 `resolvePath` per flow to seed `$GEN_URL_<T>`. SQL assertions are not
 derivable from a spec, so none are emitted — add DB-level checks in a
 hand-written `.pipes` file.
+
+Read assertions use the **GET operation's own response shape**, independently
+of the POST's capture path. A bare create response and a wrapped read response
+(or the reverse) can therefore participate in the same flow. When GET documents
+no id path or no path for the changed field, that read is explicitly labeled
+`status-only`, with a comment stating that identity or persistence is not
+asserted; a POST response path is never borrowed as evidence about GET.
+After an update changes a field, a documented read-back path is compared using
+**structural JSON equality**: scalar types and array order matter, nested
+objects and nulls are preserved, and object key order does not matter.
+String coercion cannot turn a wrong object, array, or scalar type into a pass.
 
 Some creates need values a spec can't express — business date rules,
 foreign keys to live rows. The setup module may export
@@ -1924,6 +1964,19 @@ every app-specific detail and must export:
   with `{param}` placeholders, substitutes scope params from ctx,
   substitutes any other `{param}` with a random uuid, and prefixes the API
   base URL; returns the absolute request URL.
+- `resolveKnownPath?(ctx, template: string): string` — new in 0.4.2, optional, and the only
+  way to get a validation matrix on an **item path** (`PUT /items/{id}`). A
+  random uuid names no resource, and a server that resolves the resource
+  before reading the body answers `404` — so a case that sends an invalid body
+  to `{itemId}` would fail against a correct implementation, for a reason no
+  spec states. crust cannot know which order a server uses, and it emits the
+  `-> 404` case for that same random id, so it will not also assert `400`
+  there: those cases are skipped with a notice naming them, and the manifest
+  records each under `unsupported`. Export `resolveKnownPath` to get them
+  back — same job as `resolvePath`, but every non-scope `{param}` is filled
+  with the id of a resource that **exists**, one `shared()` created. Cases that
+  need it are emitted through this function and the manifest names the
+  requirement as `known-resource:<param>` instead of `resource:<param>`.
 - `scopeParam: string | null` — the template param name that marks a path as
   scope-gated (e.g. `"buildingId"`). An op is scope-gated when its path's
   FIRST template param has this name. `null` disables 403 derivation
@@ -1934,7 +1987,8 @@ every app-specific detail and must export:
 - `JSON_HEADERS: Record<string, string>` — plain unauthenticated JSON
   headers, used for role `"none"`.
 - `expectations?: { validationStatus?: number; validationEnvelope?:
-  "crust" | "fastapi"; concealment?: "404" | "403"; operations?:
+  "crust" | "fastapi"; concealment?: "404" | "403"; serverErrorStatus?:
+  boolean; validationErrorTypes?: Record<string, string>; operations?:
   Record<string, { validationStatus?: number; validationEnvelope?: "crust" |
   "fastapi"; errorStatus?: number }> }` — new in 0.3.6: reviewed expectation
   overrides for backends whose contract disagrees with the 400 convention, so
@@ -1949,11 +2003,42 @@ every app-specific detail and must export:
   contradicts it — a documented `400` beats a configured `422` even with an
   envelope set — and configured cases carry `configured:<setup-module>`
   provenance in the manifest. Validated hard at generation time — unknown
-  keys, non-integer or out-of-range statuses (< 400 or ≥ 600), an envelope
+  keys, non-integer or out-of-range statuses, an envelope
   value that is neither `crust` nor `fastapi`, or operation keys the spec
   does not have refuse the generation with exit 2 and write nothing (a
   typo'd key would silently configure nothing, so it is an error, not a
   warning).
+
+  Configured statuses are **4xx** (`400–499`, new in 0.4.2). A fixture cannot hold a server
+  to "this request makes it fail": a `500` expectation plus an error-shaped
+  body turns a crash into a passing negative test. `serverErrorStatus: true`
+  is the explicit opt-in for a gateway that genuinely surfaces validation as a
+  `5xx`; it widens the bound to `400–599` for the global and per-operation
+  statuses and prints a notice on every generation that uses it, because a
+  case that passes on a crash must never be quiet about it.
+
+  `validationErrorTypes` (new in 0.4.2) upgrades a `fastapi` matcher from "an error named this
+  field" to "**this rule** failed". It maps a crust constraint name — `required`,
+  `type`, `enum`, `pattern`, `minLength`, `maxLength`, `minimum`, `maximum`,
+  `additionalProperties` — to the error code this API puts in the entry's `type`
+  for it; pydantic v2 answers `minLength` with `string_too_short`, `required`
+  with `missing`. A mapped code is asserted only when the effective envelope is
+  `fastapi` and the full mutated body's proof reports that exact rule at that
+  exact field path. A violation of another rule or a nested child does not earn
+  the mapped code; the case stays field-attributed instead.
+  Where the constraint is proven and mapped the matcher asserts that code, so
+  an unrelated error at the right location (`type: "unrelated_failure"`) fails
+  the case instead of satisfying it. An unmapped constraint stays
+  field-attributed: crust will not guess a server's error vocabulary and call
+  the guess a proof. The crust envelope carries no machine-readable rule code at
+  all, so it stays field-attributed by construction.
+
+  Every validation case records how strong its matcher actually is as
+  `validationOracle.attribution`: `"status"` (rejected, location not claimed),
+  `"field"` (an error named this field) or `"constraint"` (the named rule
+  failed, per a configured code). `validationOracle.constraint` names the
+  specific keyword — finer than the mutation `kind`, which collapses
+  `minLength`/`maxLength`/`minimum`/`maximum` into `bound`.
 
   `validationEnvelope` (new in 0.3.8) sets the **shape** of the expected
   validation response — never its status, and never inferred from one.
@@ -1964,7 +2049,9 @@ every app-specific detail and must export:
   (`["body", "<field>"]`, derived from the mutated schema field, never
   parsed from a case name; an unexpected-property case targets the synthetic
   field `crustUnexpectedProp`) with nonempty string `msg` and `type`. No
-  message text is ever matched — the location is the contract. A wrong-field
+  message text is ever matched — the location is the contract, and the rule
+  behind it only becomes part of that contract when `validationErrorTypes`
+  names the code this API emits for it. A wrong-field
   error, a query/path location, a malformed entry or a generic body fails
   under **either** envelope, and a case whose mutation cannot be attributed
   to a body location is dropped and disclosed in the manifest's `unsupported`
@@ -1973,10 +2060,12 @@ every app-specific detail and must export:
   Envelope selection does not resolve auth or resource-validity attribution,
   dual-status attribution, mutation safety or approvals: the manifest still
   records generation only. The manifest records the choice as
-  `validationOracle: { envelope, source, target }` on the entries it applies
+  `validationOracle: { envelope, source, target, constraint, attribution }` on
+  the entries it applies
   to — `source` is `"default"` for the omitted convention and
   `configured:<setup-module>` for an explicit choice, `target` the body
-  location with its mutation kind — while `expectationSource` keeps its
+  location with its mutation kind, `attribution` how strong the emitted
+  matcher is — while `expectationSource` keeps its
   status-provenance semantics.
 
   ```ts
@@ -1984,6 +2073,8 @@ every app-specific detail and must export:
     validationStatus: 422, // this backend answers 422, never 400
     validationEnvelope: "fastapi", // …and 422 bodies are FastAPI-shaped
     concealment: "404", // unknown ids and outsiders both get 404
+    // pydantic names the rule, so the case can assert the rule, not just the field
+    validationErrorTypes: { minLength: "string_too_short", required: "missing" },
     operations: {
       // this one really does 400, Crust-shaped — per-operation beats global
       "POST /api/reports": { validationStatus: 400, validationEnvelope: "crust" },
@@ -2267,6 +2358,11 @@ applies again to deeper standalone objects inside any branch. The
 object-form `additionalProperties: {schema}` stays unenforced. Violations
 use `rule: "additionalProperties"` with the offending key in the pointer.
 
+The implication is enforced by the shared server API, not just CLI parsing:
+`startServer({ …, strict: true })` validates requests even when `validate`
+is omitted or false. MCP's `crust_mock_server_start` has the same contract;
+its listing reports the effective `validate, strict` modes.
+
 It stays opt-in because most specs never ask for it: of the 4,138 APIs-guru specs,
 **157 (3.8%) declare `additionalProperties: false` somewhere**. Swept under `--strict`,
 those 157 produce 141 `additionalProperties` violations across 16,321 responses — and
@@ -2375,6 +2471,15 @@ verify-web-links --site-map-url ./public/sitemap.xml --no-recurse
 ```
 
 Flags: `--site-map-url <url-or-path>` or `--base-url <url>` (one required, mutually exclusive); `--fixtures <glob>` (optional `.crust.ts` meta fixtures); `--concurrency N` (default `4`); `--timeout ms` (default `10000`); `--user-agent <s>`; `--max-depth N` (default `5`); `--no-recurse` / `--no-anchors` / `--no-redirect-warnings` to opt out of those checks; `--include-external` to status-check off-origin links (never recursed); `--exclude <substring>` (repeatable) to skip URLs containing the substring — for subtrees that redirect by design, like a WooCommerce `/checkout/` or `/wp-admin/`; `--max-pages N` to stop after N URLs (the report counts what was left unchecked — a safety valve for crawls that explode into e.g. WooCommerce filter URLs; default `0` = unlimited); `--no-progress` to silence the 5-second progress heartbeat on stderr; `--json` for a machine-readable report on stdout (a failing run also writes the fix-list to stderr, so a redirected artifact still leaves the log readable); `--strict` to fail (exit 1) unless **every discovered link was checked** — see below.
+
+**Discovery must finish before crawling.** Every child of a sitemap index
+and every `Sitemap:` declaration in robots.txt must load and contain URLs.
+An unreadable or empty declared sitemap fails with exit 2; a healthy sibling
+cannot hide it, even without `--strict`. Cycles and branches exceeding 32
+sitemap documents fail explicitly. Missing conventional roots (HTTP 404/410)
+can fall back from `/sitemap.xml` to `/sitemap-index.xml`; an existing root's
+failure or a broken child is not a probe miss. Discovery failures name the
+source on stderr and do not emit a partial JSON success report.
 
 By default, all four verification behaviors are on: 2xx status, recurse into internal pages, validate `#fragment` targets against element ids on the destination page, and flag any 3xx redirect chain (often a sign of stale internal links). Each `og:image` URL is fetched and its content-type asserted to start with `image/`.
 
@@ -2893,6 +2998,11 @@ still report the code of a job that ended minutes ago.
 **`jobs [-l] [%N]`** lists the table, `-l` adding the pid (and the code once
 there is one). An unknown option is refused — `crust: jobs: -x is not an option`
 — rather than quietly ignored, because here the flags *are* the listing.
+
+Liveness uses signal 0, with Linux `/proc` metadata used only to recognize
+zombies while awaiting their exit codes. Missing or unreadable `/proc`
+(including on macOS) and permission-denied probes do not falsely mark a
+live or stopped job `Failed` or disable further job-control signals.
 
 **`fg [spec]`** resumes a stopped job and waits for it; the job's own exit code
 becomes the line's, so `fg` on a job that exited 3 exits 3. **`bg [spec]`**

@@ -92,6 +92,11 @@ beforeAll(() => {
           `<sitemapindex><sitemap><loc>${base}/sitemap-good.xml</loc></sitemap></sitemapindex>`,
         );
       }
+      if (p === "/sitemap-index-incomplete.xml") {
+        return xml(
+          `<sitemapindex><sitemap><loc>${base}/sitemap-good.xml</loc></sitemap><sitemap><loc>${base}/missing-child.xml</loc></sitemap></sitemapindex>`,
+        );
+      }
 
       if (p === "/robots.txt") {
         return new Response(`User-agent: *\nSitemap: ${base}/sitemap-good.xml\n`, {
@@ -316,6 +321,16 @@ describe("verify-web-links CLI", () => {
     const r = await runCli(["--site-map-url", `${base}/sitemap-index.xml`]);
     expect(r.code).toBe(0);
   });
+
+  test.each([{ flags: [] }, { flags: ["--strict"] }, { flags: ["--json", "--strict"] }])(
+    "a partially unreadable index fails discovery (options: %j)",
+    async ({ flags }) => {
+      const r = await runCli(["--sitemap", `${base}/sitemap-index-incomplete.xml`, ...flags]);
+      expect(r.code).toBe(2);
+      expect(r.stderr).toContain(`${base}/missing-child.xml`);
+      expect(r.stdout).toBe("");
+    },
+  );
 
   test("og-image broken → exit 1", async () => {
     const r = await runCli(["--site-map-url", `${base}/sitemap-og-broken.xml`]);

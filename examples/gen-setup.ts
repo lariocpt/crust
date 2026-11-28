@@ -43,15 +43,22 @@ export const scopeRoots = ["/api/buildings"];
  * (0.3.8) sets the expected validation-response shape — "crust" keeps the
  * existing form, "fastapi" expects a `detail` array whose error `loc`
  * matches the case's mutated field; it never changes the expected status and
- * is never inferred from one. Bad config (unknown keys, statuses outside
- * 400–599, an envelope value that is neither, typo'd "METHOD /path" keys)
- * refuses generation with exit 2. See docs/USAGE.md §gen-fixtures for the
- * schema.
+ * is never inferred from one. Configured statuses are 4xx: a fixture cannot
+ * hold a server to "this request makes it fail", so a 5xx needs the explicit
+ * `serverErrorStatus: true` opt-in and prints a notice every generation.
+ * `validationErrorTypes` maps a crust constraint name to the error code this
+ * API emits for it, which is what upgrades a fastapi matcher from "an error
+ * named this field" to "this rule failed". Bad config (unknown keys, statuses
+ * outside 400–499, an envelope value that is neither, typo'd "METHOD /path"
+ * keys) refuses generation with exit 2. See docs/USAGE.md §gen-fixtures for
+ * the schema.
  */
 // export const expectations = {
 //   validationStatus: 422, // this backend answers 422, never 400
 //   validationEnvelope: "fastapi", // …and 422 bodies are FastAPI-shaped
 //   concealment: "404", // unknown ids and outsiders both get 404
+//   // pydantic v2 names the rule; asserting it is what proves the constraint
+//   validationErrorTypes: { minLength: "string_too_short", required: "missing" },
 //   operations: {
 //     // this one really does 400, Crust-shaped — per-operation beats global
 //     "POST /api/reports": { validationStatus: 400, validationEnvelope: "crust" },
@@ -62,6 +69,8 @@ interface Ctx {
   buildingId: string;
   memberToken: string;
   outsiderToken: string;
+  /** An item that EXISTS, for `resolveKnownPath` — see its comment. */
+  thingId: string;
 }
 
 // ONE scenario shared by every generated fixture. Module-scope promise
@@ -75,8 +84,9 @@ export function shared(): Promise<Ctx> {
     // authenticated but has NO membership in the shared scope.
     const memberToken = await login("member@gen.test");
     const buildingId = await createBuilding(memberToken);
+    const thingId = await createThing(memberToken, buildingId);
     const outsiderToken = await login("outsider@gen.test");
-    return { buildingId, memberToken, outsiderToken };
+    return { buildingId, memberToken, outsiderToken, thingId };
   })();
   return scenario;
 }
@@ -104,6 +114,23 @@ export function resolvePath(ctx: Ctx, template: string): string {
   return `${BASE}${path}`;
 }
 
+/**
+ * Optional, and the only way to get a validation matrix on an ITEM path.
+ *
+ * `resolvePath` fills `{thingId}` with a random uuid, which names no resource — so a
+ * `PUT /things/{thingId}` case that sends an invalid body reaches an unknown resource, and a
+ * server that resolves the resource before reading the body answers 404. crust sees that and
+ * skips those cases with a notice rather than emitting a test a correct implementation fails.
+ * Export this to get them back: same job as `resolvePath`, but every non-scope `{param}` is
+ * filled with an id that EXISTS — one `shared()` created.
+ */
+export function resolveKnownPath(ctx: Ctx, template: string): string {
+  const path = template
+    .replace("{buildingId}", ctx.buildingId)
+    .replace(/\{\w+\}/g, () => ctx.thingId);
+  return `${BASE}${path}`;
+}
+
 // ---- app-specific helpers (replace these with your API's flow) ----------
 
 async function login(email: string): Promise<string> {
@@ -124,6 +151,21 @@ async function createBuilding(token: string): Promise<string> {
     body: JSON.stringify({ name: "gen-fixtures scope" }),
   });
   if (!res.ok) throw new Error(`createBuilding failed: ${res.status}`);
+  const body = (await res.json()) as { id: string };
+  return body.id;
+}
+
+/**
+ * One item that exists for the whole run, so `resolveKnownPath` can point an
+ * item-path validation case at a resource the server will actually resolve.
+ */
+async function createThing(token: string, buildingId: string): Promise<string> {
+  const res = await fetch(`${BASE}/api/buildings/${buildingId}/things`, {
+    method: "POST",
+    headers: { ...JSON_HEADERS, authorization: `Bearer ${token}` },
+    body: JSON.stringify({ name: "gen-fixtures thing" }),
+  });
+  if (!res.ok) throw new Error(`createThing failed: ${res.status}`);
   const body = (await res.json()) as { id: string };
   return body.id;
 }

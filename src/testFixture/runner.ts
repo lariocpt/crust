@@ -178,8 +178,14 @@ async function runOne(
   const name = iter != null ? `${baseName} #${iter}` : baseName;
   const start = performance.now();
   let setupCtx: unknown;
-  let teardownErr: Error | null = null;
-  let responseStatus: number | undefined;
+  const result: FixtureResult = {
+    file,
+    name,
+    status: "error",
+    durationMs: 0,
+    failures: [],
+  };
+  if (iter != null) result.iter = iter;
   try {
     if (fx.setup) setupCtx = await fx.setup();
     // input/output may be functions of the setup context — the only way a
@@ -212,10 +218,18 @@ async function runOne(
     const input = (await resolveDeep(rawInput, setupCtx, true)) as Record<string, unknown>;
     const expected = (await resolveDeep(rawOutput, setupCtx, false)) as Record<string, unknown>;
     const actual = await performRequest(input, timeoutMs);
-    responseStatus = actual.status;
+    result.responseStatus = actual.status;
     const failures = await diffAsync("output", expected, actual, setupCtx);
     if (responseSchema !== undefined) {
-      for (const v of validateSchema(actual.data, responseSchema, { paths: {} })) {
+      // `strict` here, where the mock server deliberately does not use it. The mock must not 422
+      // live traffic because a server added a field, but `output.schema` is an assertion the user
+      // wrote: a schema that says `additionalProperties: false` states that extra fields are an
+      // error, and silently not checking it is a false pass — the one thing this project forbids.
+      // Strict mode still never invents a violation (composed nodes stay exempt), so this only
+      // affects schemas that literally declare the keyword.
+      for (const v of validateSchema(actual.data, responseSchema, { paths: {} }, "", new Set(), {
+        strict: true,
+      })) {
         failures.push({
           path: `output.data${v.pointer}`,
           expected: `${v.rule}: ${v.message}`,
@@ -223,41 +237,30 @@ async function runOne(
         });
       }
     }
-    const r: FixtureResult = {
-      file,
-      name,
-      status: failures.length ? "fail" : "pass",
-      durationMs: performance.now() - start,
-      failures,
-      responseStatus,
-    };
-    if (iter != null) r.iter = iter;
-    return r;
+    result.status = failures.length ? "fail" : "pass";
+    result.failures = failures;
   } catch (err) {
-    const e = err as Error;
-    const r: FixtureResult = {
-      file,
-      name,
-      status: "error",
-      durationMs: performance.now() - start,
-      failures: [],
-      error: { message: e.message, stack: e.stack },
-    };
-    if (responseStatus != null) r.responseStatus = responseStatus;
-    if (iter != null) r.iter = iter;
-    return r;
+    const e = err instanceof Error ? err : new Error(String(err));
+    result.error = { message: e.message, stack: e.stack };
   } finally {
     if (fx.teardown) {
       try {
         await fx.teardown(setupCtx);
       } catch (err) {
-        teardownErr = err as Error;
+        const e = err instanceof Error ? err : new Error(String(err));
+        const message = `teardown threw: ${e.message}`;
+        // Keep assertion failures and the primary error intact. Cleanup is a
+        // second failure, never a reason to overwrite the first or report PASS.
+        if (result.status === "pass") result.status = "error";
+        result.error = {
+          message: result.error ? `${result.error.message}; ${message}` : message,
+          stack: [result.error?.stack, message, e.stack].filter(Boolean).join("\n"),
+        };
       }
     }
-    if (teardownErr) {
-      process.stderr.write(`test-fixture: teardown of ${name} threw: ${teardownErr.message}\n`);
-    }
+    result.durationMs = performance.now() - start;
   }
+  return result;
 }
 
 // callUnary distinguishes the two sides: in INPUT, a 1-arg function is a
@@ -329,21 +332,32 @@ const KNOWN_OUTPUT_KEYS = ["data", "headers", "schema", "status"];
 // defaults) are skipped, so a payload that happens to contain a "$ref" field
 // is never flagged.
 const DATA_BEARING_KEYS = new Set(["enum", "const", "example", "examples", "default"]);
+// These values are maps of arbitrary names to schemas, not schema nodes.
+// A property named `default` is a schema; a property named `$ref` is not a ref.
+const SCHEMA_MAP_KEYS = new Set([
+  "properties",
+  "patternProperties",
+  "$defs",
+  "definitions",
+  "dependentSchemas",
+  "dependencies",
+]);
 
-function assertNoRefs(schema: unknown, pointer = ""): void {
+function assertNoRefs(schema: unknown, pointer = "", schemaMap = false): void {
   if (schema === null || typeof schema !== "object") return;
   if (Array.isArray(schema)) {
     for (let i = 0; i < schema.length; i++) assertNoRefs(schema[i], `${pointer}/${i}`);
     return;
   }
   for (const [k, v] of Object.entries(schema as Record<string, unknown>)) {
-    if (k === "$ref") {
+    if (!schemaMap && k === "$ref") {
       throw new Error(
         `output.schema contains a $ref (${pointer || "/"}) — inline it; fixture schemas resolve against no spec, so $refs would silently pass`,
       );
     }
-    if (DATA_BEARING_KEYS.has(k)) continue;
-    assertNoRefs(v, `${pointer}/${k}`);
+    if (!schemaMap && DATA_BEARING_KEYS.has(k)) continue;
+    const token = k.replace(/~/g, "~0").replace(/\//g, "~1");
+    assertNoRefs(v, `${pointer}/${token}`, !schemaMap && SCHEMA_MAP_KEYS.has(k));
   }
 }
 

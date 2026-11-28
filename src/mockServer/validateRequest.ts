@@ -14,6 +14,7 @@
 import type { OpenApiSpec, ParameterObject, RequestBodyObject, ResponseObject } from "./loadSpec";
 import { resolveRef } from "./mockResponse";
 import type { Route } from "./router";
+import { numericBounds } from "./schemaNumbers";
 import { normaliseType } from "./schemaTypes";
 
 export interface SchemaViolation {
@@ -283,15 +284,8 @@ export function validateSchema(
 
   if (typeof value === "number") {
     // exclusiveMinimum/Maximum: 3.0 boolean form modifies minimum/maximum;
-    // 3.1 numeric form is a bound of its own.
-    let min = typeof s.minimum === "number" ? s.minimum : null;
-    let minExclusive = false;
-    if (typeof s.exclusiveMinimum === "number") {
-      min = s.exclusiveMinimum;
-      minExclusive = true;
-    } else if (s.exclusiveMinimum === true && min !== null) {
-      minExclusive = true;
-    }
+    // 3.1 numeric form intersects with any inclusive bound.
+    const { min, max, minOpen: minExclusive, maxOpen: maxExclusive } = numericBounds(s);
     if (min !== null && (minExclusive ? value <= min : value < min)) {
       out.push({
         pointer,
@@ -300,14 +294,6 @@ export function validateSchema(
         expected: min,
         received: value,
       });
-    }
-    let max = typeof s.maximum === "number" ? s.maximum : null;
-    let maxExclusive = false;
-    if (typeof s.exclusiveMaximum === "number") {
-      max = s.exclusiveMaximum;
-      maxExclusive = true;
-    } else if (s.exclusiveMaximum === true && max !== null) {
-      maxExclusive = true;
     }
     if (max !== null && (maxExclusive ? value >= max : value > max)) {
       out.push({

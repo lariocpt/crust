@@ -314,25 +314,27 @@ export function resetJobs(): void {
 }
 
 /**
- * Does this pid exist and is it not a zombie? Both failure modes mean the same
- * thing to the table — the process is over — but they arrive at different times:
- * `Z` is death waiting to be reaped, `""` means it has been reaped and the
- * `proc.exited` handlers are a loop turn away. Waiting only for `Z` returned
- * immediately in a script (where lines run back to back) and printed a killed job
- * as `Running` — flaky in exactly that way, one run in five.
+ * Signal 0 checks existence without signalling the process, including on macOS
+ * where /proc does not exist. Only ESRCH proves absence; permission errors and
+ * other inconclusive probes must not make a live job permanently unsignalable.
+ * Linux additionally exposes zombies before Bun's exit watcher has reaped them.
  */
 function isLive(pid: number): boolean {
-  const state = procState(pid);
-  return state !== "" && state !== "Z";
+  try {
+    process.kill(pid, 0);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ESRCH") return false;
+  }
+  return process.platform !== "linux" || procState(pid) !== "Z";
 }
 
-/** `/proc/<pid>/stat` state letter, or "" when the process is gone entirely. */
-function procState(pid: number): string {
+/** Linux state letter, or null when metadata is unavailable (not proof of death). */
+function procState(pid: number): string | null {
   try {
     const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
-    return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[0] ?? "";
+    return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[0] ?? null;
   } catch {
-    return "";
+    return null;
   }
 }
 

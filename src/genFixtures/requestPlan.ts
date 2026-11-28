@@ -24,6 +24,12 @@ export interface RequestPlan {
 export interface ParameterSetup {
   parameterValues?: Record<string, Record<string, unknown>>;
   resolveParameter?: unknown;
+  /**
+   * Optional. Fills a path template with the id of a resource that EXISTS — the
+   * validation matrix needs one, because a random id reaches an unknown resource
+   * that a correct server answers 404 before it ever validates the body.
+   */
+  resolveKnownPath?: unknown;
 }
 
 function object(value: unknown): value is Obj {
@@ -255,6 +261,12 @@ export function mergeParameters(path: unknown, operation: unknown): ParameterObj
 export function validateParameterSetup(setup: ParameterSetup, keys: Set<string>): void {
   if (setup.resolveParameter !== undefined && typeof setup.resolveParameter !== "function") {
     throw new Error("gen-fixtures: resolveParameter must be a lazy function");
+  }
+  // Same rule as `resolveParameter`: it is emitted as a call into the setup module, so a
+  // non-function here would produce a fixture file that fails at RUN time on a type error
+  // instead of refusing the generation now.
+  if (setup.resolveKnownPath !== undefined && typeof setup.resolveKnownPath !== "function") {
+    throw new Error("gen-fixtures: resolveKnownPath must be a function (ctx, template) => url");
   }
   if (setup.parameterValues === undefined) return;
   if (!object(setup.parameterValues)) {

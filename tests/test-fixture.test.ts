@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runCli } from "../src/testFixture/cli";
+import { renderJson, renderJUnitXml, renderMarkdown, renderText } from "../src/testFixture/report";
 import { runFixtures } from "../src/testFixture/runner";
 import type { FixtureOutput } from "../src/testFixture/types";
 import { required } from "./support/required";
@@ -355,6 +356,103 @@ describe("test-fixture runner", () => {
   });
 });
 
+describe("fixture teardown failures", () => {
+  test("cleanup cannot pass or hide the original assertion/setup failure", async () => {
+    mode = "ok";
+    const file = await writeFixture(
+      "cleanup-results.crust.ts",
+      `export default [
+        {
+          name: "cleanup-only",
+          setup: () => ({ token: "owned" }),
+          input: { url: "${baseUrl}/users/42" }, output: { status: 200 },
+          teardown: async (ctx) => {
+            if (ctx.token !== "owned") throw new Error("lost context");
+            await new Promise(r => setTimeout(r, 15));
+            throw new Error("cleanup-only boom");
+          },
+        },
+        {
+          name: "assertion-and-cleanup",
+          input: { url: "${baseUrl}/users/42" }, output: { status: 999 },
+          teardown: () => { throw new Error("assertion cleanup boom"); },
+        },
+        {
+          name: "setup-and-cleanup",
+          setup: () => { throw new Error("original setup boom"); },
+          input: { url: "${baseUrl}/users/42" }, output: { status: 200 },
+          teardown: () => { throw "setup cleanup boom"; },
+        },
+        {
+          name: "successful-cleanup",
+          setup: () => ({ token: "control" }),
+          input: { url: "${baseUrl}/users/42" }, output: { status: 200 },
+          teardown: (ctx) => {
+            if (ctx.token !== "control") throw new Error("lost control context");
+          },
+        },
+      ];`,
+    );
+    const report = await runFixtures({ target: file, threads: 1 });
+    expect(report.totals).toMatchObject({ pass: 1, fail: 1, error: 2 });
+    const [cleanup, assertion, setup, control] = report.results;
+    expect(cleanup.status).toBe("error");
+    expect(cleanup.error?.message).toContain("teardown threw: cleanup-only boom");
+    expect(cleanup.responseStatus).toBe(200);
+    expect(cleanup.durationMs).toBeGreaterThanOrEqual(10);
+    expect(assertion.status).toBe("fail");
+    expect(assertion.failures[0]).toMatchObject({
+      path: "output.status",
+      expected: 999,
+      actual: 200,
+    });
+    expect(assertion.error?.message).toContain("assertion cleanup boom");
+    expect(setup.status).toBe("error");
+    expect(setup.error?.message).toContain("original setup boom");
+    expect(setup.error?.message).toContain("setup cleanup boom");
+    expect(setup.error?.stack).toContain("original setup boom");
+    expect(control.status).toBe("pass");
+    expect(control.error).toBeUndefined();
+
+    for (const rendered of [
+      renderJson(report),
+      renderText(report, false),
+      renderMarkdown(report),
+      renderJUnitXml(report),
+    ]) {
+      for (const message of [
+        "cleanup-only boom",
+        "assertion cleanup boom",
+        "original setup boom",
+        "setup cleanup boom",
+      ])
+        expect(rendered).toContain(message);
+      expect(rendered).toContain("output.status");
+    }
+  });
+
+  test("cleanup errors trigger bail, stress errors, and nonzero CLI exits in every format", async () => {
+    mode = "ok";
+    const file = await writeFixture(
+      "cleanup-bail.crust.ts",
+      `export default {
+        input: { url: "${baseUrl}/users/42" }, output: { status: 200 },
+        teardown: async () => { throw new Error("cleanup gate boom"); },
+      };`,
+    );
+    const report = await runFixtures({ target: file, threads: 1, count: 3, bail: true });
+    expect(report.bailed).toBe(true);
+    expect(report.results).toHaveLength(1);
+    expect(report.results[0].iter).toBe(1);
+    expect(report.stress?.[0]).toMatchObject({ count: 1, pass: 0, error: 1 });
+    for (const ext of ["json", "md", "xml", "txt"]) {
+      const out = join(dir, `cleanup-report.${ext}`);
+      expect(await runCli([file, "--out", out])).toBe(1);
+      expect(await Bun.file(out).text()).toContain("cleanup gate boom");
+    }
+  });
+});
+
 describe("test-fixture cli", () => {
   test("--out report.json writes a valid JSON RunReport", async () => {
     mode = "ok";
@@ -516,6 +614,39 @@ describe("output.schema", () => {
     expect(bad.failures.some((f) => String(f.expected).includes("maxLength"))).toBe(true);
   });
 
+  test("additionalProperties: false is enforced — the runner asserts, the mock does not", async () => {
+    // The mock server leaves `additionalProperties` unsupported on purpose: live traffic must not
+    // 422 because a server added a field. `output.schema` is the opposite case — the user declared
+    // the shape as an assertion, and silently not checking it is a false pass.
+    const file = await writeFixture(
+      "schema-strict.crust.ts",
+      `export default [
+        {
+          name: "extra field",
+          input: { url: "${baseUrl}/users/42" },
+          output: {
+            status: 200,
+            schema: { type: "object", additionalProperties: false, required: ["id"], properties: { id: { type: "integer" } } },
+          },
+        },
+        {
+          name: "control: no keyword, extras allowed",
+          input: { url: "${baseUrl}/users/42" },
+          output: { status: 200, schema: { type: "object", required: ["id"], properties: { id: { type: "integer" } } } },
+        },
+      ];`,
+    );
+    const report = await runFixtures({ target: file, threads: 1 });
+    const bad = required(report.results.find((r) => r.name === "extra field"));
+    expect(bad.status).toBe("fail");
+    expect(bad.failures.some((f) => String(f.expected).includes("additionalProperties"))).toBe(
+      true,
+    );
+    // The control keeps the permissive reading: strict mode is opt-in per schema, not global.
+    const ok = required(report.results.find((r) => r.name.startsWith("control")));
+    expect(ok.status).toBe("pass");
+  });
+
   test("functions inside a schema object are never invoked", async () => {
     const file = await writeFixture(
       "schema-shield.crust.ts",
@@ -580,6 +711,52 @@ describe("output.schema", () => {
     const r = report.results[0];
     expect(r.status).toBe("error");
     expect(r.error?.message).toContain("$ref (/properties/owner)");
+  });
+
+  test("schema-map entry names cannot hide refs or be mistaken for keywords", async () => {
+    const cases = [
+      "properties",
+      "patternProperties",
+      "$defs",
+      "definitions",
+      "dependentSchemas",
+      "dependencies",
+    ].flatMap((map) =>
+      ["default", "enum", "const", "example", "examples", "a~/b"].map((name) => ({ map, name })),
+    );
+    const file = await writeFixture(
+      "schema-ref-map-names.crust.ts",
+      `export default ${JSON.stringify(
+        cases.map(({ map, name }) => ({
+          name: `${map}:${name}`,
+          input: { url: `${baseUrl}/users/42` },
+          output: { schema: { [map]: { [name]: { $ref: "#/missing" } } } },
+        })),
+      )};`,
+    );
+    const report = await runFixtures({ target: file, threads: 4 });
+    expect(report.totals.error).toBe(cases.length);
+    for (const [i, { map, name }] of cases.entries()) {
+      const pointer = `/${map}/${name.replace(/~/g, "~0").replace(/\//g, "~1")}`;
+      expect(report.results[i].error?.message).toContain(`$ref (${pointer})`);
+    }
+    const control = await writeFixture(
+      "schema-ref-property-control.crust.ts",
+      `export default {
+        input: { url: "${baseUrl}/users/42" },
+        output: { schema: {
+          type: "object",
+          properties: {
+            "$ref": { type: "string" },
+            default: { default: { $ref: "data" }, example: { $ref: "data" } },
+          },
+          const: { id: 42, name: "Lario" },
+          default: { $ref: "data" },
+          examples: [{ $ref: "data" }],
+        } },
+      };`,
+    );
+    expect((await runFixtures({ target: control, threads: 1 })).totals.pass).toBe(1);
   });
 
   test("$ref-shaped DATA inside enum/example values is not flagged", async () => {

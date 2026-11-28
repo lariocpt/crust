@@ -1,5 +1,16 @@
 import { resolve } from "node:path";
 
+const MAX_SITEMAP_DEPTH = 32;
+
+class SitemapNotFoundError extends Error {
+  constructor(
+    readonly source: string,
+    status: number,
+  ) {
+    super(`fetch ${source}: HTTP ${status}`);
+  }
+}
+
 export interface DiscoverOpts {
   sitemapUrl?: string;
   baseUrl?: string;
@@ -21,9 +32,7 @@ export interface DiscoverResult {
 export async function discoverSeeds(opts: DiscoverOpts): Promise<DiscoverResult> {
   const sitemapUrl = opts.sitemapUrl;
   if (sitemapUrl) {
-    const body = await loadSitemapBody(sitemapUrl, opts);
-    const seeds = await parseSitemap(body, opts);
-    if (seeds.length === 0) throw new Error(`sitemap at ${opts.sitemapUrl} contained no URLs`);
+    const seeds = await readSitemap(sitemapUrl, opts);
     return {
       seeds,
       origin: new URL(seeds[0]),
@@ -50,16 +59,16 @@ export async function discoverSeeds(opts: DiscoverOpts): Promise<DiscoverResult>
   for (const path of candidates) {
     const fallback = new URL(path, base).toString();
     try {
-      const body = await loadSitemapBody(fallback, opts);
-      const seeds = await parseSitemap(body, opts);
-      if (seeds.length > 0)
-        return {
-          seeds,
-          origin: base,
-          seedSources: seeds.map((url) => ({ url, sitemap: fallback })),
-        };
-    } catch {
-      // try the next candidate
+      const seeds = await readSitemap(fallback, opts);
+      return {
+        seeds,
+        origin: base,
+        seedSources: seeds.map((url) => ({ url, sitemap: fallback })),
+      };
+    } catch (err) {
+      // A missing conventional root is a probe miss. Once a root exists,
+      // failures inside it are declared work and must not be hidden by fallback.
+      if (!(err instanceof SitemapNotFoundError) || err.source !== fallback) throw err;
     }
   }
   throw new Error(
@@ -87,12 +96,7 @@ async function tryRobots(
     .map((l) => l.slice(l.indexOf(":") + 1).trim());
   const seeds: { url: string; sitemap: string }[] = [];
   for (const sm of sitemapLines) {
-    try {
-      const body = await loadSitemapBody(sm, opts);
-      seeds.push(...(await parseSitemap(body, opts)).map((url) => ({ url, sitemap: sm })));
-    } catch {
-      // ignore individual sitemap failure when probing
-    }
+    seeds.push(...(await readSitemap(sm, opts)).map((url) => ({ url, sitemap: sm })));
   }
   return seeds;
 }
@@ -100,6 +104,10 @@ async function tryRobots(
 async function loadSitemapBody(source: string, opts: DiscoverOpts): Promise<string> {
   if (/^https?:\/\//.test(source)) {
     const r = await fetchWithTimeout(source, opts);
+    if (r.status === 404 || r.status === 410) {
+      // Ignore ONLY an absent conventional root, never a missing declared child.
+      throw new SitemapNotFoundError(source, r.status);
+    }
     if (!r.ok) throw new Error(`fetch ${source}: HTTP ${r.status}`);
     return await r.text();
   }
@@ -109,17 +117,43 @@ async function loadSitemapBody(source: string, opts: DiscoverOpts): Promise<stri
   return await f.text();
 }
 
-async function parseSitemap(body: string, opts: DiscoverOpts): Promise<string[]> {
+async function readSitemap(
+  source: string,
+  opts: DiscoverOpts,
+  ancestors = new Set<string>(),
+): Promise<string[]> {
+  const key = /^https?:\/\//.test(source)
+    ? (() => {
+        const url = new URL(source);
+        url.hash = "";
+        return url.href;
+      })()
+    : resolve(process.cwd(), source);
+  if (ancestors.has(key)) throw new Error(`sitemap cycle at ${source}`);
+  if (ancestors.size >= MAX_SITEMAP_DEPTH) {
+    throw new Error(`sitemap depth limit (${MAX_SITEMAP_DEPTH}) exceeded at ${source}`);
+  }
+  ancestors.add(key);
+  try {
+    const body = await loadSitemapBody(source, opts);
+    const seeds = await parseSitemap(body, opts, ancestors);
+    if (seeds.length === 0) throw new Error(`sitemap at ${source} contained no URLs`);
+    return seeds;
+  } finally {
+    ancestors.delete(key);
+  }
+}
+
+async function parseSitemap(
+  body: string,
+  opts: DiscoverOpts,
+  ancestors: Set<string>,
+): Promise<string[]> {
   const locs = extractLocs(body);
   if (/<sitemapindex/i.test(body)) {
     const all: string[] = [];
     for (const child of locs) {
-      try {
-        const childBody = await loadSitemapBody(child, opts);
-        all.push(...(await parseSitemap(childBody, opts)));
-      } catch {
-        // ignore one bad child sitemap; surface in crawl instead
-      }
+      all.push(...(await readSitemap(child, opts, ancestors)));
     }
     return all;
   }
