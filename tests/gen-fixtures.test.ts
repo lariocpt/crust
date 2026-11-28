@@ -117,7 +117,13 @@ const SPEC = {
     "/api/things/{thingId}": {
       get: {
         tags: ["things"],
-        responses: { "200": { description: "ok" }, "404": { description: "gone" } },
+        responses: {
+          "200": {
+            description: "ok",
+            content: { "application/json": { example: { id: "seed-thing", name: "Seed" } } },
+          },
+          "404": { description: "gone" },
+        },
       },
       patch: {
         tags: ["things"],
@@ -311,13 +317,11 @@ describe("gen-fixtures", () => {
       }
     }
 
-    // pattern sampling: the base body for widgets satisfies ^\d{6}$ when the
-    // optional code field is perturbed... at minimum wrong-type cases for
-    // pattern fields must use an unparseable STRING, not a number
+    // Pattern fields need a coercion-resistant non-string for a type defect.
     const wrongCode = mod.default.find((f) => f.name.includes("wrong type for 'code'"));
     if (wrongCode) {
       const body = JSON.parse(required(wrongCode.input(ctx).body)) as { code: unknown };
-      expect(typeof body.code).toBe("string");
+      expect(body.code).toEqual({});
     }
   });
 
@@ -354,10 +358,9 @@ describe("gen-fixtures", () => {
     expect(widgets).not.toContain("too long 'bigText'");
     // MAX_SAFE_INTEGER is an "unbounded" sentinel — no above-maximum case
     expect(widgets).not.toContain("above maximum 'weight'");
-    // optional pattern field gets a case; required pattern field is already
-    // covered by wrong-type's string sentinel -> deduped
+    // Pattern and type defects are distinct, including for required fields.
     expect(widgets).toContain("pattern violation 'code' -> 400");
-    expect(widgets).not.toContain("pattern violation 'pin'");
+    expect(widgets).toContain("pattern violation 'pin' -> 400");
     expect(widgets).toContain("wrong type for 'pin' -> 400");
     // op-level extra property asserts status + code ONLY
     expect(widgets).toContain("unexpected extra property -> 400");
@@ -446,9 +449,7 @@ describe("gen-fixtures", () => {
     expect(pipes).toContain(
       '{"name":"gen-value-x1"} | PATCH $GEN_URL_API_THINGS/$GEN_ID_API_THINGS -H "$GEN_AUTH_HEADER" | expect 200',
     );
-    expect(pipes).toContain(
-      'GET $GEN_URL_API_THINGS/$GEN_ID_API_THINGS -H "$GEN_AUTH_HEADER" | assert (r => r.status === 200) | (r => r.json()) | assert (j => String(j.name ?? "") === "gen-value-x1")',
-    );
+    expect(pipes).toContain('return equal(j.name, "gen-value-x1");');
     expect(pipes).toContain(
       '{} | DELETE $GEN_URL_API_THINGS/$GEN_ID_API_THINGS -H "$GEN_AUTH_HEADER" | expect 204',
     );
@@ -1298,8 +1299,8 @@ describe("the generator infers a missing type", () => {
 
   test("string-only keywords without `type` imply a string", () => {
     expect(wrongTypeFor({ minLength: 3 } as never)).toBe(12345);
-    // A pattern makes it a coercion-resistant string, per the existing rule.
-    expect(wrongTypeFor({ pattern: "^a+$" } as never)).toBe("!!not-a-valid-value!!");
+    // A pattern gets a coercion-resistant non-string, not a disguised pattern violation.
+    expect(wrongTypeFor({ pattern: "^a+$" } as never)).toEqual({});
   });
 
   // Control: a declared type still wins, and a schema stating nothing keeps the old default.

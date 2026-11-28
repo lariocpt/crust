@@ -138,6 +138,7 @@ import { isAbsolute, relative, resolve } from "node:path";
 import pkg from "../../package.json" with { type: "json" };
 import { loadSpec, type OpenApiSpec } from "../mockServer/loadSpec";
 import { resolveRef, withRefSiblings } from "../mockServer/mockResponse";
+import { divExact, isMultipleOf, numericBounds } from "../mockServer/schemaNumbers";
 import {
   formatDefault,
   inferType,
@@ -666,24 +667,6 @@ function composedObject(
 }
 
 /**
- * `v` is an integer multiple of `m`, tolerant of the float error a `0.1`-style step carries:
- * `0.3 / 0.1` is `2.9999999999999996`, and a strict `Number.isInteger` would reject a value the
- * schema plainly allows.
- */
-function isMultipleOf(v: number, m: number): boolean {
-  const q = v / m;
-  return Math.abs(q - Math.round(q)) <= 1e-9 * Math.max(1, Math.abs(q));
-}
-
-/** Integer division that does not lose a bound to that same float error. */
-function divExact(v: number, m: number, dir: "ceil" | "floor"): number {
-  const q = v / m;
-  const r = Math.round(q);
-  if (Math.abs(q - r) <= 1e-9 * Math.max(1, Math.abs(q))) return r;
-  return dir === "ceil" ? Math.ceil(q) : Math.floor(q);
-}
-
-/**
  * A variant of a sampled value that differs from it by index `i` and still satisfies `schema`, or
  * undefined when the schema admits none — an enum, a `const`, a fixed pattern, an object that
  * refuses extra keys. Used only to fill a `uniqueItems` array with distinct members, so refusing
@@ -823,18 +806,7 @@ export function validValue(s: Schema | undefined, key = ""): unknown {
       // schema excludes — `{maximum: 1, exclusiveMaximum: true}` was answered with 1.
       const isInt = primaryType(s) === "integer";
       const step = isInt ? 1 : Number.EPSILON * 8;
-      let min = typeof s.minimum === "number" ? s.minimum : null;
-      let max = typeof s.maximum === "number" ? s.maximum : null;
-      let minOpen = false;
-      let maxOpen = false;
-      if (typeof s.exclusiveMinimum === "number") {
-        min = s.exclusiveMinimum;
-        minOpen = true;
-      } else if (s.exclusiveMinimum === true && min !== null) minOpen = true;
-      if (typeof s.exclusiveMaximum === "number") {
-        max = s.exclusiveMaximum;
-        maxOpen = true;
-      } else if (s.exclusiveMaximum === true && max !== null) maxOpen = true;
+      let { min, max, minOpen, maxOpen } = numericBounds(s);
       // An INTEGER answer has to be an integer, so the bounds are closed to integers rather than a
       // step added to the bound: `{integer, minimum: 1.5}` admits 2, and answering 1.5 — which is
       // what stepping a round bound did — is the value the schema forbids. `{integer, minimum: 1.5,
@@ -1032,23 +1004,14 @@ function enumDeadEnd(node: Schema): string | null {
 function windowDeadEnd(node: Schema): string | null {
   const t = primaryType(node);
   if (t === "integer" || t === "number") {
-    let min = typeof node.minimum === "number" ? node.minimum : null;
-    let max = typeof node.maximum === "number" ? node.maximum : null;
-    let minOpen = false;
-    let maxOpen = false;
-    if (typeof node.exclusiveMinimum === "number") {
-      min = node.exclusiveMinimum;
-      minOpen = true;
-    } else if (node.exclusiveMinimum === true && min !== null) minOpen = true;
-    if (typeof node.exclusiveMaximum === "number") {
-      max = node.exclusiveMaximum;
-      maxOpen = true;
-    } else if (node.exclusiveMaximum === true && max !== null) maxOpen = true;
+    const { min, max, minOpen, maxOpen } = numericBounds(node);
     if (min === null || max === null) return null;
     const gap = max - min;
     const empty = minOpen || maxOpen ? gap <= 0 : gap < 0;
     if (empty) return `no value lies in ${minOpen ? "(" : "["}${min}, ${max}${maxOpen ? ")" : "]"}`;
-    if (t === "integer" && Math.ceil(min) > Math.floor(max)) {
+    const first = minOpen ? Math.floor(min) + 1 : Math.ceil(min);
+    const last = maxOpen ? Math.ceil(max) - 1 : Math.floor(max);
+    if (t === "integer" && first > last) {
       return `its integer bounds admit no integer (${min} … ${max})`;
     }
     return null;
@@ -1209,10 +1172,10 @@ export function wrongTypeFor(s: Schema | undefined): unknown {
   // 3.1 may write `type: ["string","null"]`; judge on the non-null member so a nullable field
   // still gets a genuinely wrong value (null would be LEGAL there and would assert nothing).
   const t = primaryType(s);
-  // Coercing fields (dates, digit patterns) happily swallow numbers, so the
-  // wrong-typed value for constrained strings must be an unparseable STRING.
+  // Coercing fields can swallow numbers; an object is still genuinely non-string.
+  // Pattern/format violations are not type violations and must not masquerade as them.
   if (t === "string" && (s?.format === "date" || s?.format === "date-time" || s?.pattern)) {
-    return "!!not-a-valid-value!!";
+    return {};
   }
   switch (t) {
     case "string":
@@ -1499,7 +1462,9 @@ function deriveCases(
       ...(constraint === undefined ? {} : { constraint }),
       // Resolved here, not in the emitter: derivation is where the constraint
       // is known, and the matcher only ever asserts a code the config stated.
-      ...(constraint !== undefined && exp?.validationErrorTypes?.[constraint] !== undefined
+      ...(validationEnvelope === "fastapi" &&
+      constraint !== undefined &&
+      exp?.validationErrorTypes?.[constraint] !== undefined
         ? { errorType: exp.validationErrorTypes[constraint] }
         : {}),
       field,
@@ -1773,11 +1738,7 @@ function deriveCases(
         push("above maximum", fs.maximum + 1, "bound", "maximum");
       }
       if (fs.pattern) {
-        // For required constrained-string fields the wrong-type case already
-        // sends wrongTypeFor's string sentinel — a pattern violation in
-        // disguise. Dedupe to avoid an identical-in-substance case.
-        const covered = required.includes(field) && wrongTypeFor(rawFs) === "!!not-a-valid-value!!";
-        if (!covered) push("pattern violation", "!!pattern-violation!!", "pattern", "pattern");
+        push("pattern violation", "!!pattern-violation!!", "pattern", "pattern");
       }
     }
 
@@ -1853,6 +1814,16 @@ function deriveCases(
         continue;
       }
       if (!verdict.proven) proofUnproven.push(entry.c.name);
+      const target = entry.c.validationTarget;
+      if (
+        target?.errorType !== undefined &&
+        !prove(entry.c.body ?? {}, bodySchema).violations.some(
+          (v) => v.pointer === `/${entry.field}` && v.rule === target.constraint,
+        )
+      ) {
+        // A rejection at this field (or below it) does not prove the named rule failed.
+        delete target.errorType;
+      }
       // A downgrade — the case asked for a location assertion and the proof will not earn one —
       // records no location at all, which is also what makes `dropUnattributable` drop it under the
       // fastapi envelope. A case that was status-only from the start (the extra-property family)
@@ -2349,10 +2320,10 @@ function isPlainRecord(v: unknown): v is Record<string, unknown> {
 }
 
 /**
- * Where the created id lives in the POST's 2xx response body. Prefers the
+ * Where the id lives in this operation's own 2xx response body. Prefers the
  * 2xx media `example`, else `schema.properties`. Top-level `id` -> ["id"];
  * else the FIRST object-valued property containing an `id` (JSON key order —
- * deterministic) -> [prop, "id"]. Depth cap 2. Null -> flow is skipped.
+ * deterministic) -> [prop, "id"]. Depth cap 2. Null -> no identity path is known.
  */
 export function idPathFor(op: Operation): string[] | null {
   const code = lowest2xx(op);
@@ -2557,6 +2528,7 @@ function emitFlow(f: FlowPlan): string {
   const base = { ...baseBody(bodySchema), ...f.bodyOverride };
   const lines: string[] = [];
   const steps: string[] = ["create"];
+  const notes: string[] = [];
 
   const postStatus = lowest2xx(f.post);
   if (postStatus === null) throw new Error(`gen flows: missing success status for ${f.template}`);
@@ -2565,17 +2537,18 @@ function emitFlow(f: FlowPlan): string {
   );
 
   if (f.itemOps.get) {
-    steps.push("read");
     const s = lowest2xx(f.itemOps.get) ?? 200;
-    // Identity at the captured path, not a substring of the response. `JSON.stringify(j).includes(id)`
-    // passes for the WRONG resource whenever the id appears anywhere in the body — `{"id":"wrong",
-    // "note":"<id>"}` satisfied it, as did any body containing a space once the env var was unset and
-    // the fallback became `" "`. The exact path is already known: `idPathFor` derived it for the
-    // capture two lines above, and the assertion never used it.
-    const acc = accessExpr("j", f.idPath);
-    lines.push(
-      `GET ${itemUrl} ${H} | assert (r => r.status === ${s}) | (r => r.json()) | assert (j => process.env.GEN_ID_${T} !== undefined && String(${acc} ?? "") === process.env.GEN_ID_${T})`,
-    );
+    const path = idPathFor(f.itemOps.get);
+    if (path) {
+      steps.push("read");
+      lines.push(
+        `GET ${itemUrl} ${H} | assert (r => r.status === ${s}) | (r => r.json()) | assert (j => process.env.GEN_ID_${T} !== undefined && String(${accessExpr("j", path)} ?? "") === process.env.GEN_ID_${T})`,
+      );
+    } else {
+      steps.push("read(status-only)");
+      notes.push("# read: status-only; GET documents no id path, so identity is not asserted.");
+      lines.push(`GET ${itemUrl} ${H} | expect ${s}`);
+    }
   }
 
   const update = f.itemOps.patch ?? f.itemOps.put;
@@ -2631,19 +2604,18 @@ function emitFlow(f: FlowPlan): string {
     // response declares, because a wrapped resource (`{"gadget": {…}}`) does not put it at the top.
     if (changed && f.itemOps.get) {
       const gs = lowest2xx(f.itemOps.get) ?? 200;
-      // The read op's own response first; failing that, the create response — the flow already
-      // reads the captured id out of the GET body at the path derived from the POST, so the two
-      // shapes are assumed to be the same resource throughout. Neither documented means crust
-      // states no location, and it asserts the status instead of guessing one.
-      const path =
-        fieldPathFor(f.itemOps.get, changed.field) ?? fieldPathFor(f.post, changed.field);
+      // POST and GET may use different envelopes. Only GET earns a read-back path.
+      const path = fieldPathFor(f.itemOps.get, changed.field);
       if (path) {
         steps.push("read-after-update");
         lines.push(
-          `GET ${itemUrl} ${H} | assert (r => r.status === ${gs}) | (r => r.json()) | assert (j => String(${accessExpr("j", path)} ?? "") === ${JSON.stringify(String(changed.value))})`,
+          `GET ${itemUrl} ${H} | assert (r => r.status === ${gs}) | (r => r.json()) | assert (j => { const equal = (a, b) => a === b || (a !== null && b !== null && typeof a === "object" && typeof b === "object" && Array.isArray(a) === Array.isArray(b) && Object.keys(a).length === Object.keys(b).length && Object.keys(a).every(k => Object.prototype.hasOwnProperty.call(b, k) && equal(a[k], b[k]))); return equal(${accessExpr("j", path)}, ${JSON.stringify(changed.value)}); })`,
         );
       } else {
         steps.push("read-after-update(status-only)");
+        notes.push(
+          `# read-after-update: status-only; GET documents no path for ${JSON.stringify(changed.field)}, so persistence is not asserted.`,
+        );
         lines.push(`GET ${itemUrl} ${H} | expect ${gs}`);
       }
     }
@@ -2663,7 +2635,7 @@ function emitFlow(f: FlowPlan): string {
     lines.push(`GET ${itemUrl} ${H} | expect 404`);
   }
 
-  return `# flow: ${f.template}  (${steps.join(" -> ")})\n${lines.join("\n")}\n`;
+  return `# flow: ${f.template}  (${steps.join(" -> ")})\n${[...notes, ...lines].join("\n")}\n`;
 }
 
 function emitFlowsPipes(flows: FlowPlan[]): string {

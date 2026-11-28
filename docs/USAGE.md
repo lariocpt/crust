@@ -1740,7 +1740,7 @@ Derived cases:
 - The `enum` member picked satisfies the schema's own declared `type` — real specs write `{type: "string", enum: [true, false]}` — and `required`/`properties` are read **through `allOf`**, so an object composed from branches gets every field the composition demands rather than an empty body.
 - An object whose properties live in a **union branch** is built from that branch. A node declaring `type: "object"` alongside a `oneOf`/`anyOf` used to produce `{}`: the explicit type sent it straight to the object case, which composes through `allOf` only. The same node WITHOUT a type worked, which is what kept it hidden. The first branch is taken, since a union offers alternatives rather than an intersection.
 - **The mirror shape too**: the node declares the `properties` once and each branch says only *which of them* this form needs — urlbox.io's `RenderRequest` is `{oneOf: [{required: ["url"]}, {required: ["html"]}], properties: {url, html, format, …}}`, which is how a two-form POST gets written. A branch was read only when the node owned nothing at all, so this one composed to `{}`: the base body satisfied no branch, crust's own validator answered `anyOf`, and every negative case of the operation went behind `crust's own value for the body (anyOf) does not satisfy the schema` — urlbox generated **no cases from its whole spec**. Now a branch is read when the composed view **cannot satisfy one**: a branch requiring nothing is satisfied by anything, and a branch the node's own `required` already satisfies is *not* read, because on a `oneOf` adding the other alternative makes the body match two branches and breaks the very thing being composed for. 93 operations across 23 of the corpus's specs write this shape: the mentions blaming crust's body went **23 → 0**, the operations reporting *no negative cases at all* went **21 → 0**, cases rose **5,888 → 5,996** and **no spec lost one**. The control is the 31 union-body specs that do not write it — 29 byte-identical in both cases and notices (whatsapp's `audio`/`image` body composes exactly as before), the other two gained cases and lost a notice, their union being this shape one level deeper than the scan reaches.
-- `exclusiveMinimum`/`exclusiveMaximum` are honoured in **both spellings** — 3.0's boolean modifier on `minimum`/`maximum`, and 3.1's number — so a `{maximum: 1, exclusiveMaximum: true}` field is never answered with `1`, the one value it excludes. Where a `format` and a `pattern` are both declared, the format constant is used only if it satisfies the pattern: `format: email` beside a pattern whose TLD is 2-5 letters rejects `gen@crust.fixture`, which has seven. And the field-name heuristics yield to an explicit `format` as well as to a `pattern` and a length bound — a field called `first_email_date` declaring `format: date-time` was getting the email constant.
+- `exclusiveMinimum`/`exclusiveMaximum` are honoured in **both spellings** — 3.0's boolean modifier on `minimum`/`maximum`, and 3.1's number — so a `{maximum: 1, exclusiveMaximum: true}` field is never answered with `1`, the one value it excludes. Numeric exclusive bounds intersect with inclusive bounds rather than replacing them: `{minimum: 10, exclusiveMinimum: 0}` still requires at least 10. Open integer endpoints are rounded inward before checking whether the window admits an integer. `multipleOf` tolerates decimal division noise (`0.3 / 0.1`) with a bounded tolerance; a large fractional quotient such as `1000000000.25 / 1` is never treated as integral. Where a `format` and a `pattern` are both declared, the format constant is used only if it satisfies the pattern: `format: email` beside a pattern whose TLD is 2-5 letters rejects `gen@crust.fixture`, which has seven. And the field-name heuristics yield to an explicit `format` as well as to a `pattern` and a length bound — a field called `first_email_date` declaring `format: date-time` was getting the email constant.
 - Formats the generator has no constant of its own for — `uri`/`url` above all — fall through to the same defaults the mock uses. Its four fixed constants (email, uuid, date, date-time) keep their values so existing matrices do not churn. And the field-name heuristics yield to anything the schema actually states — an explicit `pattern`, and equally a length bound: `client_id: {type: "string", maxLength: 20}` never mentions uuid, and the 36-character one does not fit. An explicit `format` is different: there the schema asked for the value itself, and a `maxLength` too small for it is the spec contradicting itself, which crust leaves visible. An explicit `pattern` also **outranks the field-name heuristics**: a field called `job_id` carrying `^job-[0-9]{3}$` gets a value matching the pattern, not the stable uuid, because a guess from a name must not beat what the schema says.
 - The **valid base body honours the schema's own bounds** — `maxLength`, `minLength`, `minItems`/`maxItems`, `minimum`/`maximum`. Every 400-case perturbs that body, so where it was already invalid the expected 400 could arrive for the wrong reason: a false pass, which is the one thing crust must never produce. The fixed format values (`gen@crust.fixture`, the stable uuid) are deliberately unchanged, since checked-in matrices are CI-diffed against a regeneration.
 - A **wrong-type case is only generated when the value is actually rejected**. A field whose schema constrains nothing — `{properties: {…}}` with no `type`, a description-only node — has no wrong value, and such a case would assert `-> 400` for a request a correct API answers 200: a test that fails against a correct implementation. 6,101 were derivable from the APIs-guru corpus. crust owns the validator, so it asks it rather than guessing.
@@ -1752,8 +1752,10 @@ Derived cases:
 - A **Swagger 2.0 `in: body` parameter is the operation's request body.** 2.0 has no `requestBody` — the body is a parameter — and the conversion dropped it, so a Swagger 2.0 spec could get no 400 matrix at all, however carefully it documented its 400s: `aiception.com` emitted 5 cases and `adafruit.com` 68, none of them about a body. Measured over the corpus with references resolved, **1,528 specs and 10,870 operations** declare their bodies this way — 10,083 on the operation, 775 through `$ref: #/parameters/…`, 12 on the path item. (My first two scans said 1,443 and 10,083: they matched `in == "body"` and so never saw a body arriving by `$ref`. The control caught it — a "body-less" control spec whose output tree changed.) The conversion now moves the parameter where both halves read it, so cases went **1,818 → 3,711** across that population, qualifying collections went **0 → 68** (a 2.0 spec could never produce a CRUD flow before), 38 specs moved off absolute zero, and **no spec lost a case**. The control is 120 Swagger-2 specs with no body parameter: **0 of 120** differ in their generated tree, hashed rather than counted. `consumes` picks the media type, operation-level first, JSON preferred, and a non-JSON one is carried as declared — crust does not validate form bodies, so a case built from one would assert a 400 its own mock never returns. One consequence to expect: the 401/403/404 cases of a 2.0 operation now send the body the spec declares instead of nothing, since a route may validate the body before it checks who is calling — on a method that can carry one, `GET` and `HEAD` excepted (see the rule below).
   below minimum / above maximum (`maximum: Number.MAX_SAFE_INTEGER` is
   treated as an "unbounded" sentinel and skipped), and pattern violation
-  (deduped when the required-field wrong-type case already sends an
-  unparseable string). Nullable zod-style `anyOf: [X, {type: "null"}]`
+  (separate from wrong type, even for required fields). Pattern-constrained
+  strings and date/date-time strings use an object as the wrong-type value,
+  never a string that merely violates the pattern or format. A permissive
+  pattern drops only its still-valid pattern mutation. Nullable zod-style `anyOf: [X, {type: "null"}]`
   wrappers are unwrapped, and OpenAPI 3.1's `type: ["string","null"]` union
   form is read the same way, so nullable fields get their boundary cases too
   under either spelling — and the wrong-type case for such a field is a value
@@ -1812,6 +1814,17 @@ generated setup module adapts the standard setup contract: it calls
 `resolvePath` per flow to seed `$GEN_URL_<T>`. SQL assertions are not
 derivable from a spec, so none are emitted — add DB-level checks in a
 hand-written `.pipes` file.
+
+Read assertions use the **GET operation's own response shape**, independently
+of the POST's capture path. A bare create response and a wrapped read response
+(or the reverse) can therefore participate in the same flow. When GET documents
+no id path or no path for the changed field, that read is explicitly labeled
+`status-only`, with a comment stating that identity or persistence is not
+asserted; a POST response path is never borrowed as evidence about GET.
+After an update changes a field, a documented read-back path is compared using
+**structural JSON equality**: scalar types and array order matter, nested
+objects and nulls are preserved, and object key order does not matter.
+String coercion cannot turn a wrong object, array, or scalar type into a pass.
 
 Some creates need values a spec can't express — business date rules,
 foreign keys to live rows. The setup module may export
@@ -2009,7 +2022,11 @@ every app-specific detail and must export:
   `type`, `enum`, `pattern`, `minLength`, `maxLength`, `minimum`, `maximum`,
   `additionalProperties` — to the error code this API puts in the entry's `type`
   for it; pydantic v2 answers `minLength` with `string_too_short`, `required`
-  with `missing`. Where a constraint is mapped the matcher asserts that code, so
+  with `missing`. A mapped code is asserted only when the effective envelope is
+  `fastapi` and the full mutated body's proof reports that exact rule at that
+  exact field path. A violation of another rule or a nested child does not earn
+  the mapped code; the case stays field-attributed instead.
+  Where the constraint is proven and mapped the matcher asserts that code, so
   an unrelated error at the right location (`type: "unrelated_failure"`) fails
   the case instead of satisfying it. An unmapped constraint stays
   field-attributed: crust will not guess a server's error vocabulary and call

@@ -114,7 +114,7 @@ describe("a mutation that does not violate the schema is never emitted", () => {
     [
       "pattern that matches the pattern sentinel",
       body({ note: { type: "string", pattern: "^.*$" } }, ["note"]),
-      "wrong type for 'note'",
+      "pattern violation 'note'",
     ],
     [
       "minimum where minimum - 1 rounds back to the minimum",
@@ -174,6 +174,95 @@ describe("a mutation that does not violate the schema is never emitted", () => {
   test("control: a genuinely invalid enum value is still emitted", async () => {
     const r = await emit("real-enum", body({ c: { type: "string", enum: ["red"] } }, ["c"]));
     expect(r.names.some((n) => n.includes("invalid enum for 'c'"))).toBe(true);
+  });
+});
+
+describe("review: constrained strings and mapped attribution", () => {
+  for (const [name, field] of [
+    ["permissive", { type: "string", pattern: "^.*$" }],
+    ["digits", { type: "string", pattern: "^[0-9]+$" }],
+    ["date", { type: "string", format: "date" }],
+    ["datetime", { type: "string", format: "date-time" }],
+  ] as const) {
+    test(`${name} has a genuine type mutation and a proven type code`, async () => {
+      const r = await emit(`review-type-${name}`, body({ value: field }), {
+        setupExtra:
+          "export const expectations = { validationEnvelope: 'fastapi', " +
+          "validationErrorTypes: { type: 'wrong_type', pattern: 'wrong_pattern' } };\n",
+      });
+      const c = required(r.manifest.cases.find((c) => c.case.includes("wrong type")));
+      expect(c.validationOracle?.attribution).toBe("constraint");
+      expect(c.validationOracle?.errorType).toBe("wrong_type");
+      const mod = await import(required(r.result.files.find((f) => f.endsWith(".crust.ts"))));
+      const wrong = required(
+        mod.default.find((entry: { name: string }) => entry.name.includes("wrong type")),
+      );
+      expect(JSON.parse(wrong.input({}).body).value).toEqual({});
+      if (name === "digits") {
+        const pattern = required(
+          r.manifest.cases.find((c) => c.case.includes("pattern violation")),
+        );
+        expect(pattern.validationOracle?.errorType).toBe("wrong_pattern");
+      }
+      if (name === "permissive") {
+        expect(r.names.some((n) => n.includes("pattern violation"))).toBe(false);
+      }
+    });
+  }
+
+  for (const [name, configuration] of [
+    ["global", "{ validationEnvelope: 'crust', validationErrorTypes: { type: 'wrong_type' } }"],
+    [
+      "override",
+      "{ validationEnvelope: 'fastapi', validationErrorTypes: { type: 'wrong_type' }, " +
+        "operations: { 'POST /things': { validationEnvelope: 'crust' } } }",
+    ],
+  ]) {
+    test(`the ${name} crust envelope never claims a FastAPI code`, async () => {
+      const r = await emit(`review-crust-${name}`, body({ value: { type: "string" } }), {
+        setupExtra: `export const expectations = ${configuration};\n`,
+      });
+      const c = required(r.manifest.cases.find((c) => c.case.includes("wrong type")));
+      expect(c.validationOracle?.attribution).toBe("field");
+      expect(c.validationOracle?.errorType).toBeUndefined();
+      expect(r.text).not.toContain("wrong_type");
+    });
+  }
+
+  test("an enum violation at the field does not earn a mapped type code", async () => {
+    // Both numbers and strings are legal types. The numeric sentinel violates only enum.
+    const r = await emit(
+      "review-enum-not-type",
+      body({ value: { type: ["string", "number"], enum: ["only"] } }),
+      {
+        setupExtra:
+          "export const expectations = { validationEnvelope: 'fastapi', " +
+          "validationErrorTypes: { type: 'wrong_type' } };\n",
+      },
+    );
+    const c = required(r.manifest.cases.find((c) => c.case.includes("wrong type")));
+    expect(c.validationOracle?.attribution).toBe("field");
+    expect(c.validationOracle?.errorType).toBeUndefined();
+    expect(r.text).not.toContain("wrong_type");
+  });
+
+  test("intersected bounds and open integer windows expose spec contradictions", async () => {
+    const windows = [
+      { type: "number", minimum: 10, exclusiveMinimum: 0, maximum: 5 },
+      { type: "number", maximum: 0, exclusiveMaximum: 10, minimum: 5 },
+      { type: "integer", exclusiveMinimum: 1, maximum: 1.9 },
+      { type: "integer", minimum: 1.1, exclusiveMaximum: 2 },
+    ];
+    for (const [i, field] of windows.entries()) {
+      const r = await emit(`review-dead-window-${i}`, body({ value: field }));
+      expect(r.notes.join("\n")).toContain("the SPEC contradicts itself");
+    }
+    const control = await emit(
+      "review-live-window",
+      body({ value: { type: "integer", exclusiveMinimum: 1, maximum: 2 } }),
+    );
+    expect(control.notes.join("\n")).not.toContain("contradicts itself");
+    expect(control.names.some((n) => n.includes("wrong type"))).toBe(true);
   });
 });
 
@@ -702,7 +791,16 @@ describe("a CRUD flow proves identity, change and persistence", () => {
     // passed any body containing a space.
     const r = await flow(
       "flow-id",
-      { get: { responses: { "200": { description: "ok" } } } },
+      {
+        get: {
+          responses: {
+            "200": {
+              description: "ok",
+              content: { "application/json": { example: { id: "x", name: "x" } } },
+            },
+          },
+        },
+      },
       gadget,
     );
     expect(r.flowText).toContain('String(j.id ?? "") === process.env.GEN_ID_GADGETS');

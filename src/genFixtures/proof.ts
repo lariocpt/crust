@@ -28,6 +28,7 @@
 // the prefixItems/items boundary are judged consistently at every position.
 
 import type { OpenApiSpec } from "../mockServer/loadSpec";
+import { isMultipleOf } from "../mockServer/schemaNumbers";
 import { validateSchema } from "../mockServer/validateRequest";
 
 export interface ProofViolation {
@@ -206,8 +207,7 @@ function walk(out: Proof, value: unknown, schema: unknown, pointer: string, dept
   }
 
   if (typeof value === "number" && typeof schema.multipleOf === "number" && schema.multipleOf > 0) {
-    const q = value / schema.multipleOf;
-    if (Math.abs(q - Math.round(q)) > 1e-9 * Math.max(1, Math.abs(q))) {
+    if (!isMultipleOf(value, schema.multipleOf)) {
       push(out, pointer, "multipleOf");
     }
   }
